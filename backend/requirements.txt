@@ -1,0 +1,30 @@
+# --- Core API framework ---
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+
+# --- Database / ORM (SQLModel = SQLAlchemy + Pydantic) ---
+sqlmodel==0.0.24
+
+# --- Configuration management ---
+pydantic-settings==2.9.1
+
+# --- Cloud-init rendering (Phase 4) ---
+PyYAML==6.0.3
+
+# --- QEMU engine (Phase 5) ---
+pycdlib==1.20.0        # pure-Python NoCloud seed ISO (no genisoimage on Windows)
+
+# --- Host capacity (Phase 7) ---
+# Optional at runtime: app/host_capacity.py degrades to permissive limits with a
+# warning if it is missing, rather than blocking every launch.
+psutil==7.2.2
+
+# --- Command-line interface (Phase 8) ---
+# Typer builds the commands and their help; rich renders the tables, spinners
+# and colour (and disables all three when the output is not a terminal).
+typer>=0.12,<1.0
+rich>=13.0
+
+# --- Dev / tooling (optional but recommended) ---
+httpx==0.28.1          # FastAPI TestClient, the CLI's transport, base-image downloads
+pytest==8.3.5

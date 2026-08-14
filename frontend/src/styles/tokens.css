@@ -1,0 +1,203 @@
+/*
+ * The one place a colour is decided.
+ *
+ * Two layers, deliberately:
+ *
+ *   1. A *palette* of literal ramps (--grey-500, --accent-600, …). Nothing in
+ *      the application may reference these. They exist so the semantic layer
+ *      has something to be assigned from.
+ *   2. A *semantic* layer (--surface, --text, --accent, --status-healthy, …)
+ *      re-declared per theme. Components reference only these, so switching
+ *      themes is a change of assignment rather than a change of markup.
+ *
+ * The governing rule of the whole system:
+ *
+ *      MONOCHROME CARRIES STRUCTURE AND ACTIONS. COLOUR CARRIES STATE.
+ *
+ * Green used to be the logo, the primary button and the healthy status at
+ * once. After this file, green means one thing: healthy. Primary actions are
+ * the accent (a heather purple), structure is grey, and a coloured dot in this
+ * UI is always a status.
+ *
+ * Every foreground/background pair the application actually uses is checked
+ * against WCAG AA by scripts/check-contrast.mjs, which parses THIS file. If a
+ * value here changes, that script is the thing that says whether it may.
+ */
+
+/* ------------------------------------------------------------------ */
+/* Palette — literal ramps. Not for use in components.                 */
+/* ------------------------------------------------------------------ */
+:root {
+  /* Neutrals. The near-blacks are the dark theme's surfaces; the greys come
+     from the brief (Rainbow Grey, Quicksilver, Battleship Gray) and are
+     extended into a full ramp so text has somewhere to sit in both themes. */
+  --grey-0: #ffffff;
+  --grey-50: #fafafa;
+  --grey-100: #f4f4f5;
+  --grey-200: #e6e6e8;
+  --grey-300: #c5c5c5; /* Rainbow Grey */
+  --grey-400: #a7a7a7; /* Quicksilver */
+  --grey-500: #848484; /* Battleship Gray */
+  --grey-600: #6b6b6e;
+  --grey-700: #4a4a4f;
+  --grey-800: #2e2e33;
+  --grey-850: #232327;
+  --grey-900: #18181b;
+  --grey-950: #0e0e10;
+  --grey-1000: #08080a;
+
+  /* Accent — hue ~273°, built out from Mystic Heather (#9f8cae, step 500) and
+     Lilac Haze (#b3a0be, step 400). Both are mid-tones: white text fails on
+     them and they fail as text on white, which is exactly why a ramp exists.
+     Light mode reaches for 600–800, dark mode for 300–400. */
+  --accent-50: #f6f3f8;
+  --accent-100: #ece6f0;
+  --accent-200: #d9cee1;
+  --accent-300: #c6b5d1;
+  --accent-400: #b3a0be; /* Lilac Haze */
+  --accent-500: #9f8cae; /* Mystic Heather */
+  --accent-600: #7d6790;
+  --accent-700: #614f70;
+  --accent-800: #453950;
+  --accent-900: #2b2432;
+
+  /* Status. Each has a light-theme step (dark enough on white) and a
+     dark-theme step (light enough on near-black); no single value clears
+     4.5:1 on both. */
+  --green-300: #86efac;
+  --green-400: #4ade80;
+  --green-600: #16a34a;
+  --green-700: #15803d;
+  --green-950: #0a2716;
+
+  --red-300: #fca5a5;
+  --red-400: #f87171;
+  --red-600: #dc2626;
+  --red-700: #b91c1c;
+  --red-950: #2d1112;
+
+  --amber-300: #fcd34d;
+  --amber-400: #fbbf24;
+  --amber-600: #d97706;
+  --amber-700: #b45309;
+  --amber-950: #2e1e05;
+}
+
+/* ------------------------------------------------------------------ */
+/* Semantic layer — dark theme (the default).                          */
+/* ------------------------------------------------------------------ */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --surface: var(--grey-1000);
+  --surface-raised: var(--grey-950);
+  --surface-overlay: var(--grey-900);
+  /* The console, and only the console: the one screen that should read as
+     hardware rather than as a web page. */
+  --surface-sunken: #000000;
+
+  /* --border is decorative (table rules, card edges) and carries no
+     requirement. --border-strong is the one that means something — an input
+     outline, a focused control — so it is held to 3:1 and was lightened from
+     grey-700 to clear it. */
+  --border: var(--grey-800);
+  --border-strong: var(--grey-600);
+
+  --text: var(--grey-100);
+  --text-muted: var(--grey-400);
+  --text-subtle: var(--grey-600);
+  --text-inverse: var(--grey-1000);
+  /* The console is near-black in both themes, so its foreground cannot be
+     --text: in light mode that would be near-black on near-black. */
+  --text-on-sunken: var(--grey-100);
+
+  --accent: var(--accent-400);
+  --accent-hover: var(--accent-300);
+  --accent-fg: var(--grey-1000);
+  --accent-quiet: var(--accent-900);
+  --accent-text: var(--accent-300);
+
+  --status-healthy: var(--green-400);
+  --status-healthy-quiet: var(--green-950);
+  --status-danger: var(--red-400);
+  --status-danger-quiet: var(--red-950);
+  --status-transitional: var(--amber-400);
+  --status-transitional-quiet: var(--amber-950);
+
+  --focus: var(--accent-300);
+  --shadow-overlay: 0 24px 48px -12px rgb(0 0 0 / 0.7);
+}
+
+/* ------------------------------------------------------------------ */
+/* Semantic layer — light theme.                                       */
+/* ------------------------------------------------------------------ */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --surface: var(--grey-50);
+  --surface-raised: var(--grey-0);
+  --surface-overlay: var(--grey-0);
+  /* Still near-black in light mode. A framebuffer is not a document, and
+     surrounding it with white would flare against whatever the guest draws. */
+  --surface-sunken: var(--grey-950);
+
+  --border: var(--grey-200);
+  /* Darkened from grey-300, which measured 1.65:1 on the light canvas. */
+  --border-strong: var(--grey-500);
+
+  --text: var(--grey-900);
+  --text-muted: var(--grey-600);
+  --text-subtle: var(--grey-500);
+  --text-inverse: var(--grey-0);
+  --text-on-sunken: var(--grey-100);
+
+  --accent: var(--accent-700);
+  --accent-hover: var(--accent-800);
+  --accent-fg: var(--grey-0);
+  --accent-quiet: var(--accent-50);
+  --accent-text: var(--accent-700);
+
+  --status-healthy: var(--green-700);
+  --status-healthy-quiet: #e8f6ed;
+  --status-danger: var(--red-700);
+  --status-danger-quiet: #fdeaea;
+  --status-transitional: var(--amber-700);
+  --status-transitional-quiet: #fdf1e2;
+
+  --focus: var(--accent-600);
+  --shadow-overlay: 0 24px 48px -12px rgb(24 24 27 / 0.18);
+}
+
+/* ------------------------------------------------------------------ */
+/* Non-colour tokens.                                                  */
+/* ------------------------------------------------------------------ */
+:root {
+  /* Type scale. Dense: this is a console, and a row of instances should not
+     read like a landing page. */
+  --text-2xs: 0.6875rem; /* 11px — table headers, badges */
+  --text-xs: 0.75rem;    /* 12px — helper text, metadata */
+  --text-sm: 0.8125rem;  /* 13px — body, table cells */
+  --text-base: 0.875rem; /* 14px — form controls, buttons */
+  --text-lg: 1rem;       /* 16px — section titles */
+  --text-xl: 1.25rem;    /* 20px — page titles */
+  --text-2xl: 1.5rem;    /* 24px — the rare display line */
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  /* Radius. Small and consistent — hardware, not bubbles. */
+  --radius-sm: 3px;
+  --radius: 5px;
+  --radius-lg: 8px;
+  --radius-full: 999px;
+
+  --border-width: 1px;
+
+  /* One control height scale, so a button and an input on the same row line
+     up without anyone nudging padding. */
+  --control-height-sm: 1.75rem; /* 28px */
+  --control-height: 2rem;       /* 32px */
+  --control-height-lg: 2.25rem; /* 36px */
+}

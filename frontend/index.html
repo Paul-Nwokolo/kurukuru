@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local IaaS Console</title>
+    <!--
+      Theme applied before the first paint.
+
+      This has to be inline and blocking. Doing it in React means the browser
+      paints the default theme, then repaints once the app mounts — the flash
+      of the wrong theme that this design is required not to have. The script
+      is tiny and duplicated from src/lib/theme.ts on purpose: an import here
+      would be a network round-trip in front of every paint.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('iaas.theme')
+          var choice = stored === 'dark' || stored === 'light' ? stored : 'system'
+          var resolved =
+            choice !== 'system'
+              ? choice
+              : window.matchMedia('(prefers-color-scheme: light)').matches
+                ? 'light'
+                : 'dark'
+          document.documentElement.setAttribute('data-theme', resolved)
+        } catch (e) {
+          /* localStorage unavailable — the dark default on <html> stands. */
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

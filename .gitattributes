@@ -1,0 +1,44 @@
+# Line endings, decided by the repo rather than by whoever cloned it.
+#
+# Without this, the answer depends on each machine's `core.autocrlf`, which is
+# `true` by default on Git for Windows and unset everywhere else. The result is
+# that the same file has different content on two developers' disks and a
+# whitespace-only diff appears the first time a Linux machine touches a file a
+# Windows machine wrote. This repo is meant to be cross-platform, so the rule
+# belongs to the repo.
+#
+# `text=auto` means: detect whether a file is text, and if it is, store it with
+# LF in the repository and check it out in the platform's native ending. The
+# working tree stays native — Windows still gets CRLF — and the history stays
+# LF, so a diff only ever shows a real change.
+* text=auto
+
+# Files that must keep LF even on Windows, because something other than an
+# editor reads them and a CR would be part of the value or the shebang.
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.mjs       text eol=lf
+.gitattributes text eol=lf
+.gitignore  text eol=lf
+
+# PowerShell is the Windows-native half of the tooling; keep it CRLF.
+*.ps1       text eol=crlf
+
+# Binary, stated rather than guessed. Auto-detection is good but these are the
+# ones where a wrong guess corrupts the file rather than just annoying someone.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+*.qcow2     binary
+*.img       binary
+*.iso       binary
+
+# Text that happens to look binary-ish, stated for the same reason.
+*.svg       text
+*.md        text
+*.json      text

@@ -1,0 +1,80 @@
+# --------------------------------------------------------------------------- #
+# Python
+# --------------------------------------------------------------------------- #
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --------------------------------------------------------------------------- #
+# Node / frontend
+# --------------------------------------------------------------------------- #
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# --------------------------------------------------------------------------- #
+# Databases
+# --------------------------------------------------------------------------- #
+# The database is desired state, not source. It also contains the full history
+# of every VM on the machine it was written on, which is nobody else's business
+# and would conflict on every pull.
+#
+# The sidecars are listed explicitly: a -wal is committed transactions that the
+# .db does not have yet, so a repo carrying one without the other is worse than
+# carrying neither.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# --------------------------------------------------------------------------- #
+# Local configuration and secrets
+# --------------------------------------------------------------------------- #
+# .env holds whatever this machine needed — paths, ports, and eventually
+# credentials. The .example files are the documentation and are tracked.
+.env
+.env.*
+!.env.example
+
+# Claude Code's per-machine settings. Ignored on principle (it is a record of
+# one machine's approved commands, not a project artefact) and on evidence: the
+# current file contains a plaintext password for the Linux test host.
+.claude/settings.local.json
+
+# --------------------------------------------------------------------------- #
+# State directory
+# --------------------------------------------------------------------------- #
+# ~/.local-iaas by default, so normally nowhere near the repo — but IAAS_STATE_DIR
+# can point anywhere, including here, and disk images are gigabytes.
+.local-iaas/
+state/
+*.qcow2
+*.img
+*.iso
+
+# --------------------------------------------------------------------------- #
+# Logs, editors, OS
+# --------------------------------------------------------------------------- #
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.sw?
+
+.DS_Store
+Thumbs.db
+desktop.ini

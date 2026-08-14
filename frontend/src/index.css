@@ -1,0 +1,230 @@
+@import 'tailwindcss';
+@import './styles/tokens.css';
+
+/*
+ * Fonts, self-hosted. No CDN: the dashboard has to work on a machine with no
+ * internet, which is most of the point of a local IaaS.
+ *
+ * Both are variable, latin subset only — 53 kB for the pair. Glyphs outside
+ * latin (the arrows in "host → guest", for instance) fall back to the system
+ * font, which is the right trade for not shipping four more subsets.
+ */
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('./assets/fonts/space-grotesk-latin.woff2') format('woff2');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('./assets/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * The bridge from semantic tokens to Tailwind utilities.
+ *
+ * Every entry points at a `var(--…)` rather than a literal, so `bg-surface`
+ * emits `background-color: var(--surface)` and follows the theme at runtime.
+ * Tailwind's own colour palette is still available but should not be used:
+ * `bg-zinc-900` would be a colour that does not change with the theme, which
+ * is the failure mode this layer exists to prevent. scripts/check-raw-colour.mjs
+ * fails the build on one.
+ */
+@theme {
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-surface-sunken: var(--surface-sunken);
+
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-subtle: var(--text-subtle);
+  --color-text-inverse: var(--text-inverse);
+  --color-text-on-sunken: var(--text-on-sunken);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-quiet: var(--accent-quiet);
+  --color-accent-text: var(--accent-text);
+
+  --color-healthy: var(--status-healthy);
+  --color-healthy-quiet: var(--status-healthy-quiet);
+  --color-danger: var(--status-danger);
+  --color-danger-quiet: var(--status-danger-quiet);
+  --color-transitional: var(--status-transitional);
+  --color-transitional-quiet: var(--status-transitional-quiet);
+
+  --color-focus: var(--focus);
+
+  --font-sans: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+
+  --text-2xs: var(--text-2xs);
+  --text-xs: var(--text-xs);
+  --text-sm: var(--text-sm);
+  --text-base: var(--text-base);
+  --text-lg: var(--text-lg);
+  --text-xl: var(--text-xl);
+  --text-2xl: var(--text-2xl);
+
+  --radius-sm: var(--radius-sm);
+  --radius-DEFAULT: var(--radius);
+  --radius-lg: var(--radius-lg);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * DATA is mono, everywhere.
+ *
+ * Identifiers, ports, paths, fingerprints, sizes, IPs, device names. The rule
+ * is not decorative: these are strings people compare character by character,
+ * and a proportional font makes `l` and `1` the same shape. Applied through a
+ * class rather than by hand so "is this data?" is answered once per value.
+ */
+.data {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Slim scrollbars, themed. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/*
+ * One focus treatment for the whole application.
+ *
+ * `:focus-visible` rather than `:focus` so a mouse click does not leave a ring
+ * behind, while every keyboard traversal shows one. The offset keeps the ring
+ * clear of the control's own border in both themes.
+ */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * Motion, used to explain state rather than to decorate.
+ *
+ * The test each of these passes: does it tell the user something they would
+ * otherwise have to infer? A row appearing, a dialog taking focus, a value
+ * that just changed. Nothing here is longer than 200ms, nothing loops except
+ * genuine progress, and everything is switched off wholesale under
+ * prefers-reduced-motion — a cloud console is a tool, not a landing page.
+ */
+@keyframes iaas-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes iaas-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes iaas-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+}
+
+/* A view swap. Short enough not to delay reading, long enough to say
+   "this is different content" rather than a flicker. */
+.animate-view {
+  animation: iaas-rise 140ms ease-out;
+}
+
+/* A dialog arriving. The only element that gets a scale, because it is the
+   only one that takes over the screen. */
+.animate-modal {
+  animation: iaas-modal-in 130ms ease-out;
+}
+
+.animate-backdrop {
+  animation: iaas-fade-in 130ms ease-out;
+}
+
+/* A row that was not there a moment ago — a new instance, a new event. */
+.animate-row {
+  animation: iaas-rise 160ms ease-out;
+}
+
+/*
+ * Suppress every transition for the instant the theme changes.
+ *
+ * Without this, switching themes animates each element's colour from its dark
+ * value to its light value — while its background does the same, at the same
+ * time. For the duration of that transition the pair is neither theme's pair,
+ * and mid-swap a nav item or a primary button genuinely fails contrast: light
+ * grey text on light grey fill, briefly unreadable.
+ *
+ * It reads as a flicker, so it is easy to dismiss as a repaint artifact. It is
+ * not — it is the transitions doing exactly what they were asked to. The theme
+ * is not an animation, so it does not get one.
+ */
+:root.theme-switching,
+:root.theme-switching *,
+:root.theme-switching *::before,
+:root.theme-switching *::after {
+  transition: none !important;
+}
+
+/*
+ * Motion is a preference, not a decision we get to make. Everything animated
+ * in this app is a convenience — a spinner, a hover transition — so honouring
+ * the preference costs nothing and removing it costs someone a headache.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
