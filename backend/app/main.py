@@ -165,6 +165,7 @@ def health(
     try:
         qemu = registry.get("qemu")
         engine_info = qemu.describe()
+        support = engine_info.get("support")
         payload["engine"] = {
             "name": engine_info.get("name"),
             "available": engine_info.get("available"),
@@ -172,9 +173,19 @@ def health(
             "accel": engine_info.get("acceleration"),
             "accel_available": engine_info.get("accelerated"),
             "base_image_present": engine_info.get("base_image_present"),
+            # Version *and* capabilities. The version alone cannot say whether
+            # this build can give a guest a TPM or boot UEFI under the
+            # accelerator in use, and those are the answers people need.
+            "support": support,
         }
         if not engine_info.get("available"):
             payload["status"] = "degraded"
+        # An out-of-range or capability-limited build is worth saying out loud,
+        # but it is not degradation: everything this backend does today still
+        # works. Surfaced as its own field so the dashboard can warn without
+        # the health badge crying wolf.
+        if isinstance(support, dict) and support.get("warnings"):
+            payload["warnings"] = support["warnings"]
     except Exception as exc:  # noqa: BLE001 - liveness must answer regardless
         logger.warning("Health: engine probe failed: %s", exc)
         payload["status"] = "degraded"
@@ -240,6 +251,10 @@ def diagnostics(
             "accel_available": engine_info.get("accelerated"),
             "base_image": engine_info.get("base_image"),
             "base_image_present": engine_info.get("base_image_present"),
+            # Facts, per this endpoint's contract: which build, whether it sits
+            # in the tested range, and what it can do. `doctor` decides what to
+            # call healthy — the verdict is not baked in here.
+            "support": engine_info.get("support"),
         }
     except Exception as exc:  # noqa: BLE001 - diagnostics must answer regardless
         logger.warning("Diagnostics: engine probe failed: %s", exc)
@@ -377,6 +392,18 @@ def effective_settings(
                         "min_instance_disk_gb", "Minimum instance disk (GB)",
                         s.min_instance_disk_gb, "IAAS_MIN_INSTANCE_DISK_GB",
                     ),
+                    # Windows will not install below these, so they are shown
+                    # beside the Linux floors rather than hidden — a user
+                    # wondering why a 1 GB Windows launch was refused should be
+                    # able to find the number that refused it.
+                    entry(
+                        "windows_min_memory_mb", "Minimum Windows memory (MB)",
+                        s.windows_min_memory_mb, "IAAS_WINDOWS_MIN_MEMORY_MB",
+                    ),
+                    entry(
+                        "windows_min_disk_gb", "Minimum Windows disk (GB)",
+                        s.windows_min_disk_gb, "IAAS_WINDOWS_MIN_DISK_GB",
+                    ),
                 ],
             },
             {
@@ -390,8 +417,16 @@ def effective_settings(
                     entry("qemu_img_binary", "Image tool", s.qemu_img_binary, "IAAS_QEMU_IMG_BINARY"),
                     entry(
                         "qemu_cpu_model", "Guest CPU model",
-                        s.qemu_cpu_model or "(derived from the accelerator)",
+                        s.qemu_cpu_model or "(derived from the accelerator and guest OS)",
                         "IAAS_QEMU_CPU_MODEL",
+                    ),
+                    entry(
+                        "qemu_version_min", "Minimum QEMU version",
+                        s.qemu_version_min, "IAAS_QEMU_VERSION_MIN",
+                    ),
+                    entry(
+                        "qemu_version_max_tested", "Highest tested QEMU version",
+                        s.qemu_version_max_tested, "IAAS_QEMU_VERSION_MAX_TESTED",
                     ),
                     path_entry(
                         "base_image", "Base image",

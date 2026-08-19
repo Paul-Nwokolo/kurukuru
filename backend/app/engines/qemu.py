@@ -46,6 +46,7 @@ from app.engines.base import (
     LaunchOptions,
     SnapshotInfo,
 )
+from app.engines.capabilities import QemuSupport, cached_support
 from app.engines.images import BaseImageError, ensure_base_image
 from app.engines.ports import PortAllocationError, allocate_port, is_port_free
 from app.engines.process import ProcessError, pid_alive, spawn_detached, terminate_pid
@@ -151,11 +152,109 @@ class InstanceRuntime:
     #: a forward added to a running guest survives a restart. The SSH forward
     #: is not in here — it comes from ``ssh_port`` above.
     port_forwards: list[str] = field(default_factory=list)
+    #: Which guest family this VM is, and therefore which virtual hardware it
+    #: gets. Persisted for the same reason ``display`` is, only more so: the
+    #: disk bus and NIC model are what the guest's drivers bound to on first
+    #: boot. Handing a Windows install a virtio disk on its second start —
+    #: because the runtime file forgot — is an unbootable VM, not a slow one.
+    #: Defaults to "linux" for runtime files written before Windows existed.
+    guest_os: str = "linux"
 
     @property
     def vnc_display(self) -> int:
         """QEMU's ``-vnc :N`` display number (port 5900+N)."""
         return self.vnc_port - 5900
+
+
+@dataclass(frozen=True)
+class GuestProfile:
+    """The virtual hardware one guest family can actually drive.
+
+    Windows Setup ships inbox drivers for a specific, conservative set of
+    devices and nothing else. Boot it on the paravirtualised hardware Linux
+    prefers and the installer reaches "no drives found" — not an error message
+    about drivers, just an empty list where the disk should be.
+
+    So the choice is per guest family, and it is data rather than a chain of
+    ``if guest_os ==`` scattered through the command builder: every device that
+    differs is named here once, which is what stops a later device from being
+    added for Linux and silently inherited by Windows.
+    """
+
+    #: How the root disk and volumes are attached. "virtio" is the fast path;
+    #: "ahci" emits an ICH9 SATA controller Windows has a driver for.
+    disk_bus: str
+    #: NIC device model. e1000e is an Intel 82574L — inbox on every Windows
+    #: since 7, where virtio-net needs the virtio-win ISO.
+    nic_model: str
+    #: Display adapters this guest can use, best first. Windows Setup has no
+    #: virtio-gpu driver, so "std" is not merely the default there, it is the
+    #: only one that shows a picture — which is why this is a list to choose
+    #: from rather than a default to override.
+    displays: tuple[str, ...]
+    #: Whether a NoCloud seed means anything to this guest. Windows consumes
+    #: none of cloud-init's cloud-config, so it gets no seed at all.
+    supports_cloud_init: bool
+    #: Whether to attach a USB HID keyboard and tablet instead of relying on the
+    #: implicit PS/2 pair. Measured: with ``-display none`` and no VNC client, a
+    #: QMP ``send-key`` never reaches the PS/2 keyboard — an entire Windows Setup
+    #: key sequence was sent blind and the disk never grew a byte, while the same
+    #: sequence with USB HID attached drove Setup screen by screen. The tablet is
+    #: here for the same reason plus a second one: PS/2 is a *relative* pointer,
+    #: so a guest that never sees a mouse-move origin cannot be clicked
+    #: accurately, which makes Setup and the Windows desktop painful to drive.
+    #: Absolute coordinates remove that entirely.
+    usb_input: bool
+
+    @property
+    def default_display(self) -> str:
+        return self.displays[0]
+
+    def display_or_default(self, requested: str | None) -> str:
+        """Honour a display request only if this guest can actually drive it."""
+        return requested if requested in self.displays else self.default_display
+
+
+#: Linux keeps exactly what it had. The Windows row is the whole of Phase 13's
+#: device story, and every entry in it is a Windows-inbox-driver decision.
+GUEST_PROFILES: dict[str, GuestProfile] = {
+    "linux": GuestProfile(
+        disk_bus="virtio",
+        nic_model="virtio-net-pci",
+        displays=("std", "virtio"),
+        supports_cloud_init=True,
+        # Linux keeps PS/2. These guests are reached over SSH, the console is a
+        # fallback, and adding devices would change the hardware under every
+        # instance already on disk for no measured gain.
+        usb_input=False,
+    ),
+    "windows": GuestProfile(
+        disk_bus="ahci",
+        nic_model="e1000e",
+        displays=("std",),
+        supports_cloud_init=False,
+        # Windows has no SSH and no cloud-init: the console is the only way in,
+        # and without USB HID it is not actually usable. Windows carries inbox
+        # drivers for xHCI and USB HID, so this costs nothing at install time.
+        usb_input=True,
+    ),
+}
+
+
+#: CPU model for a Windows guest under WHPX. The oldest named model carrying
+#: SSE4.2/POPCNT, which Windows 11 and Server 2025 require and ``qemu64`` lacks.
+#: See :meth:`QemuEngine.cpu_model` for the measurements behind the choice.
+WINDOWS_WHPX_CPU = "Westmere"
+
+
+def guest_profile(guest_os: str | None) -> GuestProfile:
+    """The hardware profile for a guest family, defaulting to Linux.
+
+    An unknown value resolves to Linux rather than raising: this is read from a
+    runtime file that may predate the field, and the pre-Windows default is
+    exactly what those VMs were built with.
+    """
+    return GUEST_PROFILES.get((guest_os or "linux").lower(), GUEST_PROFILES["linux"])
 
 
 #: ``qemu-img snapshot -l`` output, e.g.
@@ -352,7 +451,7 @@ class QemuEngine(ComputeEngine):
             )
         return None
 
-    def resolve_accel(self, requested: str | None) -> str:
+    def resolve_accel(self, requested: str | None, guest_os: str | None = None) -> str:
         """Choose the accelerator for one VM.
 
         Hardware acceleration is the default for every boot mode. The rule that
@@ -361,18 +460,19 @@ class QemuEngine(ComputeEngine):
         turned out to be true only for VGA-text-mode guests — and an ISO
         installer is precisely the kind of guest that switches to a framebuffer.
 
-        The only remaining reason to pick TCG is an explicit request.
-
-        A request for hardware acceleration is honoured only if it is *this*
-        host's accelerator and the probe found it working; anything else falls
-        back to TCG with a warning. That covers asking for WHPX on Linux as
-        well as asking for KVM on a host that has no /dev/kvm — both are a
-        request QEMU could not satisfy, and refusing to boot over it would be
-        worse than booting slowly.
+        ``guest_os`` is accepted so a guest family *can* influence this, but no
+        family currently does, and that is a deliberate retraction rather than
+        an oversight. A Windows-specific TCG default was added here on the
+        strength of "WHPX stalls, TCG progresses" and removed once longer runs
+        showed TCG stalling too — a little further along, and still without
+        writing a byte to disk. Defaulting Windows to software emulation would
+        therefore have bought a ~30x slowdown for no working install. See
+        docs/DECISIONS.md on the Windows boot investigation.
         """
         available = self.accel()
         if requested == "tcg":
             return "tcg"
+
         if requested in HARDWARE_ACCELS:
             if requested != available:
                 logger.warning(
@@ -489,29 +589,47 @@ class QemuEngine(ComputeEngine):
             return "whpx,kernel-irqchip=off"
         return accel if accel in ("kvm", "hvf", "tcg") else "tcg"
 
-    def cpu_model(self, accel: str | None = None) -> str:
-        """Guest CPU model appropriate to the accelerator this VM will use.
+    def cpu_model(self, accel: str | None = None, guest_os: str | None = None) -> str:
+        """Guest CPU model appropriate to the accelerator *and* the guest.
 
-        Three different answers, for three different reasons:
+        Three answers by accelerator, for three different reasons:
 
-        * **WHPX — qemu64.** WHPX cannot virtualize everything ``-cpu max`` and
-          ``-cpu host`` advertise: the guest takes an unsupported exit early in
-          kernel boot and QEMU dies with "WHPX: Unexpected VP exit code 4"
-          before a single serial line is written. (Reproduced on this host with
-          both ``max`` and ``max,vmx=off,svm=off``.) ``qemu64`` is the
-          conservative baseline WHPX handles, and it boots the cloud image fine.
+        * **WHPX — a conservative model.** WHPX cannot virtualize everything
+          ``-cpu max`` and ``-cpu host`` advertise: the guest takes an
+          unsupported exit early in kernel boot and QEMU dies with "WHPX:
+          Unexpected VP exit code 4" before a single serial line is written.
+          (Reproduced on this host with both ``max`` and
+          ``max,vmx=off,svm=off``.)
         * **KVM/HVF — host.** Passing the physical CPU through is both correct
           and materially faster: the guest gets AES-NI, AVX and the rest instead
           of emulated substitutes. The WHPX workaround must not leak here — it
           would silently hobble every Linux guest for a Windows bug.
         * **TCG — max.** Nothing is being virtualized, so the emulator may as
           well advertise the richest model it can implement.
+
+        **And then the guest gets a say, which is a Phase 13 correction.** The
+        Phase 5 decision recorded "WHPX means qemu64" as though the accelerator
+        were the only input. It is not, and the difference is load-bearing:
+        ``qemu64`` does not expose SSE4.2 or POPCNT, and **Windows 11 and
+        Windows Server 2025 refuse to run without them.** A Windows guest on
+        ``qemu64`` is not slow, it is unbootable.
+
+        The narrower fact behind the Phase 5 rule is that only the *host-derived*
+        models break WHPX. Measured on this host at QEMU 10.0.94, each surviving
+        an 18-second run: ``Nehalem``, ``Westmere``, ``SandyBridge``,
+        ``Skylake-Client`` and ``qemu64,+sse4.2,+popcnt`` all start; only ``max``
+        and ``host`` still die. ``Westmere`` is the pick — the oldest model that
+        carries SSE4.2, so it asks the accelerator for the least while still
+        clearing the bar Windows sets.
+
+        Linux keeps ``qemu64`` under WHPX exactly as before. Nothing about a
+        Windows requirement should change what already boots.
         """
         if self._settings.qemu_cpu_model:
             return self._settings.qemu_cpu_model
         resolved = accel or self.accel()
         if resolved == "whpx":
-            return "qemu64"
+            return WINDOWS_WHPX_CPU if (guest_os or "linux").lower() == "windows" else "qemu64"
         if resolved in ("kvm", "hvf"):
             return "host"
         return "max"
@@ -560,6 +678,21 @@ class QemuEngine(ComputeEngine):
             timeout=self._settings.qemu_snapshot_timeout_seconds,
         )
 
+    @staticmethod
+    def _ahci_disk(path: Path, index: int) -> list[str]:
+        """One qcow2 attached to port ``index`` of the ``ahci`` controller.
+
+        Two arguments per disk rather than one: ``if=virtio`` is a shorthand
+        QEMU expands itself, but a SATA disk needs the drive and the device
+        stated separately so the device can name which port it sits on. The
+        port number is what fixes the guest's disk ordering, the same way the
+        argument order does for virtio.
+        """
+        return [
+            "-drive", f"file={path},if=none,id=hd{index},format=qcow2",
+            "-device", f"ide-hd,bus=ahci.{index},drive=hd{index}",
+        ]
+
     def build_launch_command(self, name: str, runtime: InstanceRuntime) -> list[str]:
         """Full ``qemu-system-x86_64`` argv for one VM.
 
@@ -568,41 +701,74 @@ class QemuEngine(ComputeEngine):
         run, and the single ``hostfwd`` rule is the only way in.
         """
         directory = self._dir(name)
+        profile = guest_profile(runtime.guest_os)
         cmd = [
             self._system_binary,
             "-name", name,
             "-machine", "q35",
             "-accel", self._accel_arg(runtime.accel),
-            "-cpu", self.cpu_model(runtime.accel),
+            "-cpu", self.cpu_model(runtime.accel, runtime.guest_os),
             # -vga virtio is the single-device form: virtio-gpu for the
             # guest plus VGA compatibility for firmware, rather than a
             # separate -device with -vga none.
-            "-vga", runtime.display,
+            "-vga", profile.display_or_default(runtime.display),
             "-smp", str(runtime.cpus),
             "-m", runtime.memory,
-            "-drive", f"file={directory / _DISK_FILE},if=virtio,format=qcow2",
         ]
 
-        # Attached volumes, in the order the runtime file records. Emitted
-        # immediately after the root disk and before any CD-ROM so the guest's
-        # virtio-blk numbering is a direct function of this list.
-        for volume_path in runtime.volumes:
-            cmd += ["-drive", f"file={volume_path},if=virtio,format=qcow2"]
+        if profile.disk_bus == "ahci":
+            # Windows: one ICH9 SATA controller, then every disk as a numbered
+            # port on it. The controller is emitted once and before any drive,
+            # because a `bus=ahci.N` reference has to resolve to something that
+            # already exists on the command line.
+            cmd += ["-device", "ich9-ahci,id=ahci"]
+            cmd += self._ahci_disk(directory / _DISK_FILE, index=0)
+            for port, volume_path in enumerate(runtime.volumes, start=1):
+                cmd += self._ahci_disk(Path(volume_path), index=port)
+        else:
+            cmd += [
+                "-drive", f"file={directory / _DISK_FILE},if=virtio,format=qcow2",
+            ]
+            # Attached volumes, in the order the runtime file records. Emitted
+            # immediately after the root disk and before any CD-ROM so the guest's
+            # virtio-blk numbering is a direct function of this list.
+            for volume_path in runtime.volumes:
+                cmd += ["-drive", f"file={volume_path},if=virtio,format=qcow2"]
 
         if runtime.iso_path:
             # Boot order dc = CD first, then disk: the installer runs on the
             # first boot and the installed system takes over once the guest
             # stops finding a bootable CD. menu=on leaves a manual override.
-            cmd += [
-                "-drive", f"file={runtime.iso_path},media=cdrom",
-                "-boot", "order=dc,menu=on",
-            ]
-        elif runtime.ssh_enabled:
+            if profile.disk_bus == "ahci":
+                # The installer medium goes on the SATA controller too, on the
+                # port after the last data disk. Windows Setup enumerates it
+                # with the same inbox driver it uses for the target disk, which
+                # is the entire point of putting both on AHCI.
+                cd_port = 1 + len(runtime.volumes)
+                cmd += [
+                    "-drive",
+                    f"file={runtime.iso_path},if=none,id=cd0,media=cdrom,readonly=on",
+                    "-device", f"ide-cd,bus=ahci.{cd_port},drive=cd0",
+                ]
+            else:
+                cmd += ["-drive", f"file={runtime.iso_path},media=cdrom"]
+            cmd += ["-boot", "order=dc,menu=on"]
+        elif runtime.ssh_enabled and profile.supports_cloud_init:
             # Cloud image: the NoCloud seed is the only extra medium. Attached
             # only when one was actually generated — an image without cloud-init
             # gets no seed, and QEMU refuses to start if told to open a CD-ROM
             # file that doesn't exist.
             cmd += ["-drive", f"file={directory / _SEED_FILE},media=cdrom"]
+
+        if profile.usb_input:
+            # The controller is emitted before the devices that reference it,
+            # for the same reason the AHCI controller is: `bus=xhci.0` has to
+            # resolve to something already on the command line.
+            cmd += [
+                "-device", "qemu-xhci,id=xhci",
+                "-device", "usb-kbd,bus=xhci.0",
+                "-device", "usb-tablet,bus=xhci.0",
+            ]
 
         # The SSH forward is built from the pinned port and always comes
         # first. It is deliberately NOT part of the port-forward table: every
@@ -616,7 +782,7 @@ class QemuEngine(ComputeEngine):
 
         cmd += [
             "-netdev", netdev,
-            "-device", f"virtio-net-pci,netdev={NETDEV_ID}",
+            "-device", f"{profile.nic_model},netdev={NETDEV_ID}",
             "-qmp", f"tcp:{HOST_IP}:{runtime.qmp_port},server,nowait",
             "-vnc", f"{HOST_IP}:{runtime.vnc_display}",
             "-display", "none",
@@ -641,11 +807,30 @@ class QemuEngine(ComputeEngine):
             logger.warning("QEMU unavailable: %s", exc)
             return False
 
+    def version(self) -> str | None:
+        """The installed build's version string, or None if it cannot be read.
+
+        Stamped onto every instance at launch, so "it worked before the host was
+        upgraded" is a checkable claim rather than a hunch.
+        """
+        support = self.support()
+        return support.version.text if support.version else None
+
+    def support(self) -> QemuSupport:
+        """Version and capability report for the configured binary.
+
+        Cached: the probes spawn subprocesses, and ``/health`` is polled.
+        """
+        return cached_support(self._settings, self.accel())
+
     def describe(self) -> dict[str, object]:
         available = self.is_available()
+        support = self.support() if available else None
         return {
             "name": self.name,
             "available": available,
+            "version": support.version.text if support and support.version else None,
+            "support": support.as_dict() if support else None,
             "acceleration": self.accel() if available else None,
             # "accelerated" means hardware-backed, not "is WHPX". The two were
             # the same statement while Windows was the only supported host, and
@@ -674,6 +859,12 @@ class QemuEngine(ComputeEngine):
         """
         options = options or LaunchOptions()
         from_iso = bool(options.iso_path)
+        profile = guest_profile(options.guest_os)
+        # Windows reads none of cloud-init's cloud-config — no shell, no sudoers,
+        # no apt — so it gets no seed at all, exactly as an ISO install does.
+        # Asked as a property of the guest rather than trusted from the caller,
+        # so a Windows launch cannot be handed a Linux-shaped seed by mistake.
+        seed_cloud_init = options.seed_cloud_init and profile.supports_cloud_init
 
         directory = self._dir(name)
         if directory.exists():
@@ -712,7 +903,7 @@ class QemuEngine(ComputeEngine):
         # 2. NoCloud seed — only for guests that will actually read it. A
         #    generic ISO ignores it, and attaching a second CD-ROM would only
         #    confuse the boot order.
-        if options.seed_cloud_init and not from_iso:
+        if seed_cloud_init and not from_iso:
             try:
                 self._write_seed(name, cloud_init_path)
             except SeedIsoError as exc:
@@ -725,10 +916,11 @@ class QemuEngine(ComputeEngine):
                 name,
                 cpus=cpus,
                 memory=memory,
-                accel=self.resolve_accel(options.accel),
+                accel=self.resolve_accel(options.accel, options.guest_os),
                 iso_path=options.iso_path,
-                ssh_enabled=options.seed_cloud_init,
+                ssh_enabled=seed_cloud_init,
                 display=options.display or "std",
+                guest_os=options.guest_os,
             )
         except PortAllocationError as exc:
             self._remove_dir(name)
@@ -843,17 +1035,36 @@ class QemuEngine(ComputeEngine):
         it was copied from is a support ticket waiting to happen.
         """
         options = options or LaunchOptions()
+        # The guest family has to survive the clone. The caller passes it (the
+        # clone route has always done so, and says why), but this method used to
+        # drop it and let _allocate_runtime default to "linux" — which handed a
+        # cloned Windows instance a virtio root disk it has no driver for, and
+        # then waited out the boot timeout for an SSH service it will never run.
+        # Both of those follow from the profile, so both are derived from it
+        # here rather than assumed, exactly as provision_instance does.
+        profile = guest_profile(options.guest_os)
+        seed_cloud_init = options.seed_cloud_init and profile.supports_cloud_init
         runtime = self._allocate_runtime(
             name,
             cpus=cpus,
             memory=memory,
-            accel=options.accel,
-            ssh_enabled=True,
+            accel=self.resolve_accel(options.accel, options.guest_os),
+            ssh_enabled=seed_cloud_init,
             display=options.display or "std",
+            guest_os=options.guest_os,
         )
-        self._write_seed(name, cloud_init_path)
+        if seed_cloud_init:
+            self._write_seed(name, cloud_init_path)
         self._write_runtime(name, runtime)
         self._spawn(name, runtime)
+        if not runtime.ssh_enabled:
+            # Console-only guest: there is no readiness signal to wait for, and
+            # blocking here would report a healthy clone as a timeout.
+            logger.info(
+                "Clone '%s' booted (%s guest: console only, no SSH wait)",
+                name, options.guest_os,
+            )
+            return
         elapsed = self._wait_for_ssh(name, runtime, self._settings.qemu_boot_timeout_seconds)
         logger.info("Clone '%s' booted in %.1fs", name, elapsed)
 
@@ -1226,6 +1437,7 @@ class QemuEngine(ComputeEngine):
         iso_path: str | None = None,
         ssh_enabled: bool = True,
         display: str = "std",
+        guest_os: str = "linux",
     ) -> InstanceRuntime:
         s = self._settings
         reserved = self._reserved_ports(exclude=name)
@@ -1243,7 +1455,8 @@ class QemuEngine(ComputeEngine):
             accel=accel or self.accel(),
             iso_path=iso_path,
             ssh_enabled=ssh_enabled,
-            display=display,
+            display=guest_profile(guest_os).display_or_default(display),
+            guest_os=guest_os,
         )
 
     def _require_runtime(self, name: str) -> InstanceRuntime:
@@ -1264,11 +1477,57 @@ class QemuEngine(ComputeEngine):
             raise HypervisorUnavailableError(str(exc)) from exc
         self._write_runtime(name, runtime)
 
-    def _is_running(self, runtime: InstanceRuntime) -> bool:
-        """Two-factor liveness: the pid exists *and* QMP answers on its socket."""
+    def _liveness(self, runtime: InstanceRuntime) -> str:
+        """``"stopped"`` | ``"running"`` | ``"unreachable"``.
+
+        The pid and the QMP socket answer different questions, and collapsing
+        them into one boolean produced a real and very confusing failure.
+
+        QEMU's QMP chardev serves **one client at a time**. While anything else
+        holds that socket — a debugging session, a future console feature, a
+        second backend process — ``is_responsive`` cannot complete a handshake,
+        the old two-factor check returned False, and the reconciler concluded
+        the instance had stopped. It then rewrote the row to Stopped and cleared
+        the pid, for a VM whose process was alive and healthy the whole time.
+        Measured: a 40-minute Running/Stopped flap at roughly one flip per
+        reconcile, which ended the instant the competing client disconnected.
+
+        The QMP check was there for a reason, though — it guards against a
+        *recycled* pid, where the number we stored now belongs to some unrelated
+        process and ``pid_alive`` is meaningless. That case and a busy monitor
+        look identical through ``is_responsive``, but they are easy to tell
+        apart one level down: QEMU holds its QMP port for as long as it lives,
+        so a busy monitor still has something bound to it, while a dead QEMU has
+        released it. Binding is therefore the tie-breaker, and both concerns are
+        served rather than traded off.
+        """
         if not pid_alive(runtime.pid):
-            return False
-        return is_responsive(HOST_IP, runtime.qmp_port)
+            return "stopped"
+        if is_responsive(HOST_IP, runtime.qmp_port):
+            return "running"
+        if is_port_free(runtime.qmp_port, HOST_IP):
+            # Nothing is listening at all: QEMU is gone and this pid is someone
+            # else's. The original two-factor check existed for exactly this.
+            return "stopped"
+        return "unreachable"
+
+    def _is_running(self, runtime: InstanceRuntime) -> bool:
+        """Whether the VM's process is up. Unreachable-over-QMP still counts.
+
+        Deliberately conservative in both directions it matters: the reconciler
+        will not demote a live VM, and ``_refuse_if_running`` will not let a
+        clone or snapshot read a disk that a live QEMU may be writing just
+        because its monitor was busy.
+        """
+        state = self._liveness(runtime)
+        if state == "unreachable":
+            logger.warning(
+                "QEMU pid %s is alive but QMP on port %s did not answer — "
+                "treating as running. QMP serves one client at a time, so "
+                "another connection to it will produce this.",
+                runtime.pid, runtime.qmp_port,
+            )
+        return state != "stopped"
 
     def _wait_for_ssh(self, name: str, runtime: InstanceRuntime, timeout: int) -> float:
         """Block until the guest's forwarded SSH port accepts a connection.

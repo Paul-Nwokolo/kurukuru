@@ -666,7 +666,68 @@ not include attached volumes**, so restoring rolls the OS back while the data
 disks move on. The snapshot dialog names the attached volumes and says they are
 not included, rather than leaving it to the docs.
 
-## 24. Every path the backend owns is resolved against the state directory, including the database
+## 24. Networking is user-mode NAT only; the other modes are deferred with their reasons
+
+**Context.** Phase 11 set out to move past user-mode NAT. Three modes were
+assessed against what an operator would actually have to do on Windows and
+Linux, and two of them turned out to be blocked by things this project cannot
+supply.
+
+**Decision.** Ship `user` alone — QEMU's built-in NAT, which every instance has
+always been on — and model the other two as *deferred with a stated blocker*
+rather than hiding them or offering a disabled control with no explanation:
+
+- **Host-only / internal.** QEMU's portable shared-segment backend is a
+  multicast socket, and it fails outright on Windows: `can't bind ip=230.0.0.1
+  to socket`. The alternative makes one VM the switch for the others, so the
+  whole segment dies when that instance is stopped. Nothing the operator can
+  install fixes this — it needs a switch process this project does not have.
+- **Bridged.** Needs a host tap device, which is elevated on every supported
+  platform. Windows wants Administrator to install the tap-windows6 driver
+  (QEMU has the backend compiled in, but there is no adapter for it to open).
+  Linux wants root or `CAP_NET_ADMIN` — `/dev/net/tun` is world-writable, yet
+  `ip tuntap add` still returns "Operation not permitted" — plus a pre-made
+  bridge and a setuid `qemu-bridge-helper` with an `/etc/qemu/bridge.conf` ACL.
+
+Every claim there was measured on this build, and the three consumers — API,
+dashboard, docs — all read `DEFERRED_NETWORK_MODES` in `app/models.py` so they
+cannot drift into disagreeing about what is required.
+
+Port forwards are the compensating feature, and they are applied **live** to a
+running guest. That is safe for reasons that do not generalise to anything else
+in the system: SLIRP owns the listening socket entirely, the guest is never
+told, and QEMU starts listening immediately — so unlike a volume, a forward has
+no in-guest state to get out of step with.
+
+**Consequences.** A guest has no address of its own, so a forward is the only
+way in and everything binds to loopback. "Port forwards done well over bridged
+done badly" was the trade, and the deferred entries are what stop that reading
+as an omission.
+
+## 25. The SSH forward is not a row in the port-forwards table
+
+**Context.** Phase 11 added a `port_forwards` table. The SSH forward — pinned
+on `Instance.ssh_port` since Phase 5 and emitted by the engine from the
+instance's runtime file — was an obvious candidate to fold into it, since it is
+the same kind of object.
+
+**Decision.** Leave it exactly where it is, and synthesise a read-only row for
+the listing.
+
+Folding it in would put *the one forward every instance depends on* behind a
+data migration. A single row that failed to backfill is an instance nobody can
+reach, and it would fail silently — the VM boots, the dashboard looks right,
+and only an SSH attempt discovers it. There is no upside to weigh against that:
+the table would be tidier, and tidiness is not worth a class of unreachable VM.
+
+**Consequences.** `GET /instances/{id}/forwards` returns the SSH entry first,
+marked `derived: true` with the synthetic id `ssh`, so the listing still tells
+the whole truth about what reaches a guest. Clients must render it read-only,
+and `DELETE` on it is refused with a rule rather than a 404 — offering a button
+that fails, or worse appears to work and then shows the row again on the next
+poll, is worse than offering nothing.
+
+## 26. Every path the backend owns is resolved against the state directory, including the database
 
 **Context.** `database_url` defaulted to `sqlite:///./iaas.db` — resolved
 against the process's *working directory* — while every other path was rooted
@@ -702,6 +763,874 @@ created by merely pointing at a path is.
 open a directory literally named `~` — so `resolved_database_url` exists and
 every consumer goes through it. The database also appears on the Settings
 screen now, as a path you can navigate to rather than a URL.
+
+## 27. Windows guests install on compatible devices, not on virtio
+
+**Context.** Windows Setup ships inbox drivers for a conservative set of
+hardware. The paravirtualised devices Linux prefers are not in it: with an
+`if=virtio` root disk and a `virtio-net-pci` NIC, Setup reaches the disk-select
+screen and shows an empty list. It does not say "missing driver" — it shows
+nothing, which reads as broken hardware.
+
+Two strategies were available. (a) Give Windows devices it already knows —
+AHCI/SATA disk, e1000e NIC, standard VGA — and let it install unaided. (b) Keep
+virtio and attach the virtio-win driver ISO as a second CD-ROM, so the user
+loads the storage driver during setup via "Load driver → browse".
+
+**Decision.** (a), with (b) documented as a post-install upgrade in
+[docs/WINDOWS.md](WINDOWS.md).
+
+Measured on this host at QEMU 10.0.94: `ich9-ahci` and `e1000e` both attach, a
+guest boots off them under WHPX, and standard VGA renders at 1280x800 with 5
+distinct colours — a real picture, not a black rectangle. The device set works.
+
+The deciding argument was not performance but **driver signing**. virtio-win
+binaries are test-signed for Windows 8+ and Microsoft-attestation-signed for
+Windows 10+; they are explicitly *not* WHQL-signed, which needs a paid RHEL
+subscription. Attestation signing is accepted on Windows 10/11 client, but it
+is a genuine risk on Server and under Secure Boot — where the vendor's own
+instructions are to install a test certificate first. Making "browse to a
+folder, then trust a test certificate" a mandatory step of first boot, on a
+screen with no copy-paste, is a poor first experience to buy I/O throughput the
+user has not yet had a chance to want.
+
+The I/O gap is recoverable and (b) gets cheaper later: virtio can be installed
+from a running desktop with a working network, where a wrong click is an error
+message rather than an install that cannot proceed.
+
+**Consequences.** Windows guests are slower at I/O than Linux ones until the
+user upgrades them. `guest_os` became load-bearing rather than advisory — it
+now selects disk bus, NIC model, display and CPU model together, from
+`GUEST_PROFILES` in `app/engines/qemu.py`, and is persisted in the runtime file
+so a restart re-attaches identical hardware. Handing an installed Windows guest
+a different disk bus on its second boot would be an unbootable VM, not a slow
+one.
+
+## 28. Windows 11 is not supported, and no QEMU upgrade would change that
+
+**Context.** Windows 11 requires TPM 2.0. QEMU's TPM support needs an external
+`swtpm` daemon, and the build here rejects `-tpmdev` as an invalid option with
+no `tpm-tis`/`tpm-crb` device offered.
+
+The obvious reading is "this build is missing a feature; upgrade". That reading
+is wrong, and the difference matters because acting on it wastes an afternoon.
+QEMU's `meson.build` gates the feature on the host OS:
+
+```meson
+have_tpm = get_option('tpm') \
+  .require(host_os != 'windows', error_message: 'TPM emulation only available on POSIX systems')
+```
+
+**No QEMU release on a Windows host has TPM emulation.** It is not a version
+problem, and there is no version to upgrade to.
+
+UEFI has a related but separate story. OVMF firmware ships and works — measured
+rendering at 1280x800, 66 colours — but only via `-bios` with a recombined
+firmware image. The normal `-drive if=pflash` route dies instantly under WHPX
+with `Failed to emulate MMIO access with EmulatorReturnStatus: 2`, an upstream
+bug open since 2019 and unfixed in every release since.
+
+**Decision.** Support Windows Server and Windows 10, which require neither TPM
+nor UEFI. Refuse to ship a Windows 11 option that would fail at the ISO's own
+hardware check.
+
+**Consequences.** ⚠️ **Read this before enabling UEFI for anything.** The
+`-bios` workaround maps firmware **read-only**, so UEFI NVRAM does not persist.
+Windows Setup writes its boot entry to NVRAM, so a UEFI install would appear to
+succeed and then fail to boot on first restart — a failure that looks like
+success right up until the reboot. If that bites, **legacy BIOS is a valid
+fallback**: neither Windows Server nor Windows 10 requires UEFI, and SeaBIOS is
+the proven path under WHPX.
+
+Registry bypasses for the Windows 11 check exist and are not built in. Users
+may apply them; a product-level switch for defeating a vendor's hardware check
+is not a configuration this supports.
+
+## 29. A known-good QEMU range, and capability probes because the range cannot see enough
+
+**Context.** Correction to decision 5's "WHPX means `-cpu qemu64`". That rule
+was written as though the accelerator were the only input. It is not: `qemu64`
+exposes neither SSE4.2 nor POPCNT, and **Windows 11 and Windows Server 2025
+refuse to run without them.** A Windows guest on `qemu64` is not slow, it is
+unbootable.
+
+The narrower true fact is that only *host-derived* models break WHPX. Measured
+here, each surviving an 18-second run: `Nehalem`, `Westmere`, `SandyBridge`,
+`Skylake-Client` and `qemu64,+sse4.2,+popcnt` all start; only `max` and `host`
+die with "Unexpected VP exit".
+
+**Decision.** The CPU model is per accelerator *and* per guest OS. Linux keeps
+`qemu64` under WHPX unchanged; Windows gets `Westmere`, the oldest named model
+carrying SSE4.2, so it asks the accelerator for as little as possible while
+still clearing the bar Windows sets.
+
+Alongside it, a known-good version range (`qemu_version_min`,
+`qemu_version_max_tested`) is checked at startup and surfaced in `doctor`,
+`/health` and Settings — **plus capability probes, which are the more important
+half.** Every finding above is invisible to a version comparison: a current,
+in-range, perfectly healthy QEMU still cannot give a guest a TPM. A check
+reporting "10.0.94 — supported" over a Windows 11 install that cannot work
+would be worse than no check at all.
+
+"Unreleased build" is its own state rather than a comparison. This host runs
+10.0.94 from a tree described `v10.1.0-rc4-12093-g…` — numerically *below*
+10.1.0 while containing 12k commits more than the rc. Neither "newer" nor
+"older" says the useful thing, which is that nobody else can install this exact
+build.
+
+**Consequences.** Every check here is advisory and nothing gates a launch: a
+warning that is wrong costs a sentence, a gate that is wrong costs a VM. The
+QEMU version is stamped on each instance at launch, so "it worked before the
+host was upgraded" becomes checkable. **No download or upgrade machinery
+exists, and none should**: for packaging we pin and bundle a tested QEMU, and
+an application that replaces system binaries is a security and support problem.
+
+Writing the probe surfaced a bug the unit tests could not: `qemu_system_binary`
+is normally a bare PATH name, so looking for firmware "beside the binary"
+resolved against the backend's working directory and reported OVMF missing on a
+host where it was measurably present. Found by running the probe against the
+real install — the argument for live verification, in miniature.
+
+## 30. Windows Setup does not complete on this host, and the reason is not the accelerator
+
+**Context.** Phases 13's device work landed and a real Windows Server 2022
+install was attempted. It does not complete. This entry records what was
+measured, because the obvious diagnoses are all wrong and each one costs hours.
+
+**What happens.** Windows Setup boots, draws its logo, and stops. The
+framebuffer goes byte-identical, the process drops to idle — 0.2 CPU-seconds in
+20 wall-seconds — and **the disk is never written**: the qcow2 stays at its
+393,216-byte empty size. An idle guest is a halted guest, not a slow one.
+
+**What it is not.** Sixteen configurations, all stuck:
+
+| Varied | Values tried |
+|---|---|
+| Accelerator | WHPX, TCG |
+| Chipset | q35, i440fx, pc-q35-8.2 |
+| Interrupts | `kernel-irqchip=off`, default |
+| CPU model | `Westmere`, `qemu64`, with Hyper-V enlightenments |
+| vCPUs | 1, 2 |
+| Storage | AHCI disk+CD, CD on IDE, `-cdrom`, all-IDE on i440fx |
+| Firmware | SeaBIOS, OVMF via `-bios` |
+
+Two things were ruled out that looked promising. **The display is fine**:
+Alpine's framebuffer demonstrably updates under WHPX (two distinct frames
+across three samples), so a frozen picture really is a frozen guest. **The ISOs
+are fine**: both are structurally complete — `boot.wim` (414 MB),
+`install.wim` (4.3 GB), `bootmgr`, `setup.exe` all present and readable, tail
+bytes included.
+
+**What was learnt.** Under UEFI the firmware reaches its interactive shell and
+maps the installer as `FS0:`, but auto-boots nothing — with `-bios` the
+firmware is read-only, so there is no NVRAM to hold a boot entry. Launching
+`FS0:\EFI\BOOT\BOOTX64.EFI` by hand produces the real prompt:
+
+```
+Press any key to boot from CD or DVD......
+```
+
+Nobody was pressing one. Under legacy BIOS that prompt is drawn in **VGA text
+mode** — precisely the mode decision 5 records as unrenderable under WHPX — so
+for every earlier run the screenshot showed a stale logo while the guest was
+asking a question. Two separately documented facts in this repository combining
+into a third that neither predicts.
+
+Pressing through the prompt gets further: on the UEFI path Setup starts, the
+disk grows, and the VM then resets back to firmware.
+
+**A second round of instrumentation narrowed this considerably, and corrected
+part of it.** With `pvpanic`, a serial capture, the firmware debug console
+(port 0x402) and `-no-reboot` all enabled:
+
+- **On the legacy-BIOS path — the one the engine actually uses — there is no
+  crash at all.** No `GUEST_PANICKED`, no `RESET`, no `SHUTDOWN`; the QMP event
+  stream is empty and QEMU never exits despite `-no-reboot`. The guest simply
+  **halts**. The "it resets" description belongs only to the UEFI path.
+- **It is perfectly deterministic.** Three identical runs produced the same
+  frame hash, the same untouched disk, and **byte-identical firmware logs**
+  (same md5). That points at a device or firmware interaction rather than a
+  timing or memory race.
+- **Memory is not it.** 2 GB, 4 GB and 8 GB all halt at the identical frame.
+- **The display adapter is not it.** `std`, `cirrus` and `vmware` are identical.
+- **The device profile is not it.** Alpine on exactly the same hardware —
+  `ich9-ahci` + `ide-hd` + `e1000e` + std VGA under WHPX — boots, reports
+  `sda` and `e1000e ... eth0`, and writes 33.9 MB to the disk. So AHCI, the
+  NIC and the accelerator are all fine with a non-Windows guest.
+- **Serial says nothing, and that instrument is known-good**: Alpine wrote 185
+  bytes to it in the same harness, every Windows run wrote zero. Windows does
+  not use serial without boot debugging enabled, so this is expected rather
+  than informative.
+
+The firmware log ends in the same place every time:
+
+```
+Booting from DVD/CD...
+Booting from 0000:7c00
+VBE current mode=3
+VBE mode set: 4118        <- 1024x768, which is the logo we see
+set VGA mode 118
+… ~140 lines of "VBE mode info request" …
+```
+
+— then silence. So the guest gets as far as the Windows boot manager
+enumerating video modes and stops at or just after the handoff into the kernel.
+
+**A cross-platform repeat then removed the most attractive remaining
+explanation.** The same boot was run on Ubuntu 24.04 with QEMU 8.2.2 under TCG
+— a different operating system, a different QEMU, a different SeaBIOS — and it
+halted identically: disk untouched, one distinct frame in eighteen minutes, no
+QMP events, the firmware log ending on a VBE mode set exactly as it does here.
+
+That test was chosen because a positive result would have been *useful*:
+"Windows guests need KVM or HVF" is a clean, documentable platform limitation.
+It came back negative. The fault is not WHPX, not the host OS and not the QEMU
+version, which leaves the media or something general about how these VMs are
+constructed.
+
+(The Linux run used a 467 MB boot-only repack of the Windows 10 ISO, since that
+host has 3.5 GB free and an 11 Mbit/s link. The repack was validated here first
+and reproduces the original's halt with a byte-identical firmware log, so it is
+a stand-in rather than an extra variable.)
+
+**Two further cheap tests, both negative.** `-vga none` — no display device at
+all, and therefore no VBE calls whatsoever — halts identically, which falsifies
+the graphics reading of the trace. The firmware log falling silent after a mode
+set is simply what a normal handoff looks like; it marked the handoff, not the
+fault. And the boot binaries on both ISOs (`bootmgr.efi`, `bootx64.efi`,
+`cdboot.efi`, `setup.exe`) carry **valid Microsoft Authenticode signatures**, so
+the boot chain is not patched. The Server ISO's filename and volume label match
+Microsoft's own Evaluation Center download; only the Windows 10 one is a
+third-party ESD conversion (`ESD_ISO`), and the two fail identically.
+
+That is where the investigation stands: **a deterministic halt in early Windows
+boot, with the accelerator, the host platform, the QEMU version, the devices,
+the display (including no display at all), the memory size, the Windows version
+and the integrity of the boot binaries all independently cleared.**
+
+**Decision.** Ship the device work — it is correct and independently
+verified — and **do not claim Windows installs**. `guest_os` selects hardware
+Windows has drivers for, the version and capability probes are honest about
+TPM and UEFI, and [docs/WINDOWS.md](WINDOWS.md) states plainly that the install
+does not currently complete.
+
+A Windows-specific TCG default was added mid-investigation on the strength of
+"WHPX stalls, TCG progresses" and **withdrawn** when longer runs showed TCG
+stalling too. It would have cost a ~30x slowdown for no working install.
+Retracting it is the point: the measurement that justified it did not survive
+more measurement.
+
+**Consequences.** Windows guests can be created and boot far enough to prove
+the device selection works, and cannot yet be installed. Legacy BIOS remains
+the engine's boot path; UEFI is not wired in, and would need a writable pflash
+varstore that WHPX cannot provide (decision 28).
+
+The cheap instruments are now exhausted — pvpanic is silent because nothing
+panics, and serial is silent because Windows does not write there. Getting
+further needs evidence from *inside* the guest, which means modifying the boot
+media: enabling `bcdedit /bootdebug` and a debug transport in `boot.wim`, or
+booting a WinPE built with a serial debugger attached. That is a materially
+bigger undertaking than another command-line sweep, and sweeping further
+without it would just re-measure the same halt.
+
+## 31. The toolchain is verified as one install, not trusted to PATH order
+
+**Context.** For the entire project up to this point, `qemu-img` on this host
+was **not** the one belonging to the installed QEMU. Multipass ships its own
+`qemu-img` and puts `C:\Program Files\Multipass\bin` on the system PATH, ahead
+of `C:\Program Files\qemu`. Every image probe, every overlay, every snapshot
+ran through Multipass's leftover **8.0.0-dirty** binary while
+`qemu-system-x86_64` resolved from the real install. Multipass itself was
+retired in Phase 7 (decision 3); the binary outlived it.
+
+Nothing detected this, and the reason is worth stating: each tool answers
+`--version` about *itself*, and both answers looked fine. The version check
+asked `qemu-system-x86_64` what it was and believed it, which is true and
+irrelevant — it says nothing about the other half of the toolchain.
+
+**What it actually broke: nothing measurable.** Checked after the fact rather
+than assumed. The parsers were re-run against 11.1.0 output: `qemu-img snapshot
+-l` still has the same columns including `ICOUNT`, `_SNAPSHOT_ROW` parses both
+a plain tag and one containing a space, and `qemu-img info --output=json` still
+carries `format`, `virtual-size` and `actual-size` at the top level. No
+instance overlays survived on the host, so there are no artefacts written by
+the old binary to re-validate. The bug was latent, not active.
+
+**Decision.** Compare the two binaries rather than trusting PATH, as a
+capability (`toolchain`) alongside TPM, UEFI and devices — so it flows into
+`doctor`, `/health` and Settings through machinery that already exists. Both
+the resolved directory *and* the reported version are compared. Same directory
+with different versions is a half-finished upgrade; same version from different
+directories is benign but still reported, because it means PATH is deciding
+something nobody chose.
+
+**Why a warning and not a gate.** Same rule as every other check here
+(decision 29): advisory, never refusing a launch. A skew between the two is a
+real corruption risk — they write and read the same qcow2 files — but a wrong
+gate costs a user their VM, and "these came from different directories" has
+benign causes.
+
+**Consequences.** The failure this guards against is quiet by construction: a
+mismatch surfaces later as a corrupt overlay or unparsable snapshot output, a
+long way from the version skew that caused it. That is exactly the class of bug
+worth a startup check. The `_SUPPORT_CACHE` key gained `qemu_img_binary`,
+without which a caller pointing the image tool somewhere new would get an
+answer computed for the previous one.
+
+## 32. QEMU 11.1.0: the WHPX pflash bug is fixed; the Windows halt is not
+
+**Context.** The host moved from `v10.1.0-rc4-12093-gbd0a254583` (reporting
+10.0.94) to `v11.1.0-12130-ge470268ff4` (reporting 11.1.0). Still a development
+snapshot, not a tagged release. All capability probes were re-run and the
+Windows halt re-tested against it.
+
+**Before and after.**
+
+| Probe | 10.0.94 | 11.1.0 |
+|---|---|---|
+| TPM (`-tpmdev`) | invalid option | invalid option — **unchanged** |
+| Windows devices | `ich9-ahci`, `e1000e` present | present — **unchanged** |
+| OVMF via `-drive if=pflash` under WHPX | dies instantly, `WHPX: Failed to emulate MMIO access with EmulatorReturnStatus: 2` | **boots** |
+| `q35` alias | `pc-q35-10.1` | `pc-q35-11.1` |
+| Guest hypervisor CPUID leaf | `0x40000000` signature empty | signature `Microsoft Hv` |
+| SeaBIOS `phys-bits` | 46, `valid=yes` | 40, `valid=no` |
+| Windows Setup | halts | **still halts** |
+
+**The UEFI finding is real and was measured, not read.** OVMF through a
+`pflash` pair under WHPX now survives: firmware initialises the adapter to
+1280x800, reaches its console, and hands off to a real bootloader — verified by
+booting the Alpine ISO that way to a Linux kernel console (green/cyan console
+colours in the screendump), not merely by the VM failing to die. This closes a
+bug open upstream since 2019 and contradicts decision 28's claim that WHPX can
+never provide a writable pflash varstore. That claim is now version-bounded
+rather than permanent.
+
+So `_uefi_capability` gained a threshold, `_UEFI_WHPX_FIXED = (11, 1, 0)`,
+rather than continuing to hardcode "WHPX means no UEFI". A threshold and not a
+probe because the only honest probe is booting a VM, and `/health` is polled by
+the dashboard. Two measured points bracket it and the constant names the build
+actually tested; builds in between are guessed, and the message says so.
+
+**TPM is unchanged and always will be.** It is a `meson.build` gate on
+`host_os != 'windows'`, not a version bug. Decision 28 stands on that point.
+
+**The version range moves to 8.0.0 – 11.1.0.** Recording a snapshot's number in
+`qemu_version_max_tested` is deliberate: `status` reports `prerelease` from the
+*build string*, not from this number, so the range stays a statement about
+released versions while the snapshot is still flagged as something nobody else
+can install.
+
+**The halt did not survive both new variables — see decision 33.** The upgrade
+alone does not fix it, but it moves every run measurably further, and combined
+with fresh install media Windows Setup starts.
+
+## 33. Windows Setup does start — the blocker was the media, not the platform
+
+**Context.** Decision 30 recorded a deterministic halt with the accelerator,
+host platform, QEMU version, devices, display, memory and Windows version all
+independently cleared, and concluded that the remaining candidates were the
+media or something general about Windows on QEMU. Two cheap variables then
+changed at once: QEMU 11.1.0, and fresh Windows 10 media from Microsoft's Media
+Creation Tool. **It was the media.**
+
+**The measurement.** One command line, held constant — `q35`,
+`whpx,kernel-irqchip=off`, `-cpu Westmere`, 4 GB, 2 vCPU, `ich9-ahci` + `ide-hd`
++ `ide-cd`, `e1000e`, `-vga std` — varying only the ISO and the QEMU build.
+`debugcon` size is a good progress proxy here because the firmware is called
+back for every mode query the boot manager makes.
+
+| Media | QEMU | debugcon | Last firmware event | Screen | Verdict |
+|---|---|---|---|---|---|
+| Server 2022 | 10.0.94 | 6,182 B | `VBE mode set: 4118` | logo | halt |
+| Server 2022 | 11.1.0 | 6,193 B | `VBE mode set: 4118` | logo **+ spinner** | halt, later |
+| Win10 (2965) | 10.0.94 | 6,250 B | `VBE mode set: 4118` | logo | halt |
+| Win10 (2965) | 11.1.0 | 8,745 B | full mode enumeration, no mode set | black | halt, later |
+| **Win10 (3636)** | **11.1.0** | **8,803 B** | **`VBE mode set: 4144`** | **Setup, language screen** | **boots** |
+
+The two Windows 10 rows are the isolating pair: identical QEMU, identical
+command line, differing only in the ISO. The old media enumerates every VBE
+mode and then stops without setting one; the new media sets `4144` — 1024x768
+at 32bpp, WinPE's GUI mode — and Windows Setup appears at +60 s.
+
+The media differ in exactly the place that matters: `bootmgr.efi`
+10.0.19041.**2965** vs **3636**, and a different `boot.wim` (446 MB vs 450 MB).
+`setup.exe` is byte-identical between them, which is the tell — the fault was in
+the boot chain, ahead of Setup, exactly where the firmware trace said it was.
+
+**QEMU 11.1.0 is a real contributor but not the fix.** Every run on it goes
+further than the same run on 10.0.94, and the guest-visible reason is in the
+firmware trace: the new build reports the hypervisor CPUID leaf `0x40000000`
+signature as `Microsoft Hv` where the old build left it empty, and SeaBIOS
+`phys-bits` drops from 46/`valid=yes` to 40/`valid=no`. Windows takes materially
+different early-boot paths when it believes it is on Hyper-V. Neither change on
+its own starts Setup.
+
+**What this retracts.** Decision 30's "It is not the ISOs" line was wrong, and
+the reason it was wrong is instructive: the check behind it was *structural* —
+`boot.wim` present, `install.wim` present, `setup.exe` present, tail bytes
+readable — and every one of those was true of media whose boot manager could not
+get through. Structural completeness is not functional integrity. The
+Authenticode check had the same blind spot: all four boot binaries on the old
+ISO are validly Microsoft-signed. A correctly signed, structurally complete,
+officially built ISO still failed to boot.
+
+The docs also inferred from the `ESD_ISO` volume label that the Windows 10 media
+was a third-party repack. That inference is separately wrong — the new media
+from Microsoft's own Media Creation Tool carries the same `ESD_ISO` label, so
+the label describes how the ISO was assembled, not by whom.
+
+**Consequences.** Boot debugging — `bcdedit /bootdebug` plus a debug transport
+in `boot.wim`, the planned next step and a materially larger undertaking — is
+**not needed** and was not started. Windows Server 2022 still halts on its
+existing media; by the same logic that resolved Windows 10, fresh Server media
+is the cheap next test, not another command-line sweep. Nothing in the engine
+changed to produce this result: the device profile from decision 27 was correct
+all along and is now confirmed against a Setup that actually runs.
+
+## 34. The media checks passed because they were aimed at a boot path the engine never uses
+
+**Context.** Decision 33 established that the blocker was the install media. This
+entry is about why every check available at the time said the media was fine.
+That is a reasoning failure rather than a wrong fact, and it is the more useful
+half to keep.
+
+**What was checked.** `verify_media.py` asserted a Microsoft volume label, ran
+Authenticode over `/bootmgr.efi`, `/efi/boot/bootx64.efi`,
+`/efi/microsoft/boot/cdboot.efi` and `/setup.exe`, confirmed `boot.wim`,
+`install.wim` and `setup.exe` were present and readable, and reported a SHA256
+with nothing published to compare it against. Everything passed.
+
+**What actually runs.** The engine boots legacy BIOS under SeaBIOS — decision 30
+fixed that as the engine's path and it has not moved. The legacy chain is
+El Torito `boot/etfsboot.com` → `bootmgr` → `sources/boot.wim` → WinPE →
+`sources/setup.exe`. Three of the four signature-checked files — `bootmgr.efi`,
+`bootx64.efi`, `cdboot.efi` — are UEFI-only and are never executed on that path.
+The fourth, the root `/setup.exe` stub, runs only once WinPE is already up, which
+is well past where the failure happened.
+
+**The measurement, taken now against both Windows 10 ISOs.** Legacy-path
+components first, UEFI components below the rule:
+
+| Component | old ISO (halts) | new ISO (boots) | |
+|---|---|---|---|
+| `boot/etfsboot.com` | `F425E135…`, 4,096 B | `F425E135…`, 4,096 B | identical |
+| `bootmgr` | `4EEAC11B…`, 413,738 B | `4EEAC11B…`, 413,738 B | identical |
+| `sources/boot.wim` | `C3EDD4A5…`, 446,626,405 B | `F54F1398…`, 450,382,622 B | **differs** |
+| `/setup.exe` (root stub) | `30043368…`, 74,184 B | `30043368…`, 74,184 B | identical |
+| `bootmgr.efi` | 10.0.19041.2965 | 10.0.19041.3636 | differs, not executed |
+| `efi/boot/bootx64.efi` | 10.0.19041.2965 | 10.0.19041.3636 | differs, not executed |
+| `efi/microsoft/boot/efisys.bin` | `1525B5AB…` | `1525B5AB…` | identical |
+
+On the path that actually ran, **exactly one component differs: `boot.wim`.**
+Everything ahead of it is byte-identical. Decision 33 cited the `bootmgr.efi`
+2965→3636 gap as the tell; that is a fair proxy for the media's servicing
+vintage, but it is not the faulting component, because on a legacy boot that
+file is never opened.
+
+**The caveat named the wrong file.** At the time, `etfsboot.com` was flagged as
+the one component that could not be signature-checked, and was then ranked below
+other hypotheses. Ranking it down was the visible error, and it is the one that
+looks obvious in hindsight. The measurement says something less comfortable:
+`etfsboot.com` is byte-identical between media that halts and media that boots,
+so the flagged component was not the fault either. The caveat picked the right
+*category* — unsignable early-boot code sitting in the real path — and the wrong
+member of it. Naming a gap at all then made the remaining checks feel more
+thorough than they were.
+
+**The gap that mattered was never named.** `boot.wim` is 446 MB, sits in the
+executed path, contains the entire WinPE that failed to start, and was checked
+only for existence. It is the one file that differed. It was also perfectly
+checkable — a WIM carries an integrity table and its contents are signed PEs — so
+this was not a blind spot forced by the format, the way `etfsboot.com` genuinely
+is. It was simply not looked at.
+
+**The rule this leaves.** A verification suite reports on the files it opens, not
+on the media. Before a green result is allowed to move a ranking, check the
+overlap between what the suite validates and the code path under test. Here the
+overlap was empty: four files validated, none of them executed. "All checks
+passed" was true, repeatable, and carried no information whatsoever about the
+failure. Where the checked set and the executing set do not intersect, a pass is
+not weak evidence — it is no evidence, and it should have moved the ranking by
+nothing rather than by a little.
+
+**Follow-up, not yet done.** `verify_media.py` should verify along the boot path
+instead of along the list of conveniently signable files: hash `etfsboot.com` and
+`bootmgr` and compare them across media rather than trying to sign them, and
+validate `boot.wim`'s integrity table and record its size and hash. The tool as
+it stands would clear the same bad ISO again.
+
+## 35. UEFI NVRAM persists through a pflash varstore, closing decision 28's open risk
+
+**Context.** Decision 28 ruled UEFI out partly because WHPX could not carry a
+writable `pflash` varstore, leaving `-bios` as the only route — read-only
+firmware with no persistent variable store at all. Decision 32 measured that
+`pflash` itself survives under QEMU 11.1.0. That left the question one step
+short: surviving is not the same as retaining. Whether a varstore holds a
+variable across a power cycle was still untested, and it is the property that
+actually matters. It has now been measured.
+
+**Method — no guest OS involved.** OVMF puts its console on the serial port as
+well as on the VGA adapter, so `-serial tcp:` makes the firmware's own UEFI Shell
+(v2.2, EDK II, UEFI v2.70) fully scriptable. That removes the guest, its
+bootloader and its drivers from the experiment, so nothing but the firmware and
+the varstore is under test. Three boots against a per-VM copy of `OVMF_VARS.fd`
+(540,672 B), with `OVMF_CODE.fd` (3,653,632 B) attached read-only:
+
+```
+qemu-system-x86_64 \
+  -machine q35,accel=whpx,kernel-irqchip=off -cpu Westmere -m 2048 \
+  -drive if=pflash,format=raw,unit=0,readonly=on,file=OVMF_CODE.fd \
+  -drive if=pflash,format=raw,unit=1,file=<per-VM copy of OVMF_VARS.fd> \
+  -vga std -display none \
+  -serial tcp:127.0.0.1:45551,server,nowait \
+  -qmp tcp:127.0.0.1:45552,server,nowait -net none
+```
+
+| Boot | Varstore | Action | Result |
+|---|---|---|---|
+| 1 | fresh copy of template | write `P13Nv` with `-nv`, `P13Vol` without; read both back; `reset -s` | both readable in-session; QEMU exits 0; file sha256 `50c03914…` → `61707c2f…` |
+| 2 | **the same file** | read both | `P13Nv` → `41 50 41 53 53 31 33`; `P13Vol` → `setvar: Unable to get` |
+| 3 | fresh copy of template | read `P13Nv` | `setvar: Unable to get` |
+
+**Why there are two controls.** Boot 2's volatile variable is the discriminator:
+had `P13Vol` come back too, the result would only have shown that the shell can
+re-read a live variable store, not that anything reached disk. Boot 3 is the
+other half — it proves the surviving value is carried by the varstore *file*, and
+not by the firmware image, by QEMU, or by something cached on the host.
+Non-volatile survives, volatile does not, and a fresh file has neither. That
+combination is the signature of working NVRAM and of nothing else.
+
+**A note on the syntax, because it cost a run.** The UEFI Shell's `setvar` reads
+the first character inside the quotes as a type prefix — `P` device path, `L`
+unicode, `H` hex. `="PASS13"` therefore stores a device path built from "ASS13",
+not the string. The first attempt asserted on ASCII bytes that were never
+written, and printed "NVRAM DOES NOT PERSIST" directly underneath a transcript
+showing the variable surviving. The verdict line was wrong and the data was
+right — the same failure mode as decision 34 at a much smaller scale: the
+assertion and the thing being tested had drifted apart.
+
+**What this changes.** Decision 28's NVRAM objection is now bounded the way
+decision 32 bounded the pflash bug: on QEMU ≥ 11.1.0 under WHPX, UEFI has a
+working, persistent, per-VM variable store. The reasons Windows 11 stays
+unsupported are TPM — a `meson.build` gate on `host_os != 'windows'`, which no
+version will move on this host — and Secure Boot key enrolment. NVRAM is no
+longer one of them.
+
+**What this does not change yet.** The engine has no pflash support: `qemu.py`
+emits no `-drive if=pflash` arguments, and `_uefi_capability` reports an
+availability that nothing consumes. Wiring it in means copying `OVMF_VARS.fd`
+per instance at launch and recording it in the runtime file so a restart
+re-attaches the same one — the rule disks and volumes already follow, and it is
+load-bearing here, since a shared template would let one instance's boot entries
+show up in another. Legacy BIOS remains the default boot path: Windows Setup
+boots on it, and nothing measured so far argues for moving.
+
+
+## 36. The Windows "halt" tracks host free memory, not Windows, QEMU or the accelerator
+
+> **SUPERSEDED BY DECISION 39.** The main claim below is wrong. The blocker is
+> `-vnc`, which the engine attaches to every launch; host memory is a real but
+> secondary effect confined to guests larger than the free RAM. The reasoning
+> that produced this entry — and the confounded control that retired the correct
+> hypothesis — is dissected in decision 39. Kept unedited below, because how it
+> was got wrong is worth more than a silent fix.
+
+**Context.** Decision 30 called it a deterministic halt. Decision 33 blamed the
+media and was partly right — fresh media does reach Setup. But Setup still never
+finished, Server 2025 on January-2026 media never got past the boot logo, and the
+leading hypothesis had become Hyper-V enlightenments, since QEMU 11.1.0 newly
+exposes the `0x40000000` CPUID leaf and that is exactly when the symptom changed
+from "dies in firmware" to "spins in kernel". That hypothesis was tested. It is
+wrong, and testing it turned up the actual variable by accident.
+
+**The enlightenments result, first, because it is cleanly negative.** One command
+line, Windows 10 media, varying only `-cpu`:
+
+| `-cpu` | Time to the Setup language screen |
+|---|---|
+| `Westmere` | 21 s |
+| `Westmere,-hypervisor` (leaf hidden) | 21 s |
+| `Westmere,hv-relaxed,hv-vapic,hv-spinlocks,hv-time,hv-synic,hv-stimer,…` | no Setup in 315 s |
+
+Hiding the hypervisor leaf changes nothing; supplying the enlightenments makes it
+strictly worse. The leaf is not the cause.
+
+**The number that mattered was 21 s.** The same media through the engine had taken
+**~13 minutes** to reach that screen. A 37× gap between two nearly identical
+command lines is a bigger fact than the thing being tested, and chasing it is
+what found the cause. The first suspect was `-vnc`, which the engine always passes
+and the hand-rolled line omitted — and adding `-vnc` did reproduce the slowness.
+That looked conclusive. It was not: **the control failed.** Re-running the
+*unmodified* baseline immediately afterwards also failed to reach Setup in 300 s.
+The variable was not `-vnc`; something was drifting between runs.
+
+**What was drifting is host free RAM.** This host has 15.5 GB total, and at the
+time of the failing runs 3.2 GB free against 26.4 GB committed. A 4 GB guest does
+not fit in that, and QEMU under WHPX does not fail when its guest RAM is being
+paged by the host — it thrashes, indefinitely and silently.
+
+| Guest RAM | Result | Free host RAM at start |
+|---|---|---|
+| 2 GB | Setup at 21 s | ~3.2 GB |
+| 2 GB (repeat) | Setup at 21 s | ~3.2 GB |
+| 3 GB | no Setup in 300 s | ~3.2 GB |
+| 4 GB | no Setup in 300 s | ~3.2 GB |
+| 4 GB (earlier, more free RAM) | Setup at 21 s | higher |
+
+The last row is the important one and the reason this is stated as "tracks free
+memory" rather than "4 GB is too big": the same 4 GB configuration succeeded
+earlier in the session and failed later. The controlling variable is what is
+*available*, not what is requested.
+
+**Every symptom fits, and fits better than any previous explanation.** Both vCPUs
+pegged at ~200% with zero guest disk writes for 36 minutes is what a guest looks
+like when its pages are being served from a swap file. So is a framebuffer that
+changes once every several minutes. So is Setup reaching "Getting files ready for
+installation (1%)" and stopping there — that step expands `install.wim`, the most
+memory-hungry part of the install. And so is the loose end in decision 30's own
+test comment, that TCG stalled too, "further along, still writing nothing to
+disk": host memory pressure is accelerator-independent, where a WHPX
+enlightenment bug would not be.
+
+**What this retracts.** "Windows Setup does not complete on this host" stands as
+an observation and falls as a diagnosis. It was never a Windows defect, a QEMU
+defect, a WHPX defect, or — for the halt itself — a media defect. The media
+finding in decision 33 is separately real (old media genuinely does not reach
+Setup) but it was never the whole story, and the phase spent a long time
+searching the guest for a fault that was in the host's memory budget.
+
+**What is NOT yet proven.** That a 2 GB Windows guest *installs to completion*.
+Only "reaches Setup quickly" is measured. The install phase is longer and
+hungrier, and 2 GB is Microsoft's floor rather than a comfortable figure, so it
+may simply move the wall. Establishing that needs one uninterrupted install run
+and has not been done.
+
+**Consequences for the product.** The `windows` preset is 2 vCPU / 4 GB / 40 GB
+and the Windows floor is 2 GB. Capacity checking (decision 9) allocates against
+*configured* totals, which is why nothing refused this launch: by its books the
+memory was available. A host-level check of genuinely free RAM at launch time is
+the obvious follow-on, and refusing — or at least warning — beats handing someone
+a VM that thrashes forever while reporting Running. That is a scoped item, not
+done here.
+
+## 37. Liveness has three states, because a busy monitor is not a stopped VM
+
+**Context.** `_is_running` was `pid_alive(pid) and is_responsive(qmp_port)`. QEMU's
+QMP chardev serves **one client at a time**, so while anything else holds that
+socket the handshake cannot complete and the check returned False. The reconciler
+then rewrote the row to Stopped and cleared the pid — for a VM that was alive and
+healthy throughout.
+
+**Measured.** A 40-minute Running/Stopped flap at roughly one flip per reconcile
+cycle, on an instance whose process never died. It stopped within one cycle of the
+competing client disconnecting. The competing client was this project's own
+screendump tooling; it would equally be a future console feature, a second backend
+process, or anyone with `nc`.
+
+**Why the check was not simply loosened to the pid.** The QMP half was guarding a
+real case: a *recycled* pid, where the stored number now belongs to an unrelated
+process and `pid_alive` means nothing. Dropping it would trade a flap for a VM
+that reports Running forever after it has gone.
+
+**Both are served, because the two cases are distinguishable one level down.**
+QEMU holds its QMP port for as long as it lives. A busy monitor still has
+something bound to that port; a dead QEMU has released it. So the tie-break is
+whether the port can be bound:
+
+| pid alive | QMP answers | port bindable | verdict |
+|---|---|---|---|
+| no | — | — | `stopped` |
+| yes | yes | — | `running` |
+| yes | no | no | `unreachable` — something else holds the monitor |
+| yes | no | yes | `stopped` — QEMU is gone, the pid is someone else's |
+
+`_liveness` returns those three states; `_is_running` keeps its boolean contract
+and counts `unreachable` as up, which is the conservative answer in both places it
+matters. The reconciler will not demote a live VM, and `_refuse_if_running` will
+not let a clone or snapshot read a disk a live QEMU may be writing merely because
+its monitor was busy. The unreachable case logs a warning naming the one-client
+limitation, so the next person sees a cause instead of a flap.
+
+## 38. UEFI stays detected-but-unwired, and says so
+
+**Context.** Decision 35 established that OVMF through a `pflash` pair works under
+WHPX on 11.1.0 and that its NVRAM genuinely persists. The capability probe then
+reported `available: true`, which was true of the *host* and false of the
+*product*: the engine emits no `-drive if=pflash` arguments at all, so no instance
+can boot UEFI. Nothing consumed the flag, so nothing broke — it simply told
+readers a feature existed.
+
+**The probe now answers "can an instance boot UEFI here", which is no.** Both
+firmware-present branches return `available=False` with a detail that says
+"detected, not wired into launches", while still carrying the pflash-under-WHPX
+finding so decision 35 is not lost. Deliberately with **no `consequence`**: that
+field feeds `/health` warnings, which are about defects in *this build* and are
+meant to be acted on. An unbuilt feature is a roadmap item, and putting it in the
+warning list would blur two different things. Below the 11.1.0 threshold the entry
+keeps its consequence, because there the build really cannot do it.
+
+**The wiring, scoped and not started.** It is not the pflash arguments, which are
+two lines. It is:
+
+- `InstanceRuntime` gains `firmware` and `nvram_path`; `LaunchOptions` gains
+  `firmware`; `_allocate_runtime` copies `OVMF_VARS.fd` per instance
+- `build_launch_command` emits the pair
+- `boot_cloned_instance` needs its own varstore copy — a clone must not share one
+- DB column and migration, `InstanceCreate` field, API refusal when the capability
+  is unavailable, CLI flag, launch-modal control, instance-detail display
+- **An open design question that should not be answered in passing:** snapshots
+  capture `disk.qcow2` only. A UEFI instance's NVRAM is not in the snapshot, so
+  restoring one leaves boot entries describing a disk state that no longer exists.
+  Options are snapshotting the varstore alongside, refusing snapshots for UEFI
+  instances, or accepting the desync and documenting it. That is a decision, and
+  it is not taken here.
+
+Legacy BIOS remains the default and the only boot path. Windows Setup boots on it,
+and nothing measured argues for moving.
+
+
+## 39. It is `-vnc`, not memory: the console the engine always attaches is what breaks Windows
+
+**This corrects decision 36, which is wrong on its main claim.** Host memory is a
+real but secondary effect. The blocker is `-vnc`, which the engine passes on every
+single launch.
+
+**How decision 36 went wrong is the useful part.** The `-vnc` hypothesis was
+raised, tested, and appeared confirmed — adding `-vnc` reproduced the failure
+exactly. It was then discarded because the control failed: re-running the
+"unmodified baseline" *also* failed, which looked like run-to-run drift and sent
+the investigation to host memory. **The control was confounded.** It ran at the
+script's default `-m 4096`, while the runs it was being compared against had been
+2 GB. So it varied two things at once and its failure proved nothing. A control
+that does not hold every other variable is not a control, and here it did more
+damage than having no control at all — it retired a correct hypothesis.
+
+**The completed 2×2, one command line, Windows 10 media, time to Setup:**
+
+| Guest RAM | `-vnc` | Result |
+|---|---|---|
+| 2 GB | no | **21 s** (reproduced 3×) |
+| 2 GB | yes | nothing in **900 s** |
+| 4 GB | no | 21 s early, nothing later (memory-dependent) |
+| 4 GB | yes | nothing in 300 s |
+
+The decisive pair is the first two rows, run back to back at identical free RAM,
+differing only in `-vnc`: 21 seconds against nothing in fifteen minutes.
+
+**It is not memory pressure, and that is measured rather than argued.** During the
+900-second `-vnc` run the QEMU process held a working set of **2112 MB** — the
+whole 2 GB guest, fully resident — while both vCPUs sat pegged at ~197%. Nothing
+was being paged. Decision 36 read "pegged CPU, no disk writes" as thrashing; it is
+the same signature, and the resident working set is what tells the two apart.
+
+**What memory does explain.** At 4 GB *without* `-vnc`, results genuinely varied
+with host free RAM (~3.2 GB free against a 4 GB guest). So the decision-36 effect
+is real, just secondary and confined to guests larger than what is actually free.
+At 2 GB it never appears.
+
+**What this explains that nothing else did.** Every Windows failure in this phase
+came through the engine, and the engine always emits `-vnc`. Server 2025 stopping
+at the boot logo, Windows 10 taking thirteen minutes to reach Setup and then
+wedging at "Getting files ready for installation (1%)", both vCPUs pegged with no
+guest disk I/O — all of it is one cause. The hand-rolled command lines that looked
+"the same" were never the same: they had no `-vnc`, which is exactly why decision
+33's hand-rolled run reached Setup when the engine's could not.
+
+**The tension this creates, which is not resolved here.** Windows guests have no
+SSH and no cloud-init; the console *is* the access path, and the console is VNC.
+So the device profile is correct, the media is fine, the accelerator is fine — and
+the one feature Windows depends on is the one that makes it unusable. That is a
+design problem, not a bug to patch in passing. Options not yet assessed: attaching
+the VNC display only while a client is connected, a different display path for the
+install phase, or accepting a slow install and measuring whether an *installed,
+idle* Windows tolerates `-vnc` better than Setup's continuous redraw does.
+
+**Mechanism, hypothesised and not confirmed.** With `-display none` alone QEMU
+registers no display listener and the VGA surface is only read when something asks
+for it. `-vnc` registers one with a refresh timer, so the std VGA surface is pulled
+periodically. Under WHPX — the accelerator this project already documents as
+lacking dirty-memory tracking (see the snapshot notes on decision 15's
+implementation) — that read appears to be ruinously expensive. Stated as a
+hypothesis because it has not been isolated; the *effect* is measured and
+reproducible, the explanation is not.
+
+**Amendment, same session: dropping `-vnc` is not a usable fix on its own.**
+Removing it makes the guest fast, and simultaneously makes it undriveable: with
+`-display none` and no VNC, QMP `send-key` does not reach the guest at all.
+Measured, not inferred — an entire Setup key sequence was sent blind and
+`disk.qcow2` never grew past its initial 393,216 bytes, while the same sequence
+with a display present advanced Setup screen by screen. The guest was healthy
+throughout (1% CPU, idle, waiting for input), so this is lost input rather than a
+hung VM.
+
+**The fix for that is a USB HID keyboard**, and it is cheap: `qemu-xhci` plus
+`usb-kbd` (and `usb-tablet` for pointer). With those attached and still no
+`-vnc`, keystrokes land immediately and Setup drives normally through all seven
+screens to disk selection. The engine currently emits neither — Windows guests
+get only the implicit PS/2 devices — so this is a concrete engine change, not a
+workaround.
+
+**And memory is further demoted.** With the install running and free memory down
+to 1.35 GB available of 15.5 GB, `\Memory\Pages/sec` measured **zero** hard
+faults. Nothing was paging. The install's crawl through "Getting files ready for
+installation" is one core at ~98% with no disk writes — CPU-bound, not
+memory-bound. Decision 36's mechanism is wrong in the install phase too, not only
+at boot.
+
+**Status: the install is still not completed.** It progresses — 1% to 2% over
+roughly ten minutes — which does not finish in any reasonable session. Whether
+that rate is intrinsic to this host or another instance of the same
+display/accelerator interaction is **not established**, and is the open question
+this phase now turns on.
+
+**Standing correction to method.** Two hypotheses in this phase were retired by
+evidence that did not actually bear on them: "it is not the ISOs" (decision 34,
+checks aimed at an unexecuted boot path) and now "it is not `-vnc`" (a control
+that changed memory as well). Both times the error was the same shape — a test
+whose result could not have distinguished the hypotheses it was used to separate.
+Before a negative result is allowed to kill a hypothesis, the question is not
+"did it fail" but "would it have come out differently if the hypothesis were
+true".
+
+
+## 40. Windows guests on this host are bimodal, so a result needs three alternating runs
+
+**Context.** Decisions 36 and 39 were each argued from runs that could not have
+distinguished the hypotheses they were used to settle. The reason both slipped
+through is a property of the host that is worth recording on its own, because it
+invalidates the obvious way of testing anything here.
+
+**The observation.** The same QEMU command line, unchanged, either reaches the
+Windows Setup language screen in about **21 seconds** or pegs both vCPUs and
+reaches nothing at all within the cap. Not slower — bimodal. Over roughly twenty
+runs in one session there was no intermediate outcome.
+
+**How badly that misleads.** One configuration failed three consecutive times,
+which is exactly the shape of a deterministic defect. Two single-variable
+variants of it — one dropping `hostfwd`, one moving QMP off the port the
+reconciler polls — then both passed on the first try. If either had been run
+alone it would have "proved" its variable was the cause. Neither is: the 3/3 was
+a streak. Three separate hypotheses in this phase (`-vnc`, host free RAM, then
+`hostfwd`/reconciler polling) were each confirmed and then unconfirmed this way.
+
+**Contributing factor, not the whole story.** The install ISO is 4.9 GB and the
+page cache is warmed by whatever ran before, so the first run after any cache
+disturbance — deleting and recreating the disk, a `pytest` sweep, killing a 2 GB
+VM — is much slower. That accounts for some of the variance and not all of it:
+runs bracketed by warm-cache successes still fail.
+
+**The rule.** No Windows-guest result on this host is admissible from fewer than
+three alternating runs. A-B-A minimum, with the repeated arm on the outside, so
+that a failure in the middle is bracketed by successes of the thing it is being
+compared against. That is how the `-vnc` finding in decision 39 was eventually
+established, and it is the only result in this phase that survives the standard.
+
+**Consequence for the phase.** Every timing claim about Windows here that rests
+on a single run — including the "1% per ten minutes" install-phase figure — is
+unproven, and is flagged as such rather than quietly kept. Settling the remaining
+questions wants either a quieter host or a harness that runs each arm several
+times and reports a distribution instead of a number.
+
 
 - **No license chosen.** Until one exists, the code is not usable by anyone else.
 - **No authentication.** Anything beyond a single trusted machine needs it first.

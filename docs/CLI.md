@@ -38,7 +38,7 @@ iaas doctor
 ```
 PASS API: Local IaaS Orchestrator at http://127.0.0.1:8000
 PASS iaas CLI: v0.1.0 on Python 3.13.7
-PASS QEMU: QEMU emulator version 10.0.94 (v10.1.0-rc4-12093-gbd0a254583)
+PASS QEMU: QEMU emulator version 11.1.0 (v11.1.0-12130-ge470268ff4)
 PASS Accelerator: whpx
 PASS Base image: C:\Users\you\.local-iaas\qemu\base-images\noble-server-cloudimg-amd64.img
 PASS Instance store: C:\Users\you\.local-iaas\qemu\instances - 35.8 GB free

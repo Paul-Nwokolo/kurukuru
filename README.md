@@ -81,7 +81,7 @@ see [DECISIONS #15](docs/DECISIONS.md) for the measurements behind that. See
 |---|---|---|
 | Python | 3.11+ | Tested on 3.13.7 (Windows) and 3.12.3 (Ubuntu 24.04) |
 | Node.js | 18+ | Tested on 24.15.0. Only needed for the dashboard |
-| QEMU | 8.0+ | Tested on 10.0.94 (Windows) and 8.2.2 (Ubuntu) |
+| QEMU | 8.0+ | Tested on 11.1.0 (Windows) and 8.2.2 (Ubuntu) |
 | Accelerator | WHPX on Windows · KVM on Linux · HVF on macOS | Optional but strongly wanted; without it VMs fall back to software emulation and boot roughly 30× slower |
 
 `qemu-system-x86_64` and `qemu-img` must be on `PATH`, or pointed at explicitly
@@ -336,8 +336,50 @@ but:
   can reach port 8000 can create, destroy and open a console into your VMs.
   **Do not expose this on a shared or untrusted network.** It is bound to
   localhost by default; keep it that way until authentication exists.
-- **Windows-validated only.** Other platforms are unexercised.
+- **Windows-validated only.** Other platforms are unexercised. (That is the
+  *host*. Windows **guests** are a separate matter — see below.)
+- **Linux guests only, in practice.** Windows guests get the right virtual
+  hardware and boot their installer, but no Windows install has ever completed.
+  Treat Windows support as in progress, not available.
+  See [Windows guests](#windows-guests).
 - **SQLite, single process.** Fine for one machine; not a multi-writer design.
+
+### Windows guests
+
+**In progress, and not usable yet — no Windows install has ever completed on
+this project.** A Windows instance launches, gets the right virtual hardware,
+boots its installer, and can be driven through Setup as far as choosing a disk.
+The install phase past that point has never finished.
+
+What is established, each verified against a running installer rather than
+inferred:
+
+- **The device profile is right.** Windows guests get an AHCI/SATA disk
+  (`ich9-ahci` + `ide-hd`), an Intel `e1000e` NIC and standard VGA. Setup's disk
+  page lists the drive with **no "Load driver" step** — the whole reason for
+  choosing AHCI over virtio.
+- **Setup boots and can be driven** through every screen to disk selection.
+- **Console input needs USB HID.** A QMP keystroke never reaches a PS/2 keyboard
+  with no display client attached; Windows guests now get `qemu-xhci` +
+  `usb-kbd` + `usb-tablet`.
+- **Windows 11 is out of reach on a Windows host, permanently.** It requires TPM
+  2.0, and QEMU excludes TPM emulation on Windows hosts at build time, so no
+  upgrade adds it. Server and Windows 10 are unaffected.
+
+The leading suspect for the remaining failure is the **VNC console** the engine
+attaches to every VM, which is measurably ruinous under this host's accelerator
+— identical command lines reach Setup in 21 s without it and never with it. That
+is not yet proven to explain the install-phase stall, and it puts the feature in
+direct conflict with its own access path, since Windows guests have no SSH.
+
+**A warning for anyone measuring here:** this host is bimodal — the same command
+line either succeeds in seconds or not at all — and three separate hypotheses in
+this phase were confirmed and then retracted because of it. Use
+`tools/ab_measure.py`, which alternates arms and refuses to draw a comparison
+from fewer than three runs each.
+
+Full status, evidence, eliminated hypotheses and the console options:
+[docs/WINDOWS.md](docs/WINDOWS.md).
 
 ### Known gaps, deliberately deferred
 
@@ -380,6 +422,9 @@ ergonomics.
   exit-code table and the scripting contract.
 - [Portability](docs/PORTABILITY.md) — where the code assumed Windows, what was
   fixed, and what a Linux host still has to confirm.
+- [Windows guests](docs/WINDOWS.md) — status: what is established, what is
+  eliminated with evidence, and why no result here is believable from a single
+  run.
 - [Decisions](docs/DECISIONS.md) — why things are the way they are.
 - [Contributing](CONTRIBUTING.md) — running the tests and the conventions in use.
 - [History](docs/history/) — the phase briefs this was built from.

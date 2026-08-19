@@ -58,6 +58,8 @@ import {
   terminateInstance,
   type CreateInstancePayload,
   type ImportImagePayload,
+  getForwardPresets,
+  type GuestOS,
 } from '../api/client'
 
 export const queryKeys = {
@@ -327,6 +329,20 @@ export function useForwards(instanceId: string | undefined) {
     queryKey: queryKeys.forwards(instanceId ?? ''),
     queryFn: () => getForwards(instanceId as string),
     enabled: Boolean(instanceId),
+  })
+}
+
+/**
+ * The forward presets for one guest family.
+ *
+ * A catalog, so it is cached indefinitely: it is a property of the backend
+ * build, not of anything that changes while the page is open.
+ */
+export function useForwardPresets(guestOs: GuestOS | undefined) {
+  return useQuery({
+    queryKey: ['forward-presets', guestOs ?? 'any'],
+    queryFn: () => getForwardPresets(guestOs),
+    staleTime: Infinity,
   })
 }
 

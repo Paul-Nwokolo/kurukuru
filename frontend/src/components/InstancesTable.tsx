@@ -145,6 +145,21 @@ export function InstancesTable({
                           {instance.name}
                         </Link>
                         <EngineBadge engine={instance.engine} />
+                        {/* Guest OS on the row, because almost every piece of
+                            advice elsewhere in the UI — how to reach it, how a
+                            volume is initialised — differs by it, and a user
+                            scanning the list should not have to open a detail
+                            page to know which set applies. Linux is the
+                            overwhelming default and stays unlabelled; a badge
+                            on every row would be noise. */}
+                        {instance.guest_os === 'windows' && (
+                          <Badge
+                            tone="quiet"
+                            title="Windows guest — console access only until you enable Remote Desktop inside it. Volumes are initialised in Disk Management, not with mkfs."
+                          >
+                            Windows
+                          </Badge>
+                        )}
                         {instance.boot_source === 'iso' && (
                           <Badge
                             tone="quiet"

@@ -230,6 +230,69 @@ def _check_cli() -> Check:
     )
 
 
+#: How a version verdict reads in `doctor`, and what to do about it. Every one
+#: is a WARN: an out-of-range build is a thing to know before filing a bug, not
+#: a reason to refuse to work. Only a build we cannot identify at all is worth
+#: more, and even that is a warning, because the launch path does not care.
+_VERSION_VERDICTS: dict[str, tuple[str, str]] = {
+    "too-old": (
+        "below the minimum this build targets",
+        "Upgrade QEMU. Older builds are missing devices and command-line "
+        "options used here, and the errors do not say so.",
+    ),
+    "untested": (
+        "newer than the highest tested version",
+        "Probably fine. Mention it first in any bug report, and bump "
+        "IAAS_QEMU_VERSION_MAX_TESTED once it has been through the suite.",
+    ),
+    "prerelease": (
+        "a development build, not a release",
+        "Fine for local work. Pin a released version for anything shared — "
+        "nobody else can install this exact build.",
+    ),
+    "unknown": (
+        "could not be identified",
+        "Everything below is unverified. Check IAAS_QEMU_SYSTEM_BINARY points "
+        "at a real qemu-system-x86_64.",
+    ),
+}
+
+
+def _support_checks(support: object) -> list[Check]:
+    """Version-range verdict and capability findings, as separate lines.
+
+    Separate on purpose. "QEMU 10.0.94" passing tells you the binary runs;
+    it tells you nothing about whether this build can give a guest a TPM, and
+    that is the question that decides whether Windows 11 will install. A single
+    green QEMU line covering both would be the most reassuring possible way to
+    be wrong.
+    """
+    if not isinstance(support, dict):
+        return []
+
+    checks: list[Check] = []
+    status = str(support.get("status") or "unknown")
+    if status != "ok":
+        summary, remedy = _VERSION_VERDICTS.get(
+            status, (status, "Check the configured version range.")
+        )
+        raw = support.get("raw") or support.get("version") or "unknown build"
+        checks.append(Check("QEMU version", WARN, f"{raw} — {summary}", remedy))
+
+    for capability in support.get("capabilities") or []:
+        if not isinstance(capability, dict) or capability.get("available"):
+            continue
+        checks.append(
+            Check(
+                str(capability.get("label") or capability.get("key") or "Capability"),
+                WARN,
+                str(capability.get("detail") or "unavailable"),
+                str(capability.get("consequence") or ""),
+            )
+        )
+    return checks
+
+
 def _backend_checks(client: ApiClient) -> list[Check]:
     """Everything only the backend's host can answer."""
     try:
@@ -250,6 +313,7 @@ def _backend_checks(client: ApiClient) -> list[Check]:
 
     if engine.get("available") and engine.get("version"):
         checks.append(Check("QEMU", PASS, str(engine["version"])))
+        checks.extend(_support_checks(engine.get("support")))
     else:
         checks.append(
             Check(

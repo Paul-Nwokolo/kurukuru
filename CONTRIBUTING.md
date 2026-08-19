@@ -190,6 +190,29 @@ document.getElementById('root').innerText.length > 0
 And read the browser console for errors, which is where the stale-module
 failure was actually visible the whole time.
 
+**4. Never match a process by a pattern your own command line contains.**
+`pkill -f qemu-system-x86_64` over SSH matches the *remote shell running that
+very command*, so it can kill the session — and if the pattern is broader, the
+things around it. The same trap catches `pgrep -f`, `ps | grep`, and any
+`kill $(...)` built from them; it has bitten this project twice, once taking
+out an SSH session mid-run.
+
+Match on the process name rather than the full command line, and kill by pid:
+
+```bash
+for p in $(ps -eo pid,comm | awk '$2 ~ /^qemu-system/ {print $1}'); do
+  kill -TERM "$p"
+done                                          # right
+
+pkill -f qemu-system-x86_64                   # WRONG: matches this shell too
+```
+
+`ps -eo pid,comm` compares against the executable name, which your `ssh`,
+`bash` and `awk` do not share. Note that `comm` is truncated to 15 characters
+on Linux — `pgrep` will even warn you about this — so anchor the pattern at the
+start and keep it short rather than spelling out a long binary name that will
+never match.
+
 The general shape: **prefer a check that can distinguish "working" from
 "not running at all".** Most false greens in this project were not wrong
 answers — they were no answer, formatted like a good one.

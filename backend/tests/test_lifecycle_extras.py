@@ -47,16 +47,64 @@ def test_an_instance_defaults_to_linux(client):
     assert _launch(client)["guest_os"] == "linux"
 
 
-def test_a_windows_guest_is_refused_with_what_is_missing(client):
-    """The field exists so the UI can be OS-aware and a later phase has a place
-    to land. Accepting the request would produce an unbootable VM."""
-    r = client.post("/instances", json={"name": "win-01", "guest_os": "windows"})
+def test_a_windows_guest_without_an_iso_is_refused_with_the_reason(client):
+    """Windows provisions as of Phase 13 — but only from an installer medium.
+
+    This replaces a test that asserted Windows was refused outright. The
+    refusal narrowed rather than disappeared, and the narrower case is the one
+    worth pinning: there is no Windows cloud image to overlay, so a Windows
+    launch with no ISO would build a blank disk and boot it to "no operating
+    system" some minutes later. The 422 says so at request time.
+    """
+    r = client.post(
+        "/instances",
+        json={"name": "win-01", "guest_os": "windows", "flavor": "windows"},
+    )
 
     assert r.status_code == 422
     detail = r.json()["detail"]
-    # Names the actual blockers, not "unsupported".
-    assert "virtio-blk" in detail and "virtio-net" in detail
-    assert "Cloudbase-Init" in detail
+    assert "ISO" in detail
+    # Says where one comes from, since we cannot supply it.
+    assert "Microsoft" in detail
+
+
+def test_a_windows_guest_boots_from_an_iso(client, iso_dir):  # noqa: F811
+    """The whole point of the phase: the request is accepted and the row says
+    Windows."""
+    (iso_dir / "server.iso").write_bytes(b"\0" * 64)
+    r = client.post(
+        "/instances",
+        json={
+            "name": "win-02",
+            "guest_os": "windows",
+            "flavor": "windows",
+            "iso": "server.iso",
+        },
+    )
+
+    assert r.status_code == 202, r.text
+    assert r.json()["guest_os"] == "windows"
+
+
+def test_a_windows_guest_is_refused_below_its_own_floor(client, iso_dir):  # noqa: F811
+    """A Windows floor, not the Linux one.
+
+    ``small`` is a perfectly good Linux size and nowhere near enough for a
+    Windows installer, which stops partway through rather than running slowly.
+    """
+    (iso_dir / "server.iso").write_bytes(b"\0" * 64)
+    r = client.post(
+        "/instances",
+        json={
+            "name": "win-03",
+            "guest_os": "windows",
+            "flavor": "small",
+            "iso": "server.iso",
+        },
+    )
+
+    assert r.status_code == 422
+    assert "Windows instance" in r.json()["detail"]
 
 
 def test_an_unknown_guest_os_is_rejected(client):

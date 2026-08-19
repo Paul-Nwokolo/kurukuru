@@ -36,8 +36,11 @@ from app.database import get_session
 from app.events import record_event
 from app.models import (
     DEFERRED_NETWORK_MODES,
+    FORWARD_PRESETS,
     EventKind,
+    ForwardPreset,
     ForwardProtocol,
+    GuestOS,
     Instance,
     InstanceStatus,
     Network,
@@ -278,6 +281,25 @@ def list_forwards(
         forwards.append(ssh)
     forwards.extend(PortForwardRead(**row.model_dump()) for row in rows)
     return forwards
+
+
+@router.get(
+    "/forwards/presets",
+    response_model=list[ForwardPreset],
+    summary="Named guest ports offered as one-click forwards",
+)
+def list_forward_presets(guest_os: GuestOS | None = None) -> list[ForwardPreset]:
+    """The preset catalog, optionally narrowed to one guest family.
+
+    A catalog rather than a create shortcut: the preset supplies the guest port
+    and the explanation, and the ordinary create endpoint still does the work,
+    including the host-port collision check. One code path creates a forward.
+    """
+    return [
+        preset
+        for preset in FORWARD_PRESETS
+        if guest_os is None or preset.guest_os in (None, guest_os)
+    ]
 
 
 @router.post(

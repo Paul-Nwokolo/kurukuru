@@ -71,6 +71,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("project_id", "VARCHAR"),  # Phase 11
         ("network_id", "VARCHAR"),
         ("guest_os", "VARCHAR(8) NOT NULL DEFAULT 'LINUX'"),  # Phase 13
+        ("qemu_version", "VARCHAR"),
     ],
     "images": [("project_id", "VARCHAR")],
     "keypairs": [("project_id", "VARCHAR")],

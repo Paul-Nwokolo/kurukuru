@@ -70,19 +70,29 @@ class GuestOS(str, Enum):
     and the whole access story differ by OS, and until now every one of them
     was written as though Linux were the only possibility.
 
-    **WINDOWS is modelled but cannot be provisioned yet**, and the create route
-    refuses it with a message naming what is missing. That is deliberate: the
-    value belongs in the contract so a later phase has somewhere to land and so
-    the gap is documented where a client will actually meet it — but a UI
-    option that accepts a request and produces an unbootable VM would be worse
-    than no option at all.
+    Both families provision as of Phase 13. What differs is the virtual
+    hardware, and it differs completely: Windows Setup carries inbox drivers
+    for a SATA disk and an Intel e1000e NIC and for neither virtio-blk nor
+    virtio-net, so a Windows guest gets an AHCI root disk, an e1000e NIC and
+    standard VGA, while Linux keeps the paravirtualised set. The mapping lives
+    in ``app.engines.qemu.GUEST_PROFILES``.
 
-    What Windows needs before it can be accepted, all of it absent today:
-    a SATA/IDE bus for the boot disk (Windows Setup has no inbox virtio-blk
-    driver, so it finds no disk), an e1000e NIC or the virtio-win ISO as a
-    second CD-ROM (no inbox virtio-net either), Cloudbase-Init or an
-    unattend.xml instead of the Linux-shaped cloud-config this builds, and an
-    RDP forward instead of the SSH one.
+    Two consequences worth stating where the enum is read rather than leaving
+    to be discovered:
+
+    * **Windows installs from an ISO the user supplies.** Microsoft's images
+      cannot be redistributed or fetched automatically, and there is no Windows
+      equivalent of the Ubuntu cloud image, so there is nothing to overlay.
+    * **Windows gets no NoCloud seed and no SSH.** ``cloud_init.build_config``
+      emits a shell, a sudoers line and apt packages; Windows consumes none of
+      them. Access is the console until the user enables RDP inside the guest,
+      at which point the port-forward preset covers 3389.
+
+    **Windows 11 is not supported**, and cannot be until the host side changes:
+    it requires TPM 2.0, and QEMU disables TPM emulation entirely on Windows
+    hosts (``meson.build``: "TPM emulation only available on POSIX systems"),
+    so no QEMU version can offer it here. Windows Server and Windows 10 have no
+    such requirement and are what this targets. See docs/DECISIONS.md.
     """
 
     LINUX = "linux"
@@ -90,7 +100,7 @@ class GuestOS(str, Enum):
 
 
 #: Guest families a launch may actually request today.
-PROVISIONABLE_GUEST_OS = (GuestOS.LINUX,)
+PROVISIONABLE_GUEST_OS = (GuestOS.LINUX, GuestOS.WINDOWS)
 
 
 class InstanceStatus(str, Enum):
@@ -639,6 +649,48 @@ class PortForward(SQLModel, table=True):
         return f"{self.protocol.value}:{HOST_IP}:{self.host_port}-:{self.guest_port}"
 
 
+class ForwardPreset(SQLModel):
+    """A named guest port worth offering as one click instead of two numbers.
+
+    Deliberately thin. A preset fills the form in; it does not create anything,
+    reserve anything, or imply the guest is listening. That last part matters
+    for RDP especially: Remote Desktop is **off** by default on every Windows
+    edition, so a forward created before the user enables it inside the guest
+    is a correct forward to a closed port. The description says so, and the UI
+    repeats it, because "the forward exists therefore it should work" is the
+    obvious wrong inference.
+    """
+
+    key: str
+    label: str
+    guest_port: int
+    protocol: ForwardProtocol = ForwardProtocol.TCP
+    #: What this reaches, and what the user must do inside the guest first.
+    description: str
+    #: Guest family this is offered for; None means any.
+    guest_os: GuestOS | None = None
+
+
+#: Offered presets. RDP is the whole list, and on purpose — it is the access
+#: path for a Windows guest once the console has got the OS installed, and the
+#: forwards feature already does everything else. Adding "the ports someone
+#: might want" is how a focused feature becomes a directory.
+FORWARD_PRESETS: tuple[ForwardPreset, ...] = (
+    ForwardPreset(
+        key="rdp",
+        label="Remote Desktop (RDP)",
+        guest_port=3389,
+        protocol=ForwardProtocol.TCP,
+        description=(
+            "Reaches Remote Desktop inside the guest. Turn it on in Windows "
+            "first — Settings > System > Remote Desktop — because it is off by "
+            "default and the forward alone does not enable it."
+        ),
+        guest_os=GuestOS.WINDOWS,
+    ),
+)
+
+
 class PortForwardCreate(SQLModel):
     """Body for POST /instances/{id}/forwards."""
 
@@ -1005,6 +1057,13 @@ class Instance(InstanceBase, table=True):
     #: the same on Windows. Defaults to Linux, which is what every instance
     #: created before this field existed is.
     guest_os: GuestOS = Field(default=GuestOS.LINUX, index=True)
+    #: The hypervisor build that last launched this instance, e.g. "10.0.94".
+    #: Recorded because a VM that worked last month and does not today, on a
+    #: host somebody upgraded in between, is otherwise undiagnosable — nothing
+    #: else on the row says which QEMU built it. Written at launch and refreshed
+    #: on each start, so it describes the process actually running rather than
+    #: the one that first created the disk. Null for rows that predate this.
+    qemu_version: str | None = Field(default=None)
     #: Network this instance is attached to. Null on rows that predate the
     #: model; the API reads that as the default user network, which is what
     #: they have always been on.
@@ -1185,6 +1244,9 @@ class InstanceRead(InstanceBase):
     project_id: str | None = None
     network_id: str | None = None
     guest_os: GuestOS = GuestOS.LINUX
+    #: Hypervisor build that last launched this instance. Null until it has been
+    #: launched once, and on rows that predate the field.
+    qemu_version: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property

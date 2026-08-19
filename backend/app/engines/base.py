@@ -92,6 +92,12 @@ class LaunchOptions:
     seed_cloud_init: bool = True
     #: Guest display adapter ("std" | "virtio"); None means the driver default.
     display: str | None = None
+    #: Guest family ("linux" | "windows"). Drives disk bus, NIC model, display
+    #: and CPU model together, because those four have to agree: a Windows
+    #: guest given a virtio disk cannot see it, and one given virtio-gpu shows
+    #: no picture during setup. Drivers that only ever run one kind of guest
+    #: ignore it, like every other field here.
+    guest_os: str = "linux"
 
 
 @dataclass(frozen=True)

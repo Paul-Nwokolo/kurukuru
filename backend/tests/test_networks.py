@@ -283,3 +283,43 @@ def test_forwarding_to_a_terminated_instance_is_refused(client):
 def test_an_unknown_forward_is_a_404(client):
     instance = _instance(client)
     assert client.delete(f"/instances/{instance['id']}/forwards/nope").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Forward presets (Phase 13)
+# --------------------------------------------------------------------------- #
+def test_the_rdp_preset_is_offered_for_windows(client):
+    r = client.get("/forwards/presets", params={"guest_os": "windows"})
+
+    assert r.status_code == 200, r.text
+    presets = r.json()
+    rdp = next(p for p in presets if p["key"] == "rdp")
+    assert rdp["guest_port"] == 3389
+    assert rdp["protocol"] == "tcp"
+    # Says the part that is not obvious: the forward alone does not turn RDP on.
+    assert "off by default" in rdp["description"]
+
+
+def test_windows_only_presets_are_not_offered_to_linux(client):
+    """Offering RDP for a Linux guest would be presenting an invalid
+    combination, which is the rule the audit set for every other control."""
+    keys = [p["key"] for p in client.get(
+        "/forwards/presets", params={"guest_os": "linux"}
+    ).json()]
+
+    assert "rdp" not in keys
+
+
+def test_presets_do_not_create_anything(client, iso_dir):  # noqa: F811
+    """A preset fills the form in. The ordinary create endpoint still does the
+    work, so there is one collision check and one code path."""
+    (iso_dir / "server.iso").write_bytes(b"\0" * 64)
+    instance = client.post("/instances", json={
+        "name": "win-rdp", "guest_os": "windows",
+        "flavor": "windows", "iso": "server.iso",
+    }).json()
+
+    client.get("/forwards/presets", params={"guest_os": "windows"})
+    forwards = client.get(f"/instances/{instance['id']}/forwards").json()
+
+    assert all(f["guest_port"] != 3389 for f in forwards)

@@ -60,6 +60,7 @@ from app.models import (
     EventActor,
     EventKind,
     PROVISIONABLE_GUEST_OS,
+    GuestOS,
     Image,
     ImageSource,
     ImageStatus,
@@ -344,6 +345,7 @@ def _validate_sizing(
     settings: Settings,
     *,
     minimum_disk_gb: int | None = None,
+    guest_os: GuestOS = GuestOS.LINUX,
 ) -> None:
     """Refuse a request the host cannot satisfy, saying why in numbers.
 
@@ -351,23 +353,36 @@ def _validate_sizing(
     that the hypervisor would fail on must be refused here, with the arithmetic
     spelled out — "too big" is not actionable, "12288 MB requested, 9216 MB
     allocatable (2048 reserve, 4096 committed)" is.
+
+    The floors are per guest family. A Linux cloud image is happy in 1 GB; a
+    Windows installer given 1 GB does not run slowly, it stops partway through
+    with its own error — forty minutes after the user walked away. Refusing it
+    up front is the difference between an explanation and a wasted afternoon.
     """
     reserve_mb = settings.host_reserve_memory_bytes // (1024**2)
 
-    if sizing.cpus < settings.min_instance_cpus:
+    windows = guest_os is GuestOS.WINDOWS
+    min_cpus = settings.windows_min_cpus if windows else settings.min_instance_cpus
+    min_memory = (
+        settings.windows_min_memory_mb if windows else settings.min_instance_memory_mb
+    )
+    min_disk = settings.windows_min_disk_gb if windows else settings.min_instance_disk_gb
+    subject = "A Windows instance" if windows else "An instance"
+
+    if sizing.cpus < min_cpus:
         raise HTTPException(
             status_code=422,
-            detail=f"An instance needs at least {settings.min_instance_cpus} vCPU.",
+            detail=f"{subject} needs at least {min_cpus} vCPU.",
         )
-    if sizing.memory_mb < settings.min_instance_memory_mb:
+    if sizing.memory_mb < min_memory:
         raise HTTPException(
             status_code=422,
-            detail=f"An instance needs at least {settings.min_instance_memory_mb} MB of memory.",
+            detail=f"{subject} needs at least {min_memory} MB of memory.",
         )
-    if sizing.disk_gb < settings.min_instance_disk_gb:
+    if sizing.disk_gb < min_disk:
         raise HTTPException(
             status_code=422,
-            detail=f"An instance needs at least {settings.min_instance_disk_gb} GB of disk.",
+            detail=f"{subject} needs at least {min_disk} GB of disk.",
         )
 
     # A capacity probe that failed must not block launches (see host_capacity).
@@ -949,7 +964,15 @@ def _clone_job(source_id: str, clone_id: str) -> None:
                 cpus=clone.cpus or 1,
                 memory=str(clone.memory_mb or 1024),
                 cloud_init_path=str(cloud_init_path) if cloud_init_path else None,
-                options=LaunchOptions(accel=clone.accel, display=clone.display),
+                options=LaunchOptions(
+                    accel=clone.accel,
+                    display=clone.display,
+                    # A clone of a Windows instance is a Windows instance. Its
+                    # disk holds an OS that bound drivers to SATA and e1000e on
+                    # first boot; handing the copy virtio hardware would produce
+                    # a disk the clone cannot boot from.
+                    guest_os=clone.guest_os.value,
+                ),
             )
         except ComputeEngineError as exc:
             logger.error("Booting clone '%s' failed: %s", clone.name, exc)
@@ -989,6 +1012,7 @@ def _build_launch_options(
             # A generic installer knows nothing about NoCloud; a second CD-ROM
             # would only muddy the boot order.
             seed_cloud_init=False,
+            guest_os=instance.guest_os.value,
         )
 
     backing_image: str | None = None
@@ -1012,7 +1036,27 @@ def _build_launch_options(
         display=instance.display,
         backing_image=backing_image,
         seed_cloud_init=seed,
+        guest_os=instance.guest_os.value,
     )
+
+
+def _record_hypervisor_version(compute: ComputeEngine, instance: Instance) -> None:
+    """Stamp the row with the hypervisor build that just launched it.
+
+    Best-effort by design. A version we cannot read is a note we cannot write,
+    and it is emphatically not a reason to fail a launch that already
+    succeeded — so anything unexpected leaves the field as it was.
+
+    Read through ``describe()`` rather than a QEMU-specific call so an engine
+    that reports no version simply contributes nothing.
+    """
+    try:
+        version = compute.describe().get("version")
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never break a launch
+        logger.debug("Could not record the hypervisor version: %s", exc)
+        return
+    if isinstance(version, str) and version:
+        instance.qemu_version = version
 
 
 def _settle_after_launch(
@@ -1035,6 +1079,8 @@ def _settle_after_launch(
     returns on the first pass (provisioning already waited for SSH, and the
     address is the fixed loopback forward), so it costs nothing there.
     """
+    _record_hypervisor_version(compute, instance)
+
     deadline = time.monotonic() + settings.post_launch_ip_timeout_seconds
     last_error: ComputeEngineError | None = None
 
@@ -1112,12 +1158,22 @@ def create_instance(
         raise HTTPException(
             status_code=422,
             detail=(
-                f"Cannot provision a {payload.guest_os.value} guest yet. The boot "
-                f"disk is attached over virtio-blk and the NIC is virtio-net, "
-                f"neither of which Windows Setup has a driver for, and the "
-                f"generated cloud-config is Linux-shaped. Windows needs a "
-                f"SATA boot disk, an e1000e NIC or the virtio-win driver ISO, "
-                f"and Cloudbase-Init — none of which this build has."
+                f"Cannot provision a {payload.guest_os.value} guest yet."
+            ),
+        )
+
+    # Windows installs from its own installer medium. There is no Windows
+    # equivalent of the Ubuntu cloud image here — nothing to make an overlay
+    # from — so a Windows launch without an ISO would build a blank disk and
+    # boot it to "no operating system". Refused where the request is made,
+    # with the reason, rather than at the boot screen.
+    if payload.guest_os is GuestOS.WINDOWS and not payload.iso:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "A Windows instance needs an installer ISO. Microsoft's ISOs "
+                "cannot be redistributed, so download one from Microsoft, put "
+                "it in the ISO directory, and select it here."
             ),
         )
 
@@ -1181,6 +1237,7 @@ def create_instance(
         get_capacity(session, settings),
         settings,
         minimum_disk_gb=_image_minimum_disk_gb(image) if boot_source is BootSource.IMAGE else None,
+        guest_os=payload.guest_os,
     )
 
     # Resolved before the row is written so an unknown key id is a 422 on the
@@ -1449,6 +1506,7 @@ def clone_instance(
         ),
         get_capacity(session, settings),
         settings,
+        guest_os=source.guest_os,
     )
 
     clone = Instance(

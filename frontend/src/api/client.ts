@@ -334,6 +334,55 @@ export async function getSettings(): Promise<SettingGroup[]> {
 }
 
 /** Host-side facts: what `iaas doctor` reads. */
+/**
+ * A named guest port offered as one click instead of two numbers.
+ *
+ * Fetched rather than hardcoded, for the reason the network-mode catalog is:
+ * the API, the UI and the docs cannot then drift into disagreeing about what
+ * is offered. A preset fills the form in — it creates nothing, and the ordinary
+ * create endpoint still does the work and the collision check.
+ */
+export interface ForwardPreset {
+  key: string
+  label: string
+  guest_port: number
+  protocol: 'tcp' | 'udp'
+  description: string
+  guest_os: GuestOS | null
+}
+
+export async function getForwardPresets(guestOs?: GuestOS): Promise<ForwardPreset[]> {
+  const { data } = await http.get<ForwardPreset[]>('/forwards/presets', {
+    params: guestOs ? { guest_os: guestOs } : undefined,
+  })
+  return data
+}
+
+/** One thing the hypervisor build either can or cannot do. */
+export interface QemuCapability {
+  key: string
+  label: string
+  available: boolean
+  /** What was observed, verbatim — more use than "unsupported". */
+  detail: string
+  /** What the user loses. Null when nothing does. */
+  consequence: string | null
+}
+
+export interface QemuSupport {
+  version: string | null
+  raw: string | null
+  /** A development snapshot rather than a release. */
+  prerelease: boolean
+  /** 'ok' | 'untested' | 'too-old' | 'prerelease' | 'unknown' */
+  status: string
+  /** Whether the build sits inside the tested range. Advisory only. */
+  supported: boolean
+  /** Ready-to-show sentences; every one is a caveat, never a blocker. */
+  warnings: string[]
+  capabilities: QemuCapability[]
+}
+
 export interface Diagnostics {
   api: { version: string }
   python: string
@@ -345,6 +394,13 @@ export interface Diagnostics {
     base_image?: string
     base_image_present?: boolean
     error?: string
+    /**
+     * Version verdict plus capability probes. The two are separate because a
+     * version number cannot see whether the build was compiled with TPM
+     * support or whether UEFI works under the accelerator in use — and those
+     * are what decide whether a given guest can be installed at all.
+     */
+    support?: QemuSupport | null
   }
   instance_store: {
     path: string
@@ -738,6 +794,13 @@ export interface CreateInstancePayload {
   accel?: AccelChoice
   /** Guest display adapter; 'std' works without guest drivers. */
   display?: DisplayChoice
+  /**
+   * Guest family. Selects the disk bus, NIC model, graphics adapter and CPU
+   * model together — Windows Setup has inbox drivers for none of the
+   * paravirtualised devices Linux uses. Omitted means Linux, which is what
+   * every instance created before this existed is.
+   */
+  guest_os?: GuestOS
   /** Filename within the backend's ISO directory; makes this an ISO instance. */
   iso?: string | null
   image_id?: string | null

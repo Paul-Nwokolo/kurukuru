@@ -15,12 +15,13 @@ import {
   Square,
   Trash2,
 } from 'lucide-react'
-import type { Snapshot } from '../api/client'
+import type { GuestOS, Snapshot } from '../api/client'
 import { apiErrorMessage } from '../api/client'
 import {
   useAddForward,
   useDeleteSnapshot,
   useDetachVolume,
+  useForwardPresets,
   useForwards,
   useRemoveForward,
   useInstance,
@@ -255,9 +256,22 @@ export function InstanceDetail({ instanceId }: InstanceDetailProps) {
             </div>
           ) : (
             <div className="px-4 py-3 text-sm text-text-subtle">
-              {instance.ssh_enabled === false
-                ? 'No SSH — no key was injected into this guest. The console is the way in.'
-                : 'No address yet.'}
+              {instance.guest_os === 'windows' ? (
+                /* Named specifically rather than folded into the generic
+                   no-key case. "No key was injected" is true of a Windows
+                   guest and sounds like something that went wrong; the real
+                   reason is that Windows has neither cloud-init to inject with
+                   nor an SSH server to inject for. */
+                <>
+                  No SSH — Windows has no cloud-init to receive a key and no SSH server
+                  by default. Use the console. Once the OS is up you can enable Remote
+                  Desktop inside it and add a forward for port 3389 below.
+                </>
+              ) : instance.ssh_enabled === false ? (
+                'No SSH — no key was injected into this guest. The console is the way in.'
+              ) : (
+                'No address yet.'
+              )}
             </div>
           )}
 
@@ -297,7 +311,7 @@ export function InstanceDetail({ instanceId }: InstanceDetailProps) {
 
       {/* What reaches this guest. SSH included, marked derived. */}
       <Section title="Network">
-        <InstanceForwards instanceId={instanceId} />
+        <InstanceForwards instanceId={instanceId} guestOs={instance.guest_os} />
       </Section>
 
       {/* Storage: both answers to "what disks does this have?" */}
@@ -594,12 +608,19 @@ function Activity({ instanceId }: { instanceId: string }) {
  *
  * The SSH forward is listed first and rendered as derived: dimmed, badged, and
  * with no delete control at all. It is not a row in the forwards table — it
- * comes from the instance's pinned port (DECISIONS #25) — and offering a
- * button that fails, or worse appears to work and then shows the row again on
- * the next poll, is worse than offering nothing.
+ * comes from the instance's pinned port — and offering a button that fails, or
+ * worse appears to work and then shows the row again on the next poll, is worse
+ * than offering nothing.
  */
-function InstanceForwards({ instanceId }: { instanceId: string }) {
+function InstanceForwards({
+  instanceId,
+  guestOs,
+}: {
+  instanceId: string
+  guestOs?: GuestOS
+}) {
   const { data: forwards, isLoading } = useForwards(instanceId)
+  const { data: presets } = useForwardPresets(guestOs)
   const addMut = useAddForward(instanceId)
   const removeMut = useRemoveForward(instanceId)
   const [hostPort, setHostPort] = useState('')
@@ -653,6 +674,33 @@ function InstanceForwards({ instanceId }: { instanceId: string }) {
           </li>
         ))}
       </ul>
+
+      {/* Presets. One click fills the form in; it does not create the forward,
+          so the host port stays visible and editable and the collision check
+          still runs on submit. RDP is the reason this exists — it is the access
+          path for a Windows guest once the console has got the OS installed. */}
+      {!!presets?.length && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          <span className="text-xs text-text-subtle">Common:</span>
+          {presets.map((preset) => (
+            <button
+              key={preset.key}
+              type="button"
+              title={preset.description}
+              onClick={() => {
+                setGuestPort(String(preset.guest_port))
+                // Same number on the host unless it is taken — the backend
+                // refuses a collision and names what holds it, which is a
+                // better answer than picking a surprising port silently.
+                setHostPort(String(preset.guest_port))
+              }}
+              className="rounded-md border border-border-strong bg-surface px-2 py-1 text-xs text-text hover:bg-surface-overlay"
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <form
         className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3"

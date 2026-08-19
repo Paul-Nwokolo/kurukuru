@@ -21,9 +21,20 @@ import pytest
 
 import app.engines.qemu as qemu_module
 from app.config import Settings
-from app.engines.base import ComputeEngineError, ComputeTimeoutError, HypervisorUnavailableError
+from app.engines.base import (
+    ComputeEngineError,
+    ComputeTimeoutError,
+    HypervisorUnavailableError,
+    LaunchOptions,
+)
 from app.engines.ports import PortAllocationError, allocate_port, is_port_free
-from app.engines.qemu import HOST_IP, InstanceRuntime, QemuEngine
+from app.engines.qemu import (
+    HOST_IP,
+    WINDOWS_WHPX_CPU,
+    InstanceRuntime,
+    QemuEngine,
+    guest_profile,
+)
 from app.engines.seed import VOLUME_LABEL, build_meta_data, build_seed_iso, read_seed_file
 from app.models import InstanceStatus
 
@@ -176,6 +187,114 @@ def test_iso_launch_carries_no_cloud_init_seed(eng):
     cmd = eng.build_launch_command("inst", _runtime(iso_path="C:\\isos\\alpine.iso"))
     drives = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-drive"]
     assert not any("seed.iso" in d for d in drives)
+
+
+# --------------------------------------------------------------------------- #
+# Guest OS drives the hardware (Phase 13)
+# --------------------------------------------------------------------------- #
+def _devices(cmd: list[str]) -> list[str]:
+    return [cmd[i + 1] for i, a in enumerate(cmd) if a == "-device"]
+
+
+def _drives(cmd: list[str]) -> list[str]:
+    return [cmd[i + 1] for i, a in enumerate(cmd) if a == "-drive"]
+
+
+def test_a_linux_guest_is_unchanged_by_the_windows_work(eng):
+    """The regression that would matter most: Windows support must not have
+    quietly re-specified every existing VM's hardware."""
+    cmd = eng.build_launch_command("web", _runtime())
+
+    assert any("if=virtio" in d for d in _drives(cmd))
+    assert any(d.startswith("virtio-net-pci,") for d in _devices(cmd))
+    assert "ich9-ahci,id=ahci" not in _devices(cmd)
+    assert eng.cpu_model("whpx", "linux") == "qemu64"
+
+
+def test_a_windows_guest_gets_hardware_setup_has_drivers_for(eng):
+    """The three inbox devices, together. Windows Setup finds no disk on
+    virtio-blk and no network on virtio-net, and reports neither as a driver
+    problem — it just shows an empty list."""
+    cmd = eng.build_launch_command("win", _runtime(guest_os="windows"))
+
+    devices = _devices(cmd)
+    assert "ich9-ahci,id=ahci" in devices
+    assert "ide-hd,bus=ahci.0,drive=hd0" in devices
+    assert any(d.startswith("e1000e,") for d in devices)
+    assert not any("virtio" in d for d in devices)
+    assert not any("if=virtio" in d for d in _drives(cmd))
+
+
+def test_the_ahci_controller_precedes_every_disk_that_names_it(eng):
+    """A ``bus=ahci.N`` reference has to resolve to a controller QEMU has
+    already seen, so argument order is load-bearing, not cosmetic."""
+    cmd = eng.build_launch_command(
+        "win", _runtime(guest_os="windows", volumes=["C:\\v\\data.qcow2"])
+    )
+
+    controller = cmd.index("ich9-ahci,id=ahci")
+    referencing = [i for i, a in enumerate(cmd) if a.startswith(("ide-hd,", "ide-cd,"))]
+    assert referencing, "expected at least one disk on the controller"
+    assert controller < min(referencing)
+
+
+def test_windows_volumes_get_their_own_ahci_ports_in_attach_order(eng):
+    cmd = eng.build_launch_command(
+        "win",
+        _runtime(guest_os="windows", volumes=["C:\\v\\a.qcow2", "C:\\v\\b.qcow2"]),
+    )
+
+    devices = _devices(cmd)
+    # Root disk on port 0, then volumes in the order the runtime file records.
+    assert "ide-hd,bus=ahci.0,drive=hd0" in devices
+    assert "ide-hd,bus=ahci.1,drive=hd1" in devices
+    assert "ide-hd,bus=ahci.2,drive=hd2" in devices
+    drives = _drives(cmd)
+    assert any("a.qcow2" in d and "id=hd1" in d for d in drives)
+    assert any("b.qcow2" in d and "id=hd2" in d for d in drives)
+
+
+def test_the_windows_installer_iso_lands_after_the_data_disks(eng):
+    """The CD takes the port after the last disk, so adding a volume never
+    renumbers a disk the guest has already partitioned."""
+    cmd = eng.build_launch_command(
+        "win", _runtime(guest_os="windows", volumes=["C:\\v\\a.qcow2"],
+                        iso_path="C:\\isos\\server.iso")
+    )
+
+    assert "ide-cd,bus=ahci.2,drive=cd0" in _devices(cmd)
+    assert cmd[cmd.index("-boot") + 1] == "order=dc,menu=on"
+
+
+def test_windows_gets_a_cpu_with_sse42(eng):
+    """Windows 11 and Server 2025 refuse to run without SSE4.2/POPCNT, which
+    qemu64 does not carry — so the Phase 5 "WHPX means qemu64" rule had to
+    narrow to "WHPX and Linux means qemu64"."""
+    assert eng.cpu_model("whpx", "windows") == WINDOWS_WHPX_CPU
+    assert eng.cpu_model("whpx", "linux") == "qemu64"
+    # The accelerator still has the final say where it must: host-derived
+    # models are what break WHPX, and neither guest gets one.
+    assert eng.cpu_model("whpx", "windows") not in ("max", "host")
+
+
+def test_windows_is_never_given_virtio_gpu(eng):
+    """Windows Setup has no virtio-gpu driver, so 'modern' graphics is not a
+    slower choice there, it is a blank screen. Requesting it is ignored rather
+    than honoured into an unusable console."""
+    cmd = eng.build_launch_command(
+        "win", _runtime(guest_os="windows", display="virtio")
+    )
+    assert cmd[cmd.index("-vga") + 1] == "std"
+    # Linux may still ask for it.
+    linux = eng.build_launch_command("web", _runtime(display="virtio"))
+    assert linux[linux.index("-vga") + 1] == "virtio"
+
+
+def test_an_unknown_guest_os_falls_back_to_linux_hardware(eng):
+    """Runtime files predate this field. Reading one written before Windows
+    existed must produce exactly the hardware that VM was built with."""
+    assert guest_profile(None).disk_bus == "virtio"
+    assert guest_profile("plan9").disk_bus == "virtio"
 
 
 def test_no_seed_is_attached_when_none_was_generated(eng):
@@ -754,12 +873,17 @@ def test_the_readiness_probe_is_skipped_for_guests_with_no_key(eng):
     assert info.status is InstanceStatus.RUNNING and info.ip_address is None
 
 
-def test_info_live_pid_but_dead_qmp_is_not_running(eng):
-    """Guards against a recycled pid being read as 'the VM is up'."""
+def test_info_live_pid_but_nothing_bound_to_qmp_is_not_running(eng):
+    """Guards against a recycled pid being read as 'the VM is up'.
+
+    A dead QEMU releases its QMP port, so nothing is bound to it. That, rather
+    than a failed handshake, is what identifies a stale pid — see _liveness.
+    """
     eng._write_runtime("web", _runtime(pid=1234))
     with (
         patch("app.engines.qemu.pid_alive", return_value=True),
         patch("app.engines.qemu.is_responsive", return_value=False),
+        patch("app.engines.qemu.is_port_free", return_value=True),
     ):
         assert eng.get_instance_info("web").status is InstanceStatus.STOPPED
 
@@ -872,3 +996,193 @@ def test_nonzero_exit_carries_stderr(eng):
 def test_is_available_false_when_qemu_is_missing(eng):
     with patch("app.engines.qemu.subprocess.run", side_effect=FileNotFoundError()):
         assert eng.is_available() is False
+
+
+def test_windows_does_not_get_a_different_accelerator(eng):
+    """A Windows-specific TCG default lived here briefly and was withdrawn.
+
+    It was added on "WHPX stalls, TCG progresses" and removed once longer runs
+    showed TCG stalling too — further along, still writing nothing to disk. The
+    default would have cost a ~30x slowdown and bought no working install, so
+    the honest state is that guest OS does not steer the accelerator.
+    """
+    assert eng.resolve_accel(None, "windows") == eng.accel()
+    assert eng.resolve_accel(None, "linux") == eng.accel()
+    assert eng.resolve_accel(None) == eng.accel()
+
+
+def test_an_explicit_accelerator_is_still_honoured(eng):
+    assert eng.resolve_accel("tcg", "windows") == "tcg"
+    assert eng.resolve_accel(eng.accel(), "windows") == eng.accel()
+
+
+# --------------------------------------------------------------------------- #
+# Cloning carries the guest family
+# --------------------------------------------------------------------------- #
+def _clone_engine(eng):
+    """boot_cloned_instance with the two side effects that need a real VM
+    stubbed out, so the runtime file it writes can be inspected directly."""
+    return patch.object(eng, "_spawn"), patch.object(eng, "_wait_for_ssh", return_value=1.0)
+
+
+def test_cloning_a_windows_instance_keeps_windows_hardware(eng):
+    """The clone route passes guest_os and explains why; this method used to
+    drop it, defaulting the runtime to Linux. That gave the copy a virtio root
+    disk for a disk whose drivers bound to SATA — an unbootable VM, and one
+    that would have looked like a mysterious boot failure rather than a
+    dropped argument.
+    """
+    spawn, wait = _clone_engine(eng)
+    with spawn, wait:
+        eng.boot_cloned_instance(
+            "winclone", cpus=2, memory="4096",
+            options=LaunchOptions(guest_os="windows", display="std"),
+        )
+    runtime = eng._read_runtime("winclone")
+    assert runtime is not None
+    assert runtime.guest_os == "windows"
+
+    cmd = eng.build_launch_command("winclone", runtime)
+    assert "ich9-ahci,id=ahci" in cmd
+    assert any(a.startswith("ide-hd,bus=ahci.0") for a in cmd)
+    assert not any("if=virtio" in a for a in cmd)
+    assert any(a.startswith("e1000e,") for a in cmd)
+
+
+def test_a_windows_clone_is_not_waited_on_for_ssh(eng, settings):
+    """Windows gets no NoCloud seed and therefore no key, so there is no SSH
+    to become ready. Waiting anyway burns the whole boot timeout and then
+    reports a healthy clone as a failure."""
+    spawn, wait = _clone_engine(eng)
+    with spawn, wait as wait_mock:
+        eng.boot_cloned_instance(
+            "winclone", cpus=2, memory="4096",
+            options=LaunchOptions(guest_os="windows"),
+        )
+    wait_mock.assert_not_called()
+
+    runtime = eng._read_runtime("winclone")
+    assert runtime.ssh_enabled is False
+    # No seed on disk, and none named on the command line.
+    assert not (Path(settings.qemu_dir) / "instances" / "winclone" / "seed.iso").exists()
+    assert not any("seed.iso" in a for a in eng.build_launch_command("winclone", runtime))
+
+
+def test_cloning_a_linux_instance_is_unchanged(eng):
+    """The fix must not quietly turn off cloud-init for the guests that use it."""
+    spawn, wait = _clone_engine(eng)
+    with spawn, patch.object(eng, "_write_seed") as seed, wait as wait_mock:
+        eng.boot_cloned_instance("webclone", cpus=1, memory="1024")
+    seed.assert_called_once()
+    wait_mock.assert_called_once()
+
+    runtime = eng._read_runtime("webclone")
+    assert runtime.guest_os == "linux"
+    assert runtime.ssh_enabled is True
+    assert any("if=virtio" in a for a in eng.build_launch_command("webclone", runtime))
+
+
+# --------------------------------------------------------------------------- #
+# Liveness: a busy QMP socket is not a stopped VM
+# --------------------------------------------------------------------------- #
+def test_a_live_pid_with_a_silent_qmp_is_unreachable_not_stopped(eng):
+    """QMP serves one client at a time.
+
+    While anything else holds the socket, the handshake cannot complete. The
+    old two-factor check read that as "not running" and the reconciler rewrote
+    a healthy instance to Stopped and cleared its pid — observed as a 40-minute
+    flap that stopped the moment the competing client disconnected.
+    """
+    runtime = _runtime(pid=4242)
+    with patch("app.engines.qemu.pid_alive", return_value=True), \
+         patch("app.engines.qemu.is_responsive", return_value=False), \
+         patch("app.engines.qemu.is_port_free", return_value=False):
+        assert eng._liveness(runtime) == "unreachable"
+        assert eng._is_running(runtime) is True
+
+
+def test_a_recycled_pid_is_still_caught(eng):
+    """The case the two-factor check was built for, kept working.
+
+    QEMU is gone, so its QMP port is bindable again — and the pid we recorded
+    now belongs to some unrelated process. That is a genuinely stopped VM, and
+    the port is what tells it apart from a merely busy monitor.
+    """
+    runtime = _runtime(pid=4242)
+    with patch("app.engines.qemu.pid_alive", return_value=True), \
+         patch("app.engines.qemu.is_responsive", return_value=False), \
+         patch("app.engines.qemu.is_port_free", return_value=True):
+        assert eng._liveness(runtime) == "stopped"
+        assert eng._is_running(runtime) is False
+
+
+def test_a_dead_pid_is_stopped_whatever_qmp_says(eng):
+    runtime = _runtime(pid=4242)
+    with patch("app.engines.qemu.pid_alive", return_value=False), \
+         patch("app.engines.qemu.is_responsive", return_value=True):
+        assert eng._liveness(runtime) == "stopped"
+        assert eng._is_running(runtime) is False
+
+
+def test_a_healthy_vm_is_running(eng):
+    runtime = _runtime(pid=4242)
+    with patch("app.engines.qemu.pid_alive", return_value=True), \
+         patch("app.engines.qemu.is_responsive", return_value=True):
+        assert eng._liveness(runtime) == "running"
+        assert eng._is_running(runtime) is True
+
+
+def test_a_busy_monitor_does_not_let_a_clone_read_a_live_disk(eng, tmp_path):
+    """_refuse_if_running guards clone and snapshot against reading a disk a
+    running QEMU is writing. Treating a busy monitor as stopped would have
+    quietly removed that guard exactly when another tool was poking the VM."""
+    (eng._dir("web")).mkdir(parents=True, exist_ok=True)
+    eng._write_runtime("web", _runtime(pid=4242))
+    with patch("app.engines.qemu.pid_alive", return_value=True), \
+         patch("app.engines.qemu.is_responsive", return_value=False), \
+         patch("app.engines.qemu.is_port_free", return_value=False):
+        with pytest.raises(ComputeEngineError):
+            eng._refuse_if_running("web", "clone")
+
+
+# --------------------------------------------------------------------------- #
+# USB HID input — without it the Windows console cannot be driven at all
+# --------------------------------------------------------------------------- #
+def test_windows_gets_a_usb_keyboard_and_tablet(eng):
+    """QMP send-key does not reach a PS/2 keyboard with -display none and no
+    VNC client attached. Measured: a whole Setup key sequence sent blind left
+    the disk at its initial 393,216 bytes, while the same sequence with USB HID
+    attached drove Setup screen by screen. Windows has no SSH, so the console is
+    the only way in and this is what makes it work.
+    """
+    cmd = eng.build_launch_command("win", _runtime(guest_os="windows"))
+    assert "qemu-xhci,id=xhci" in cmd
+    assert "usb-kbd,bus=xhci.0" in cmd
+    assert "usb-tablet,bus=xhci.0" in cmd
+
+
+def test_the_usb_controller_precedes_the_devices_that_reference_it(eng):
+    """`bus=xhci.0` must resolve to something already on the command line, the
+    same ordering rule the AHCI controller follows."""
+    cmd = eng.build_launch_command("win", _runtime(guest_os="windows"))
+    assert cmd.index("qemu-xhci,id=xhci") < cmd.index("usb-kbd,bus=xhci.0")
+    assert cmd.index("qemu-xhci,id=xhci") < cmd.index("usb-tablet,bus=xhci.0")
+
+
+def test_linux_keeps_ps2_and_gains_no_usb_devices(eng):
+    """Linux guests are reached over SSH and already work. Adding devices would
+    change the hardware under every instance already on disk for no gain."""
+    cmd = eng.build_launch_command("web", _runtime())
+    assert not any("xhci" in a or "usb-kbd" in a or "usb-tablet" in a for a in cmd)
+
+
+def test_a_windows_clone_also_gets_usb_input(eng):
+    """The clone carries guest_os, so it must carry the console hardware too —
+    a clone nobody can type into is not a usable clone."""
+    with patch.object(eng, "_spawn"), patch.object(eng, "_wait_for_ssh", return_value=1.0):
+        eng.boot_cloned_instance(
+            "winclone", cpus=2, memory="2048",
+            options=LaunchOptions(guest_os="windows"),
+        )
+    cmd = eng.build_launch_command("winclone", eng._read_runtime("winclone"))
+    assert "usb-kbd,bus=xhci.0" in cmd

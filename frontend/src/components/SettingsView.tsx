@@ -78,6 +78,43 @@ export function SettingsView() {
         </div>
       </section>
 
+      {/*
+        What the installed hypervisor cannot do, and what follows from it.
+
+        Separate from the QEMU version above on purpose. A version number
+        cannot express "this build has no TPM, so Windows 11 will not install"
+        — that is a property of how it was compiled, not of which release it
+        is. Showing only the version, in green, over a machine that cannot do
+        what the user is about to try would be the most reassuring possible way
+        to be wrong.
+
+        Advisory throughout: nothing here blocks a launch, so it is styled as a
+        caveat rather than an error.
+      */}
+      {!!diag?.engine.support?.warnings?.length && (
+        <section className="rounded-lg border border-transitional/30 bg-transitional-quiet">
+          <header className="flex items-start gap-2 px-4 py-3">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-transitional" />
+            <div>
+              <h2 className="text-sm font-semibold text-transitional">
+                Hypervisor limitations
+              </h2>
+              <p className="mt-0.5 text-xs text-transitional/90">
+                Things this QEMU build cannot do. Nothing here stops the backend
+                working — it is what to check before blaming something else.
+              </p>
+            </div>
+          </header>
+          <ul className="space-y-2 border-t border-transitional/20 px-4 py-3">
+            {diag.engine.support.warnings.map((warning) => (
+              <li key={warning} className="text-xs leading-relaxed text-transitional">
+                {warning}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="rounded-lg border border-transitional/30 bg-transitional-quiet px-4 py-3 text-xs text-transitional">
         These values are read once when the backend starts. Set the environment
         variable shown against a setting (or put it in{' '}

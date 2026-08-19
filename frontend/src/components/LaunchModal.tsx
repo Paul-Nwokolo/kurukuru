@@ -11,6 +11,7 @@ import {
   apiErrorMessage,
   type AccelChoice,
   type DisplayChoice,
+  type GuestOS,
   type HostCapacity,
   type Instance,
 } from '../api/client'
@@ -83,6 +84,28 @@ const MODES: ModeSpec[] = [
   },
 ]
 
+/**
+ * The guest families, and the one line each that changes what a user should
+ * expect. Windows is not "Linux but Microsoft": it installs from media the user
+ * supplies, it has no cloud-init, and its access story is the console until RDP
+ * is switched on inside the guest.
+ */
+const GUEST_OS_CHOICES: { key: GuestOS; label: string; hint: string }[] = [
+  {
+    key: 'linux',
+    label: 'Linux',
+    hint: 'Cloud image or ISO. SSH key injected on cloud images.',
+  },
+  {
+    key: 'windows',
+    label: 'Windows',
+    // Says the important thing first. The device selection is correct and the
+    // installer boots, but Setup does not finish yet — and a picker that reads
+    // as "supported" would be the product promising something it cannot do.
+    hint: 'Setup does not finish yet — known issue. Your own ISO.',
+  },
+]
+
 interface LaunchModalProps {
   open: boolean
   onClose: () => void
@@ -102,6 +125,10 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
   // a *view* and this is a decision about the instance.
   const [scoped] = useSelectedProject()
 
+  // Chosen first, and deliberately so: it inverts the correct answer for the
+  // disk bus, the NIC, the graphics adapter and the CPU model all at once, so
+  // every control below it depends on this one.
+  const [guestOs, setGuestOs] = useState<GuestOS>('linux')
   const [mode, setMode] = useState<LaunchMode>('image')
   const [name, setName] = useState('')
   const [preset, setPreset] = useState('small')
@@ -137,6 +164,7 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
 
   useEffect(() => {
     if (!open) return
+    setGuestOs('linux')
     setMode('image')
     setName('')
     setPreset('small')
@@ -166,9 +194,27 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
   // Follow the source's correct default until the user overrides it. An ISO
   // installer has no virtio-gpu driver loaded and would show nothing; a cloud
   // image sits in text mode and shows nothing *without* virtio.
+  //
+  // Windows is not a default here but a constraint: Setup has no virtio-gpu
+  // driver at all, so "modern" is never right and the override is ignored.
   useEffect(() => {
+    if (guestOs === 'windows') {
+      setDisplay('std')
+      return
+    }
     if (!displayTouched) setDisplay(mode === 'iso' ? 'std' : 'virtio')
-  }, [mode, displayTouched])
+  }, [mode, displayTouched, guestOs])
+
+  // Windows installs from its own medium — there is no Windows cloud image to
+  // overlay — and it needs more room than any Linux preset offers. Switching
+  // guest OS therefore moves the source and the size with it, rather than
+  // leaving a form that can only be submitted to a 422.
+  useEffect(() => {
+    if (guestOs !== 'windows') return
+    setMode('iso')
+    setImageId(null)
+    if (!custom) setPreset('windows')
+  }, [guestOs, custom])
 
   // A preset fills the numbers in; they stay editable, which is the whole point
   // of presets being starting points rather than the only allowed shapes.
@@ -228,13 +274,20 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
         disk_gb: diskGb,
         accel,
         display,
+        guest_os: guestOs,
         ...(mode === 'iso' ? { iso } : {}),
         ...(mode === 'image' ? { image_id: imageId } : {}),
         // Omitted while the catalog is still loading, which the backend reads
         // as "the orchestrator key" — the pre-keypair default, so a fast
         // submit can never produce an instance with no way in.
-        ...(selectedKeys === null ? {} : { keypair_ids: selectedKeys }),
-        ...(mode !== 'iso' && userData.trim() ? { user_data: userData } : {}),
+        // Never sent for Windows: there is no cloud-init to inject a key with,
+        // so naming keys would imply an access path that does not exist.
+        ...(selectedKeys === null || guestOs === 'windows'
+          ? {}
+          : { keypair_ids: selectedKeys }),
+        ...(mode !== 'iso' && guestOs !== 'windows' && userData.trim()
+          ? { user_data: userData }
+          : {}),
         // Omitted for "All projects", which the backend reads as the default
         // project — the same place every instance went before projects existed.
         ...(projectId ? { project_id: projectId } : {}),
@@ -350,29 +403,79 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
       }
     >
       <div className="max-h-[65vh] space-y-5 overflow-y-auto p-5">
-        {/* Step 1 — intent */}
+        {/* Step 1 — guest OS. First because it inverts the correct answer for
+            almost everything below: disk bus, NIC, graphics and CPU model. */}
         <div>
           <span className="mb-1.5 block text-sm font-medium text-text-muted">
-            What do you want to do?
+            Which operating system?
           </span>
-          <div className="space-y-2">
-            {MODES.map((m) => (
-              <ModeCard
-                key={m.key}
-                spec={m}
-                selected={mode === m.key}
-                onSelect={() => setMode(m.key)}
-                subtitle={
-                  m.key === 'image' && selectedImage
-                    ? selectedImage.has_cloud_init
-                      ? 'Ready to SSH — this image has cloud-init.'
-                      : 'No SSH key injection; use the console to log in.'
-                    : m.subtitle
-                }
+          <div className="flex gap-2">
+            {GUEST_OS_CHOICES.map((choice) => (
+              <GuestOsCard
+                key={choice.key}
+                label={choice.label}
+                hint={choice.hint}
+                selected={guestOs === choice.key}
+                onSelect={() => setGuestOs(choice.key)}
               />
             ))}
           </div>
+          {guestOs === 'windows' && (
+            <p className="mt-2 text-xs text-text-subtle">
+              Windows installs from an ISO you supply — Microsoft's images cannot be
+              redistributed. Get one from{' '}
+              <span className="text-text">Microsoft's official download pages</span>, put
+              it in the ISO directory, and pick it below. Expect the install to take
+              considerably longer than a Linux cloud image, and to run it from the
+              console.{' '}
+              <span className="text-text">
+                Windows Server and Windows 10 are supported; Windows 11 is not
+              </span>{' '}
+              — it requires a TPM, which QEMU cannot emulate on a Windows host.
+            </p>
+          )}
         </div>
+
+        {/* Step 2 — intent. Windows has exactly one source, so the choice is
+            not offered rather than offered-and-refused: presenting an option
+            that can only produce a 422 is the thing the audit ruled out. */}
+        {guestOs === 'windows' ? (
+          <div>
+            <span className="mb-1.5 block text-sm font-medium text-text-muted">
+              Source
+            </span>
+            <div className="rounded-lg border border-border-strong bg-surface p-3">
+              <span className="block text-sm font-semibold text-text">Installer ISO</span>
+              <span className="block text-xs text-text-muted">
+                The only source for Windows — there is no Windows cloud image to start
+                from.
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <span className="mb-1.5 block text-sm font-medium text-text-muted">
+              What do you want to do?
+            </span>
+            <div className="space-y-2">
+              {MODES.map((m) => (
+                <ModeCard
+                  key={m.key}
+                  spec={m}
+                  selected={mode === m.key}
+                  onSelect={() => setMode(m.key)}
+                  subtitle={
+                    m.key === 'image' && selectedImage
+                      ? selectedImage.has_cloud_init
+                        ? 'Ready to SSH — this image has cloud-init.'
+                        : 'No SSH key injection; use the console to log in.'
+                      : m.subtitle
+                  }
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
         <div>
           <label
@@ -405,16 +508,23 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
           )}
         </div>
 
-        {/* Said here because this is where someone reaches for a Windows
-            installer. Finding out after a 20-minute install attempt that the
-            installer never saw a disk is the worst possible way to learn it. */}
-        {mode === 'iso' && (
-          <Alert tone="transitional">
-            <span className="font-semibold">Linux installers only, for now.</span> The boot
-            disk is attached over virtio-blk and the NIC is virtio-net, and Windows Setup
-            has a driver for neither — a Windows ISO boots to &ldquo;no drives found&rdquo;.
-            Supporting it needs a SATA boot disk, the virtio-win driver ISO as a second
-            drive, and Cloudbase-Init in place of cloud-init.
+        {/* This used to say "Linux installers only, for now" and explain that a
+            Windows ISO would boot to "no drives found". That is no longer true —
+            picking Windows above now selects a SATA disk and an e1000e NIC that
+            Setup has drivers for — and it was still being shown inside the
+            Windows flow, telling the user the thing they had just chosen does
+            not work. The remaining caveat is real and specific, so it is stated
+            for the guest it applies to rather than as a blanket warning. */}
+        {mode === 'iso' && guestOs === 'windows' && (
+          <Alert tone="danger">
+            <span className="font-semibold">
+              Windows Setup does not currently finish.
+            </span>{' '}
+            The instance launches and boots the installer on hardware Windows has drivers
+            for, then stops partway through Setup — this is a known, open problem, not
+            something you have configured wrongly. Launch one if you want to help
+            diagnose it; do not expect a usable VM. Windows 11 additionally requires a
+            TPM, which QEMU cannot emulate on a Windows host at any version.
           </Alert>
         )}
 
@@ -577,6 +687,23 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
           </p>
         </div>
 
+        {/* Windows gets the explanation the key-pair block would have occupied.
+            The brief's rule, and the right one: absent controls should say why
+            they are absent, because a missing field reads as a bug and a
+            missing field with a reason reads as a design. */}
+        {guestOs === 'windows' && (
+          <div>
+            <span className="mb-1.5 block text-sm font-medium text-text-muted">Access</span>
+            <p className="rounded-md border border-border bg-surface px-3 py-2 text-xs text-text-subtle">
+              No SSH key and no key pairs — Windows has no cloud-init to inject one
+              with, and no SSH server by default.{' '}
+              <span className="text-text">You log in through the console</span>, and once
+              the OS is up you can turn on Remote Desktop inside it and add a forward for
+              port 3389 from the instance page.
+            </p>
+          </div>
+        )}
+
         {/* Key pairs. Hidden for ISO instances, which get no cloud-init and so
             cannot receive a key however many are selected — offering the choice
             there would promise access the guest will not have. */}
@@ -719,6 +846,22 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
                 <span className="mb-1.5 block text-xs font-medium text-text-muted">
                   Graphics
                 </span>
+                {guestOs === 'windows' ? (
+                  /* Not a choice for Windows. Setup carries no virtio-gpu
+                     driver, so "modern" is not a trade-off there — it is a
+                     blank screen for the whole install, with no way to tell it
+                     from a hung VM. Offering an option that can only be wrong
+                     is the case the audit ruled out. */
+                  <div className="rounded-lg border border-border-strong bg-surface p-3">
+                    <span className="block text-sm font-semibold text-text">
+                      Standard (VGA)
+                    </span>
+                    <span className="block text-xs text-text-muted">
+                      The only adapter Windows Setup can draw on — it has no virtio-gpu
+                      driver, so anything else is a blank screen.
+                    </span>
+                  </div>
+                ) : (
                 <div className="grid grid-cols-2 gap-3">
                   <ChoiceCard
                     title="Standard (VGA)"
@@ -747,11 +890,14 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
                     }}
                   />
                 </div>
-                <p className="mt-1.5 text-xs text-text-subtle">
-                  {mode === 'iso'
-                    ? 'An OS installer draws its own screen and has no virtio driver loaded yet, so Standard is the one that shows a picture.'
-                    : 'A Linux cloud image stays in text mode, which this hypervisor cannot draw under hardware acceleration — Virtio GPU is what makes the console usable.'}
-                </p>
+                )}
+                {guestOs !== 'windows' && (
+                  <p className="mt-1.5 text-xs text-text-subtle">
+                    {mode === 'iso'
+                      ? 'An OS installer draws its own screen and has no virtio driver loaded yet, so Standard is the one that shows a picture.'
+                      : 'A Linux cloud image stays in text mode, which this hypervisor cannot draw under hardware acceleration — Virtio GPU is what makes the console usable.'}
+                  </p>
+                )}
               </div>
 
               {/*
@@ -860,6 +1006,37 @@ function Shell({
         children
       )}
     </Modal>
+  )
+}
+
+/** The guest-OS picker's card. Side-by-side rather than stacked, because there
+ *  are two and the choice is a fork rather than a list. */
+function GuestOsCard({
+  label,
+  hint,
+  selected,
+  onSelect,
+}: {
+  label: string
+  hint: string
+  selected: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={[
+        'flex-1 rounded-lg border p-3 text-left transition-colors',
+        selected
+          ? 'border-accent bg-accent-quiet ring-1 ring-accent/40'
+          : 'border-border-strong bg-surface hover:border-border-strong',
+      ].join(' ')}
+    >
+      <span className="block text-sm font-semibold text-text">{label}</span>
+      <span className="block text-xs text-text-muted">{hint}</span>
+    </button>
   )
 }
 

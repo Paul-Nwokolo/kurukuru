@@ -154,6 +154,28 @@ class Settings(BaseSettings):
     # use" — see QemuEngine.cpu_model(); set this to override.
     qemu_cpu_model: str = ""
     qemu_download_timeout_seconds: int = 1800  # ~600 MB over a slow link
+
+    # --- Known-good QEMU range (Phase 13) ---
+    # Version *awareness*, not version chasing. Nothing here downloads,
+    # upgrades or replaces a binary: for packaging we pin and bundle a tested
+    # QEMU, and an application that rewrites system binaries is a security and
+    # support problem we do not want. These two values only decide whether the
+    # dashboard says "tested" or "outside the tested range".
+    #
+    # The minimum is a real floor: q35 defaults, `-accel` syntax and the device
+    # names used here all predate it comfortably, but older builds start
+    # missing things in ways that surface as confusing device errors.
+    qemu_version_min: str = "8.0.0"
+    # The newest version actually exercised against this code. Bump it when a
+    # release has been through the suite and a live launch — not when one ships.
+    #
+    # 11.1.0 here is the development snapshot `v11.1.0-12130-ge470268ff4`, which
+    # has been through the suite and a live launch on the Windows host. It is
+    # deliberately recorded as a version anyway: `status` reports "prerelease"
+    # from the build string rather than this number, so the range stays a
+    # statement about released versions while the snapshot still gets flagged
+    # as uninstallable by anyone else. See DECISIONS "QEMU version awareness".
+    qemu_version_max_tested: str = "11.1.0"
     # Resolvers handed to QEMU guests via the NoCloud network-config. QEMU's
     # user-mode DNS proxy (10.0.2.3) is unreliable on Windows — it NXDOMAINs
     # every lookup while NAT itself works — so guests are pointed at real
@@ -195,6 +217,10 @@ class Settings(BaseSettings):
         "small": FlavorSpec(cpus=1, memory_mb=1024, disk_gb=5),
         "medium": FlavorSpec(cpus=2, memory_mb=2048, disk_gb=10),
         "large": FlavorSpec(cpus=4, memory_mb=4096, disk_gb=20),
+        # A Windows guest sized to actually finish installing and still have
+        # room afterwards. Every Linux preset is below the Windows floor, so
+        # without this a Windows launch has nothing sensible to start from.
+        "windows": FlavorSpec(cpus=2, memory_mb=4096, disk_gb=40),
     }
 
     # --- Host capacity ---
@@ -209,6 +235,20 @@ class Settings(BaseSettings):
     min_instance_cpus: int = 1
     min_instance_memory_mb: int = 512
     min_instance_disk_gb: int = 1
+
+    # --- Windows guests (Phase 13) ---
+    # Windows will not install below these, so a request under them is not a
+    # slow VM, it is a failed install discovered forty minutes in. Set to admit
+    # the *smallest* supported target rather than the comfortable one: Windows
+    # Server Core and Windows 10 both fit here, and the recommended starting
+    # point is the "windows" preset below, which is roomier.
+    #
+    # Windows 11 asks for more again (4 GB / 64 GB) — and cannot be installed
+    # here at all, because TPM 2.0 emulation does not exist on a Windows host.
+    # See docs/DECISIONS.md.
+    windows_min_cpus: int = 2
+    windows_min_memory_mb: int = 2048
+    windows_min_disk_gb: int = 32
 
     #: Directory settings that follow ``state_dir``, and the leaf each takes
     #: under it. Kept as data so adding a directory cannot forget to re-root it.
