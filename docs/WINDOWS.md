@@ -161,7 +161,8 @@ VM) is much slower. That explains some of the variance and not all of it.
 **alternating**, with the failing arm bracketed by successes of the arm it is
 compared against. Anything less cannot distinguish a difference from a streak.
 
-`tools/ab_measure.py` exists to enforce exactly that. It alternates arms, records
+`tools/ab_measure.py` exists to enforce exactly that (see `tools/README.md`;
+`tools/verify_media.py` next to it is the media checker referenced above). It alternates arms, records
 host free memory per run, reports a per-run table and a per-arm distribution, and
 **refuses to offer a comparison** from fewer than three runs per arm. It does not
 conclude; a human reads the distribution.

@@ -425,6 +425,8 @@ ergonomics.
 - [Windows guests](docs/WINDOWS.md) — status: what is established, what is
   eliminated with evidence, and why no result here is believable from a single
   run.
+- [Tools](tools/README.md) — the media checker and the alternating-runs
+  measurement harness, and the mistakes that made each necessary.
 - [Decisions](docs/DECISIONS.md) — why things are the way they are.
 - [Contributing](CONTRIBUTING.md) — running the tests and the conventions in use.
 - [History](docs/history/) — the phase briefs this was built from.
