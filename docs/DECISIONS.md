@@ -1632,6 +1632,122 @@ questions wants either a quieter host or a harness that runs each arm several
 times and reports a distribution instead of a number.
 
 
+## 41. The database is backed up before a migration, and at no other time
+
+**Context.** Migrations here are additive and applied on every startup by
+`_apply_additive_migrations`. They have never lost data, which is not the same
+as never being able to. Review item #6 asked for a backup before one runs; it
+was deferred until the state directory existed to put backups in.
+
+**The backup is taken through SQLite's online backup API, not by copying the
+file.** With WAL journalling the committed state is spread across `iaas.db` and
+`iaas.db-wal`: copying them one at a time captures two different moments, and a
+`.db` paired with a `-wal` from a later instant is not a database, it is a
+corruption waiting to be opened. The online API reads a consistent snapshot
+through SQLite itself, over a separate connection so a live writer is never
+blocked, and folds the WAL contents in. The result is a single self-contained
+file with **no sidecars to keep with it** — which is also what reduces the
+documented restore to one `cp`. Measured on the real database: a 286,720-byte
+`iaas.db` with a 4 MB `-wal` produced a 290,816-byte backup, larger than its
+source because it absorbed committed WAL content the file alone did not have.
+
+**It is skipped when the migration is a no-op, and that half matters as much.**
+A copy on every startup fills the retention window with identical files and
+ages the one useful restore point out of it. So `_pending_migrations` computes
+what the apply loop would touch *before* it runs. It deliberately mirrors that
+loop's conditions rather than approximating them: if the two ever drift apart,
+the result is either a copy on every restart, or — much worse — a schema change
+that lands with no restore point. That coupling is the fragile part of this
+design and is called out in the code, because the two must be changed together.
+
+**Retention prunes only what this module wrote.** The backup directory is
+shared with hand-made copies (Phase 13 left one, as a directory). Pruning globs
+the automatic naming pattern and considers files only, so somebody's manual
+backup is never tidied away — a much worse bug than keeping one file too many.
+
+**A backup failure does not stop the backend.** The migrations it guards are
+additive; refusing to start because a backup directory is unwritable would turn
+a precaution into an outage. It logs an error naming the path and continues,
+which is the same posture `relocate_legacy_database` already takes.
+
+**Restore is manual and deliberately not an API.** Putting "replace the
+database" behind an HTTP route means a mis-click discards live state, and the
+situations that call for a restore are exactly the ones where a human should be
+reading filenames. The procedure is in CONTRIBUTING, and it moves the current
+database aside rather than deleting it — you cannot tell which copy is better
+until after you have looked at the other one.
+
+## 42. UEFI stays unwired — and the NVRAM snapshot question is settled anyway
+
+**Context.** Decision 38 left UEFI detected but not wired, with one open design
+question blocking it: a UEFI instance's NVRAM is not covered by a qcow2
+snapshot, so restoring a snapshot desyncs the firmware's boot entries from the
+disk they describe. Three options were on the table — snapshot the varstore
+alongside, refuse snapshots on UEFI instances, or allow the desync and warn —
+and none had been chosen.
+
+**The question is now answered, and the answer is cheap.** It was blocking on an
+assumption that turned out to be false: that a varstore has to be a raw `.fd`,
+and therefore that snapshotting it means a second, external artifact per tag,
+with its own naming, listing and deletion path. Measured instead:
+
+| Probe | Result |
+|---|---|
+| `qemu-img convert` raw `OVMF_VARS.fd` → qcow2 | works, 540,672 B → 917,504 B |
+| `qemu-img snapshot -c` on the qcow2 varstore | works |
+| OVMF boots from a **qcow2** pflash varstore under WHPX | reaches the UEFI shell |
+| An `-nv` variable persists across reboot in it | yes — `41 51 43 4F 57 32` read back |
+| `qemu-img snapshot -a` reverts NVRAM state | yes — a variable written *after* the snapshot was gone after restore |
+
+The last row is the one that matters. It is not enough that the file can be
+snapshotted; the snapshot has to actually capture firmware variable state, and
+it does.
+
+**So the design is settled: the varstore becomes a qcow2 and is snapshotted
+internally, with the same tag as the disk.** Same tool, same format, same
+deletion semantics, stored inside the file. No external per-tag artifact to
+orphan, no second naming scheme. The two-file partial-failure mode that made
+this look expensive shrinks to two calls to the same tool, and ordering makes
+the residual failure the harmless one:
+
+- **Create:** varstore first, disk second; roll the varstore tag back if the
+  disk snapshot fails. The other order leaves a *recorded* snapshot with no
+  NVRAM behind it — exactly the desync being eliminated — whereas this order
+  leaks an orphan NVRAM tag, which is invisible and cleanable.
+- **Restore:** take an auto-tagged pre-restore snapshot of both, then apply
+  both, re-applying the pre-restore pair if the second fails. Internal
+  snapshots are close to free, and this is the same instinct as decision 41's
+  pre-migration backup: a restore point before a destructive operation.
+- **Delete:** disk first, then varstore; a missing tag is not an error.
+
+**And none of it is being built.** The wiring is deliberately not done, because
+UEFI has no user:
+
+- Windows 11 is the only thing that requires it, and Windows 11 is permanently
+  out of reach on a Windows host — QEMU excludes TPM emulation at build time
+  (decision 28), which no upgrade changes.
+- Legacy BIOS boots everything that currently works, including the Windows
+  Setup that Phase 13 drove to disk selection.
+- The wiring is not small: `firmware` and `nvram_path` on `InstanceRuntime`,
+  `firmware` on `LaunchOptions`, a per-instance varstore copy, the pflash pair
+  in `build_launch_command`, `boot_cloned_instance` carrying it through, a DB
+  column and migration, an `InstanceCreate` field, API refusal when
+  unavailable, a CLI flag and a UI control — plus the snapshot work above.
+
+That is a lot of surface area, all of it reachable only by a user who does not
+exist yet. `_uefi_capability` continues to report "detected, not wired into
+launches", which is the honest description and remains true.
+
+**What this entry is for.** The expensive part of a decision like this is
+usually the investigation, not the code — and the investigation is done. If
+UEFI ever acquires a reason to exist (a Linux guest that needs it, a host where
+TPM is available, Secure Boot testing), the design does not have to be
+rediscovered: the mechanism is measured, the ordering argument is written down,
+and the only remaining work is typing. Recording a settled decision that is
+deliberately not acted on is cheaper than leaving the question open and paying
+to reopen it.
+
+
 - **No license chosen.** Until one exists, the code is not usable by anyone else.
 - **No authentication.** Anything beyond a single trusted machine needs it first.
 - **SQLite, single writer.** Fine now; a multi-process deployment would need
