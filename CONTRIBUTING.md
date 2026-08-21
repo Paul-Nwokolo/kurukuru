@@ -250,6 +250,94 @@ docstring to record *why* the behaviour matters, especially for regressions.
 Where a line encodes a hard-won fact — a WHPX quirk, a Windows API trap, an
 ordering that prevents a race — say so, so it survives the next refactor.
 
+## Restoring the database from a backup
+
+The backend takes a backup of `iaas.db` **automatically, immediately before an
+additive migration changes the schema** — and at no other time. An ordinary
+startup against an up-to-date database writes nothing, because a copy on every
+restart would fill the retention window with identical files and age the one
+useful restore point out of it.
+
+Backups live in `~/.local-iaas/backups/` (`IAAS_DB_BACKUP_DIR`), named
+`iaas-<timestamp>-pre-migration.db`. The newest `IAAS_DB_BACKUP_RETENTION`
+(default 5) are kept and older ones pruned; anything in that directory *not*
+matching that pattern — a hand-made copy, a notes file — is never touched.
+
+**Restore is manual and deliberately not an API.** Putting "replace the
+database" behind an HTTP route means a mis-click can discard live state, and
+the situations that call for a restore are exactly the ones where you want a
+human reading the filenames.
+
+### The procedure
+
+1. **Stop the backend.** SQLite will let you overwrite a file that an open
+   connection is using, and the result is a process holding a page cache for a
+   database that no longer exists underneath it.
+
+2. **Pick the backup.** They sort chronologically by name; the one you want is
+   normally the newest whose timestamp is *before* the upgrade that went wrong.
+
+   ```
+   ls ~/.local-iaas/backups/
+   ```
+
+3. **Move the current database aside rather than deleting it** — including its
+   sidecars. It may still be the better copy, and you cannot tell until after
+   you have looked at the other one.
+
+   ```
+   cd ~/.local-iaas
+   mv iaas.db iaas.db.broken
+   mv iaas.db-wal iaas.db-wal.broken 2>/dev/null
+   mv iaas.db-shm iaas.db-shm.broken 2>/dev/null
+   ```
+
+4. **Copy the backup into place.** One file, and only one:
+
+   ```
+   cp backups/iaas-20260821-132229-pre-migration.db iaas.db
+   ```
+
+   There is no `-wal` or `-shm` to bring with it, and that is the point. The
+   backup is taken through SQLite's **online backup API**, not by copying
+   files: with WAL journalling the committed state is spread across `iaas.db`
+   and `iaas.db-wal`, so copying them one at a time captures two different
+   moments and can produce a pair that do not agree. The online backup reads a
+   consistent snapshot through SQLite itself — safe against a backend that is
+   mid-write — and folds the WAL contents into a single self-contained file.
+   A backup with a sidecar next to it is not one of ours.
+
+5. **Verify before starting the backend**, while it is still cheap to change
+   your mind. Compare row counts against the database you set aside:
+
+   ```
+   for db in iaas.db iaas.db.broken; do
+     echo "== $db"
+     sqlite3 "$db" "SELECT 'instances', COUNT(*) FROM instances
+                    UNION ALL SELECT 'volumes', COUNT(*) FROM volumes
+                    UNION ALL SELECT 'projects', COUNT(*) FROM projects
+                    UNION ALL SELECT 'events', COUNT(*) FROM instance_events;"
+   done
+   ```
+
+   A restored database is expected to have **fewer** rows than the one it
+   replaces — it predates whatever happened since. What it must not have is
+   *zero* where the other has many, or a missing table; either means you picked
+   the wrong file or the copy was truncated.
+
+6. **Start the backend.** It will run the additive migrations against the
+   restored database on the way up, which is the same path that produced the
+   backup in the first place — and it will take a fresh backup first, because
+   the restored file is once again a schema behind.
+
+7. **Reconcile.** The database is desired state, not truth. Instances created
+   after the backup was taken exist on the hypervisor but not in the restored
+   rows; the reconciler will report them as out-of-band. Read
+   `~/.local-iaas/qemu/instances/` to see what is actually there before
+   deciding what to do about the difference.
+
+Once you are satisfied, delete the `.broken` files. Not before.
+
 ## Making a change
 
 1. Read the surrounding code first. Where the code and the phase briefs in

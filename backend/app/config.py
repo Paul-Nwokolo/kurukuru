@@ -132,6 +132,20 @@ class Settings(BaseSettings):
     # directory always wins over the root — see _root_unset_dirs.
     state_dir: str = DEFAULT_STATE_DIR
 
+    # --- Database backups (Phase 14) ---
+    # A copy of the database is taken automatically immediately before an
+    # additive migration changes its shape, and never otherwise — an ordinary
+    # startup on a converged database writes nothing, or every restart would
+    # leave an identical copy behind.
+    #
+    # Under state_dir rather than beside the database, so that "the database and
+    # everything that protects it" is not one `rm iaas.db*` away from being
+    # gone, and so a backup is never mistaken for a live sidecar.
+    db_backup_dir: str = f"{DEFAULT_STATE_DIR}/backups"
+    # How many automatic backups to keep. Older ones are pruned oldest-first
+    # after a successful new one. 0 disables pruning and keeps everything.
+    db_backup_retention: int = 5
+
     # --- Cloud-init & SSH access (Phase 4) ---
     default_vm_user: str = "iaas"       # non-root sudo user created on every VM
     # Orchestrator keypair location. "~" is expanded at use-time in ssh_keys.py.
@@ -257,6 +271,7 @@ class Settings(BaseSettings):
         "ssh_key_dir": "keys",
         "cloud_init_dir": "cloud-init",
         "iso_dir": "isos",
+        "db_backup_dir": "backups",
     }
 
     #: The database's leaf under ``state_dir``. Separate from ``_ROOTED_DIRS``

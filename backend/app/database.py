@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sqlite3
 from collections.abc import Generator
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import event, inspect, text
@@ -227,6 +230,168 @@ def _seed_default_network(connection) -> None:
         logger.info("Attached %d instance(s) to the default network", result.rowcount)
 
 
+# --------------------------------------------------------------------------- #
+# Pre-migration backups
+# --------------------------------------------------------------------------- #
+#: Automatic backups are named so that pruning can glob for exactly the files
+#: this module wrote. The directory is shared with hand-made backups (Phase 13
+#: left one there), and deleting somebody's manual copy because it happened to
+#: sit in the same folder would be a poor trade for tidiness.
+_BACKUP_PREFIX = "iaas-"
+_BACKUP_SUFFIX = "-pre-migration.db"
+_BACKUP_GLOB = f"{_BACKUP_PREFIX}*{_BACKUP_SUFFIX}"
+
+
+@dataclass(frozen=True)
+class PendingMigration:
+    """What ``_apply_additive_migrations`` is about to change, if anything.
+
+    Computed *before* the work so the answer can gate a backup. Truthiness is
+    the question every caller actually asks: is this startup a no-op?
+    """
+
+    columns: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    indexes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+    def __bool__(self) -> bool:
+        return bool(self.columns or self.indexes)
+
+    def describe(self) -> str:
+        parts = [f"{table}: add {', '.join(cols)}"
+                 for table, cols in sorted(self.columns.items())]
+        parts += [f"{table}: redefine {', '.join(idx)}"
+                  for table, idx in sorted(self.indexes.items())]
+        return "; ".join(parts) if parts else "nothing"
+
+
+def _pending_migrations(inspector, existing_tables: set[str]) -> PendingMigration:
+    """Which columns and indexes the migration below would actually touch.
+
+    Deliberately mirrors the apply loop's conditions rather than approximating
+    them: if the two ever disagree, either a backup is taken for a startup that
+    changes nothing, or -- much worse -- a schema change lands without one.
+    """
+    columns: dict[str, tuple[str, ...]] = {}
+    indexes: dict[str, tuple[str, ...]] = {}
+
+    for table, wanted in _ADDED_COLUMNS.items():
+        if table not in existing_tables:
+            continue  # create_all just built it with the full schema
+        present = {col["name"] for col in inspector.get_columns(table)}
+        missing = tuple(name for name, _ddl in wanted if name not in present)
+        if missing:
+            columns[table] = missing
+
+    for table, wanted in _REDEFINED_INDEXES.items():
+        if table not in existing_tables:
+            continue
+        current = {idx["name"]: idx for idx in inspector.get_indexes(table)}
+        stale = tuple(
+            name for name, _ddl in wanted
+            if current.get(name) is None or current[name].get("unique")
+        )
+        if stale:
+            indexes[table] = stale
+
+    return PendingMigration(columns=columns, indexes=indexes)
+
+
+def _unique_backup_path(directory: Path, stamp: str) -> Path:
+    """A backup filename that does not already exist.
+
+    Two migrations inside the same second is contrived, but a collision would
+    silently overwrite the older backup -- the one thing a backup must never do.
+    """
+    candidate = directory / f"{_BACKUP_PREFIX}{stamp}{_BACKUP_SUFFIX}"
+    counter = 2
+    while candidate.exists():
+        candidate = directory / f"{_BACKUP_PREFIX}{stamp}-{counter}{_BACKUP_SUFFIX}"
+        counter += 1
+    return candidate
+
+
+def _prune_backups(directory: Path, keep: int) -> list[Path]:
+    """Delete all but the newest ``keep`` automatic backups. Never anything else.
+
+    Only files matching this module's own naming pattern are considered, and
+    only files -- the directory also holds hand-made backups, which are somebody
+    else's decision to keep.
+    """
+    if keep <= 0:
+        return []
+    ours = sorted(
+        (path for path in directory.glob(_BACKUP_GLOB) if path.is_file()),
+        key=lambda path: path.name,          # the name is a timestamp
+    )
+    removed: list[Path] = []
+    for path in ours[:-keep] if len(ours) > keep else []:
+        try:
+            path.unlink()
+        except OSError as exc:
+            logger.warning("Could not prune old backup %s: %s", path, exc)
+        else:
+            removed.append(path)
+    return removed
+
+
+def backup_database(settings_in_use: Settings, engine_in_use: Engine) -> Path | None:
+    """Snapshot the database with SQLite's online backup API. Returns the path.
+
+    **Why not copy the file.** A live backend may be mid-write, and with WAL
+    journalling the committed state is spread across ``iaas.db`` and
+    ``iaas.db-wal``. Copying them one at a time gives a pair from two different
+    moments -- exactly the failure a backup exists to prevent. The online backup
+    API instead reads a consistent snapshot through SQLite itself, over a
+    separate connection so an in-flight writer is not blocked, and folds the WAL
+    contents in. The result is one self-contained ``.db`` file with **no
+    sidecars to keep with it**, which is also what makes the documented restore
+    a single copy.
+
+    Returns None, loudly, when it could not run. A backup failure does not stop
+    the backend: the migrations it guards are additive, and refusing to start
+    because a backup directory is unwritable would turn a precaution into an
+    outage. The error names the path so the operator can fix it.
+    """
+    source = _engine_file(engine_in_use)
+    if source is None or not _has_rows(source):
+        return None  # in-memory, a server URL, or nothing worth copying yet
+
+    # The same guard ``relocate_legacy_database`` uses, for the same reason: the
+    # test suite runs against engines of its own, and a backup routine that
+    # trusted settings alone would write copies of a tmp_path database into the
+    # developer's real state directory.
+    if source != settings_in_use.database_path:
+        return None
+
+    directory = Path(settings_in_use.db_backup_dir).expanduser()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = _unique_backup_path(directory, stamp)
+        origin = sqlite3.connect(str(source))
+        try:
+            copy = sqlite3.connect(str(destination))
+            try:
+                origin.backup(copy)
+            finally:
+                copy.close()
+        finally:
+            origin.close()
+    except (OSError, sqlite3.Error) as exc:
+        logger.error(
+            "Could not back up the database to %s: %s. Continuing with the "
+            "migration -- it is additive -- but there is no restore point for it.",
+            directory, exc,
+        )
+        return None
+
+    logger.info("Backed up the database to %s (%d bytes)",
+                destination, destination.stat().st_size)
+    for pruned in _prune_backups(directory, settings_in_use.db_backup_retention):
+        logger.info("Pruned old backup %s", pruned.name)
+    return destination
+
+
 def _apply_additive_migrations() -> None:
     """Bring an existing database up to the current schema. Idempotent.
 
@@ -235,6 +400,15 @@ def _apply_additive_migrations() -> None:
     """
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
+
+    # Before anything is altered, and only when something will be: an ordinary
+    # startup against a converged database must not leave an identical copy
+    # behind, or the retention window fills with noise and the one useful
+    # restore point ages out of it.
+    pending = _pending_migrations(inspector, existing_tables)
+    if pending:
+        logger.info("Schema changes pending -- %s", pending.describe())
+        backup_database(get_settings(), engine)
 
     with engine.begin() as connection:
         for table, columns in _ADDED_COLUMNS.items():

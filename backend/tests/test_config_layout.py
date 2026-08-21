@@ -32,6 +32,7 @@ def test_defaults_are_unchanged_by_the_new_root():
     assert settings.ssh_key_dir == "~/.local-iaas/keys"
     assert settings.cloud_init_dir == "~/.local-iaas/cloud-init"
     assert settings.iso_dir == "~/.local-iaas/isos"
+    assert settings.db_backup_dir == "~/.local-iaas/backups"
     assert settings.database_url == "sqlite:///~/.local-iaas/iaas.db"
 
 
@@ -42,7 +43,27 @@ def test_state_dir_moves_every_directory_that_follows_it():
     assert settings.ssh_key_dir == "/var/lib/local-iaas/keys"
     assert settings.cloud_init_dir == "/var/lib/local-iaas/cloud-init"
     assert settings.iso_dir == "/var/lib/local-iaas/isos"
+    assert settings.db_backup_dir == "/var/lib/local-iaas/backups"
     assert settings.database_url == "sqlite:////var/lib/local-iaas/iaas.db"
+
+
+def test_every_rooted_directory_actually_follows_the_root():
+    """The guarantee the _ROOTED_DIRS table exists to provide.
+
+    Asserting the table drives the behaviour — rather than listing the
+    directories again by hand — is what stops the next directory added to it
+    from being silently left behind, which is the exact failure the table was
+    introduced to prevent.
+    """
+    settings = Settings(state_dir="/srv/iaas")
+    # Read off the instance, not the class: pydantic exposes a private attr on
+    # the class as a ModelPrivateAttr wrapper, and only instance access gives
+    # back the dict — which is also how _apply_state_dir reads it.
+    rooted = settings._ROOTED_DIRS
+
+    assert rooted, "the table itself must not be empty"
+    for field, leaf in rooted.items():
+        assert getattr(settings, field) == f"/srv/iaas/{leaf}", field
 
 
 def test_an_xdg_layout_is_expressible_with_one_variable():
