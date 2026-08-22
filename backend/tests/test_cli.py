@@ -1096,3 +1096,85 @@ def test_a_colliding_forward_exits_invalid_with_the_reason(cli):
 
     assert result.exit_code == ExitCode.INVALID
     assert "already forwards" in result.output
+
+
+# --------------------------------------------------------------------------- #
+# Volume snapshots — a separate command tree from `iaas snapshot`
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def vol_snap_cli(vol_cli):
+    """vol_cli is enough: FakeQemuEngine already implements volume snapshots in
+    memory, so nothing here needs to reach for qemu-img."""
+    return vol_cli
+
+
+def test_volume_snapshot_create_and_ls(vol_snap_cli):
+    vol_snap_cli("volumes", "create", "data", "1G", "--wait")
+
+    created = vol_snap_cli(
+        "volumes", "snapshot", "create", "data", "before-upgrade", "--wait"
+    )
+    assert created.exit_code == 0, created.output
+
+    listed = vol_snap_cli("volumes", "snapshot", "ls", "data")
+    assert listed.exit_code == 0
+    assert "before-upgrade" in listed.stdout
+
+
+def test_volume_snapshot_create_says_the_instance_is_not_included(vol_snap_cli):
+    """The half of the warning this command owns. Said at the moment of the
+    action, not only in a help string."""
+    vol_snap_cli("volumes", "create", "data", "1G", "--wait")
+
+    result = vol_snap_cli("volumes", "snapshot", "create", "data", "snap", "--wait")
+
+    assert "not any instance" in result.output
+
+
+def test_a_volume_attached_to_a_stopped_instance_can_be_snapshotted(vol_snap_cli):
+    """The decision the feature turns on: attached is fine, running is not."""
+    vol_snap_cli("volumes", "create", "data", "1G", "--wait")
+    launch(vol_snap_cli, "web-one")
+    vol_snap_cli("stop", "web-one", "--wait")
+    assert vol_snap_cli("volumes", "attach", "data", "web-one").exit_code == 0
+
+    result = vol_snap_cli("volumes", "snapshot", "create", "data", "attached", "--wait")
+
+    assert result.exit_code == 0, result.output
+
+
+def test_snapshotting_while_a_running_instance_holds_it_exits_conflict(vol_snap_cli):
+    vol_snap_cli("volumes", "create", "data", "1G", "--wait")
+    launch(vol_snap_cli, "web-one")
+    vol_snap_cli("stop", "web-one", "--wait")
+    vol_snap_cli("volumes", "attach", "data", "web-one")
+    vol_snap_cli("start", "web-one", "--wait")
+
+    result = vol_snap_cli("volumes", "snapshot", "create", "data", "nope")
+
+    assert result.exit_code == ExitCode.CONFLICT
+    assert "mid-write" in result.output
+    assert "can stay attached" in result.output
+
+
+def test_volume_snapshot_restore_and_rm(vol_snap_cli):
+    vol_snap_cli("volumes", "create", "data", "1G", "--wait")
+    vol_snap_cli("volumes", "snapshot", "create", "data", "before", "--wait")
+
+    restored = vol_snap_cli("volumes", "snapshot", "restore", "data", "before", "--yes")
+    assert restored.exit_code == 0, restored.output
+
+    removed = vol_snap_cli(
+        "volumes", "snapshot", "rm", "data", "before", "--yes", "--wait"
+    )
+    assert removed.exit_code == 0, removed.output
+    assert "no snapshots" in vol_snap_cli("volumes", "snapshot", "ls", "data").stdout
+
+
+def test_an_unknown_volume_snapshot_exits_not_found(vol_snap_cli):
+    vol_snap_cli("volumes", "create", "data", "1G", "--wait")
+
+    result = vol_snap_cli("volumes", "snapshot", "restore", "data", "ghost", "--yes")
+
+    assert result.exit_code == ExitCode.NOT_FOUND
+    assert "no snapshot named" in result.output

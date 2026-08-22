@@ -235,6 +235,10 @@ class ComputeEngine(ABC):
 
     #: Whether this driver can snapshot at all.
     supports_snapshots: bool = False
+    #: Whether snapshots can be taken of a *volume*, separately from any
+    #: instance. A driver can support one and not the other: instance
+    #: snapshots may capture VM state, while a volume is only ever a file.
+    supports_volume_snapshots: bool = False
 
     #: Whether snapshots require the instance to be stopped first. True for
     #: QEMU — see docs/DECISIONS.md for the evidence behind that.
@@ -279,3 +283,15 @@ class ComputeEngine(ABC):
     def delete_snapshot(self, name: str, tag: str) -> None:
         """Remove a snapshot. Absent snapshot is not an error."""
         raise NotImplementedError(f"{self.name} does not support snapshots")
+
+    def create_volume_snapshot(self, volume_path: str, tag: str) -> SnapshotInfo:
+        raise NotImplementedError
+
+    def list_volume_snapshots(self, volume_path: str) -> list[SnapshotInfo]:
+        raise NotImplementedError
+
+    def restore_volume_snapshot(self, volume_path: str, tag: str) -> None:
+        raise NotImplementedError
+
+    def delete_volume_snapshot(self, volume_path: str, tag: str) -> None:
+        raise NotImplementedError

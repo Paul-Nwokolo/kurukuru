@@ -476,6 +476,56 @@ export async function getInstanceKeyPairs(id: string): Promise<InstalledKeyPair[
   return data
 }
 
+// --- Volume snapshots ----------------------------------------------------- //
+// A separate resource from an instance snapshot, not a variant of one. They
+// capture different files and neither includes the other, which is why the two
+// live under different routes and are typed apart rather than sharing a shape
+// with a discriminator.
+
+export interface VolumeSnapshot {
+  id: string
+  volume_id: string
+  name: string
+  description: string | null
+  size_bytes: number | null
+  status: SnapshotStatus
+  error_message: string | null
+  created_at: string
+}
+
+export async function getVolumeSnapshots(volumeId: string): Promise<VolumeSnapshot[]> {
+  const { data } = await http.get<VolumeSnapshot[]>(`/volumes/${volumeId}/snapshots`)
+  return data
+}
+
+export async function createVolumeSnapshot(
+  volumeId: string,
+  payload: { name: string; description?: string | null },
+): Promise<VolumeSnapshot> {
+  const { data } = await http.post<VolumeSnapshot>(`/volumes/${volumeId}/snapshots`, payload)
+  return data
+}
+
+export async function restoreVolumeSnapshot(
+  volumeId: string,
+  snapshotId: string,
+): Promise<VolumeSnapshot> {
+  const { data } = await http.post<VolumeSnapshot>(
+    `/volumes/${volumeId}/snapshots/${snapshotId}/restore`,
+  )
+  return data
+}
+
+export async function deleteVolumeSnapshot(
+  volumeId: string,
+  snapshotId: string,
+): Promise<VolumeSnapshot> {
+  const { data } = await http.delete<VolumeSnapshot>(
+    `/volumes/${volumeId}/snapshots/${snapshotId}`,
+  )
+  return data
+}
+
 // --- Snapshots ------------------------------------------------------------ //
 
 export type SnapshotStatus = 'Creating' | 'Available' | 'Error' | 'Deleting'

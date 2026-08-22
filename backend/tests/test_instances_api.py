@@ -68,6 +68,9 @@ class FakeQemuEngine(ComputeEngine):
         # ISO guests get no key injection, so the real engine reports them with
         # no address and no SSH port — the console is their only way in.
         self.iso_mode = False
+        # Volume snapshot tags, keyed by file path — a volume is
+        # identified on disk by path, not by name.
+        self._volume_snaps: dict[str, list[str]] = {}
         # What set_volumes was last told, per instance. The real engine writes
         # this into the runtime file; here it is inspectable, which is how the
         # order tests assert the database and the driver agree.
@@ -131,6 +134,10 @@ class FakeQemuEngine(ComputeEngine):
     supports_volumes = True
     supports_port_forwards = True
     supports_clone = True
+    # Volume snapshots are a volume capability, so they live with the volume
+    # support rather than in the snapshot-specific subclass — a test that only
+    # needs volumes should not have to opt into an instance-snapshot fake.
+    supports_volume_snapshots = True
 
     def clone_disk(self, source, target, disk_gb=None):
         self._record("clone", source)
@@ -149,6 +156,25 @@ class FakeQemuEngine(ComputeEngine):
 
     def remove_port_forward(self, name, spec):
         self.forwards[name] = [s for s in self.forwards.get(name, []) if s != spec]
+
+    def create_volume_snapshot(self, volume_path, tag):
+        from app.engines.base import SnapshotInfo
+
+        self._volume_snaps.setdefault(str(volume_path), []).append(tag)
+        return SnapshotInfo(tag=tag, size_bytes=0)
+
+    def list_volume_snapshots(self, volume_path):
+        from app.engines.base import SnapshotInfo
+
+        return [SnapshotInfo(tag=t) for t in self._volume_snaps.get(str(volume_path), [])]
+
+    def restore_volume_snapshot(self, volume_path, tag):
+        pass
+
+    def delete_volume_snapshot(self, volume_path, tag):
+        tags = self._volume_snaps.get(str(volume_path), [])
+        if tag in tags:
+            tags.remove(tag)
 
     def set_volumes(self, name, paths):
         self.volumes[name] = list(paths)

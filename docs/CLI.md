@@ -422,6 +422,26 @@ that explanation.
 "restore" sounds like recovery, but for anything written since the snapshot it
 is a deletion. `--yes` skips it; nothing prompts when stdout is not a terminal.
 
+### Volume snapshots
+
+```bash
+iaas volumes snapshot create win-data before-upgrade -d "clean install" --wait
+iaas volumes snapshot ls win-data
+iaas volumes snapshot ls win-data --json
+iaas volumes snapshot restore win-data before-upgrade --yes
+iaas volumes snapshot rm win-data before-upgrade --yes
+```
+
+A **separate thing** from `iaas snapshot`, which captures an instance. An
+instance snapshot does not include attached volumes; a volume snapshot does not
+include the instance. Restoring one does not restore the other.
+
+The volume may stay **attached** — what it may not be is held by a *running*
+instance. Stop the instance and the snapshot works with the volume still
+attached; a running one gets exit 5 with that explanation.
+
+`restore` confirms by default, same as above and for the same reason.
+
 ### Images and boot media
 
 ```bash

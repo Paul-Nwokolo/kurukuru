@@ -1748,6 +1748,80 @@ deliberately not acted on is cheaper than leaving the question open and paying
 to reopen it.
 
 
+## 43. Volume snapshots get their own table, and are gated on "no running instance"
+
+**Context.** Phase 11 built volumes and deliberately left snapshots out: a volume
+is a plain qcow2 and `qemu-img` would work on it, but it needed its own lifecycle
+and its own confirm semantics rather than being folded into instance snapshots.
+Two questions had to be answered first.
+
+### Why a separate table rather than one with a discriminator
+
+`Snapshot.instance_id` is `NOT NULL` with a real foreign key. Sharing the table
+would need it nullable, alongside a nullable `volume_id` and a mutual-exclusion
+rule enforced in application code — two columns that are each meaningless for
+half the rows.
+
+The semantics are also opposite. `Snapshot`'s own docstring says destroying the
+instance destroys its snapshots, because they live inside an overlay that goes
+with the instance directory. A volume outlives every instance it is attached to
+— that is the entire point of the feature (decision 23) — so its snapshots must
+outlive them too. A shared table with an instance foreign key invites exactly the
+cleanup that would delete them at the wrong moment.
+
+The decisive argument is practical. **Making a `NOT NULL` column nullable in
+SQLite is a table rebuild** — the create-copy-swap that `_REDEFINED_INDEXES`
+explicitly notes this project does not do, its migrations being additive only.
+Reuse would have required the one migration this codebase has never performed, on
+the table that holds users' restore points. A new table is created by
+`create_all` with no migration at all.
+
+### Why the gate is "no running instance", not "detached"
+
+The invariant that matters is the one decision 15 established: `qemu-img` writing
+to a qcow2 that a live QEMU has open is how the file gets corrupted, and on
+Windows there is no lock to prevent it. A volume attached to a **stopped**
+instance is not open by anything, so snapshotting it is exactly as safe as
+snapshotting a detached one.
+
+Requiring a detach first would therefore add no safety and real friction, because
+decision 22 already requires a stopped instance to detach at all: the strict rule
+turns `stop → snapshot → start` into `stop → detach → snapshot → attach → start`.
+So the check asks about the *instance's* state, which is the thing that actually
+determines whether a process holds the file, and the 409 says the volume can stay
+attached rather than implying it cannot.
+
+The same guard applies to restore, where it matters more. Snapshotting under a
+live guest captures a bad copy; restoring under one replaces the filesystem the
+guest believes it has.
+
+### What is said in both dialogs
+
+An instance snapshot covers the instance's overlay and **not** its attached
+volumes. A volume snapshot covers the volume and **not** the instance it happens
+to be attached to. Two independent operations on two independent files; restoring
+one does not restore the other. Both dialogs say their own half and point at the
+other, because the moment this matters is the moment someone is about to discard
+data on the assumption that one covered both.
+
+### What was left out
+
+**No events.** The event log is an instance's history by schema
+(`InstanceEvent.instance_id`), and a detached volume has no instance to hang one
+on. A null-instance row would make the feed look complete at the cost of every
+reader of that table having to special-case it. If volume history is wanted later
+it needs its own thinking, not a nullable column here — which is the same
+argument as the table above.
+
+**One thing the tests caught that reasoning did not.** Deleting a volume drops its
+snapshot rows, and with no ORM relationship declared between the two tables
+SQLAlchemy is free to emit the volume's `DELETE` first — which trips the foreign
+key under `PRAGMA foreign_keys=ON` and fails the whole request. The rows are
+flushed explicitly before the volume is deleted. Ordering statements is the
+deleting function's job because it is the only place that knows the dependency
+exists.
+
+
 - **No license chosen.** Until one exists, the code is not usable by anyone else.
 - **No authentication.** Anything beyond a single trusted machine needs it first.
 - **SQLite, single writer.** Fine now; a multi-process deployment would need

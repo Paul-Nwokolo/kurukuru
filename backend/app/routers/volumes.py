@@ -394,10 +394,18 @@ def delete_volume(
             status_code=502, detail=f"Could not delete {path}: {exc}"
         ) from exc
 
+    # The snapshots lived inside the file that was just unlinked, so the rows
+    # have to go with it — leaving them would advertise restore points whose
+    # data is already gone. Imported here rather than at module scope because
+    # volume_snapshots imports volume_path from this module.
+    from app.routers.volume_snapshots import delete_snapshots_for_volume
+
+    dropped = delete_snapshots_for_volume(session, volume.id)
     session.delete(volume)
     session.commit()
     invalidate_cache()
-    logger.info("Deleted volume '%s' and %s", volume.name, path)
+    logger.info("Deleted volume '%s' and %s (%d snapshot row(s))",
+                volume.name, path, dropped)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

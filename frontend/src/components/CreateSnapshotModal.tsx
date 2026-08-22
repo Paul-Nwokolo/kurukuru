@@ -99,7 +99,8 @@ export function CreateSnapshotModal({
                 : `The ${attachedVolumes.length} attached volumes are not included`}
             </span>
             , and restoring will not roll them back — the OS returns to this point while
-            the data on those disks moves on.
+            the data on those disks moves on. Snapshot a volume separately from the
+            Volumes page if you need its contents captured too.
           </Alert>
         )}
 

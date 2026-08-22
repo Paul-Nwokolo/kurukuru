@@ -41,7 +41,11 @@ import {
   getNetworkModes,
   getNetworks,
   getProjects,
+  createVolumeSnapshot,
+  deleteVolumeSnapshot,
   getSnapshots,
+  getVolumeSnapshots,
+  restoreVolumeSnapshot,
   getVolumes,
   getSshKey,
   importImage,
@@ -81,6 +85,7 @@ export const queryKeys = {
   events: ['events'] as const,
   projects: ['projects'] as const,
   volumes: ['volumes'] as const,
+  volumeSnapshots: (id: string) => ['volume', id, 'snapshots'] as const,
   networks: ['networks'] as const,
   networkModes: ['network-modes'] as const,
   forwards: (id: string) => ['instance', id, 'forwards'] as const,
@@ -617,6 +622,59 @@ export function useDeleteSnapshot(instanceId: string | undefined) {
   const invalidate = useInvalidateSnapshots(instanceId)
   return useMutation({
     mutationFn: (snapshotId: string) => deleteSnapshot(instanceId as string, snapshotId),
+    onSuccess: invalidate,
+  })
+}
+
+/**
+ * A volume's snapshots. Same polling rule as an instance's, and deliberately a
+ * separate cache key: these are different rows about a different file, and
+ * invalidating one must not imply anything about the other.
+ */
+export function useVolumeSnapshots(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.volumeSnapshots(id ?? ''),
+    queryFn: () => getVolumeSnapshots(id as string),
+    enabled: Boolean(id),
+    refetchInterval: (query) => {
+      const rows = query.state.data
+      const settling = rows?.some((s) => s.status === 'Creating' || s.status === 'Deleting')
+      return settling ? 2_000 : false
+    },
+  })
+}
+
+function useInvalidateVolumeSnapshots(id: string | undefined) {
+  const qc = useQueryClient()
+  return () => {
+    void qc.invalidateQueries({ queryKey: queryKeys.volumeSnapshots(id ?? '') })
+    // The snapshot's data lives inside the volume file, so the volume list's
+    // reported sizes move with it.
+    void qc.invalidateQueries({ queryKey: queryKeys.volumes })
+  }
+}
+
+export function useCreateVolumeSnapshot(volumeId: string | undefined) {
+  const invalidate = useInvalidateVolumeSnapshots(volumeId)
+  return useMutation({
+    mutationFn: (payload: { name: string; description?: string | null }) =>
+      createVolumeSnapshot(volumeId as string, payload),
+    onSuccess: invalidate,
+  })
+}
+
+export function useRestoreVolumeSnapshot(volumeId: string | undefined) {
+  const invalidate = useInvalidateVolumeSnapshots(volumeId)
+  return useMutation({
+    mutationFn: (snapshotId: string) => restoreVolumeSnapshot(volumeId as string, snapshotId),
+    onSuccess: invalidate,
+  })
+}
+
+export function useDeleteVolumeSnapshot(volumeId: string | undefined) {
+  const invalidate = useInvalidateVolumeSnapshots(volumeId)
+  return useMutation({
+    mutationFn: (snapshotId: string) => deleteVolumeSnapshot(volumeId as string, snapshotId),
     onSuccess: invalidate,
   })
 }

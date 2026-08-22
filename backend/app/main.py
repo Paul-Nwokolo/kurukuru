@@ -604,7 +604,8 @@ def ssh_key() -> dict[str, str]:
 
 
 from app.routers import (  # noqa: E402
-    events, images, instances, keypairs, networks, projects, snapshots, volumes,
+    events, images, instances, keypairs, networks, projects, snapshots, volume_snapshots,
+    volumes,
 )
 
 app.include_router(projects.router)
@@ -614,4 +615,5 @@ app.include_router(keypairs.router)
 app.include_router(snapshots.router)
 app.include_router(events.router)
 app.include_router(volumes.router)
+app.include_router(volume_snapshots.router)
 app.include_router(networks.router)

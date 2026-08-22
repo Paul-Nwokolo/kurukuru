@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Database, Link2, Link2Off, Plus, Trash2 } from 'lucide-react'
+import { Database, History, Link2, Link2Off, Plus, Trash2 } from 'lucide-react'
 import type { Volume } from '../api/client'
 import { apiErrorMessage } from '../api/client'
 import {
@@ -12,6 +12,7 @@ import {
 import { deviceHint } from '../lib/format'
 import { ConfirmDialog } from './ConfirmDialog'
 import { CreateVolumeModal } from './CreateVolumeModal'
+import { VolumeSnapshotsModal } from './VolumeSnapshotsModal'
 import { Button, IconButton } from '../ui/Button'
 import { StatusBadge } from '../ui/Status'
 import { Alert, EmptyState, TimeAgo } from '../ui/Feedback'
@@ -31,6 +32,7 @@ export function VolumesTable() {
   const [attachTarget, setAttachTarget] = useState<Volume | null>(null)
   const [attachTo, setAttachTo] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<Volume | null>(null)
+  const [snapshotTarget, setSnapshotTarget] = useState<Volume | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   // Only stopped instances can take a volume, so offering a running one would
@@ -148,6 +150,15 @@ export function VolumesTable() {
                   <TimeAgo value={volume.created_at} />
                 </TD>
                 <TActions>
+                  {/* Offered whether attached or not. The volume only has to be
+                      free of a *running* instance, and the API says so plainly
+                      if it is not — hiding this while attached would imply a
+                      rule that does not exist. */}
+                  <IconButton
+                    icon={History}
+                    title="Snapshots of this volume"
+                    onClick={() => setSnapshotTarget(volume)}
+                  />
                   {volume.status === 'Available' && (
                     <IconButton
                       icon={Link2}
@@ -234,6 +245,13 @@ export function VolumesTable() {
           </Field>
         </div>
       </Modal>
+
+      {snapshotTarget && (
+        <VolumeSnapshotsModal
+          volume={snapshotTarget}
+          onClose={() => setSnapshotTarget(null)}
+        />
+      )}
 
       <ConfirmDialog
         open={deleteTarget !== null}

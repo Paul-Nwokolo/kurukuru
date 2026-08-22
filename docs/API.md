@@ -472,6 +472,55 @@ instance deletes its snapshots with it — they live inside the overlay.
 
 ---
 
+## Volume snapshots
+
+qcow2 internal snapshots of a **volume's** disk. A separate resource from the
+above, not a variant of it.
+
+> **An instance snapshot does not include attached volumes, and a volume
+> snapshot does not include the instance.** Two independent files, two
+> independent operations. Restoring one does not restore the other.
+
+The rule is **no running instance may hold the volume** — not "the volume must
+be detached". A volume attached to a *stopped* instance has nothing holding its
+file open, so it can be snapshotted where it is. Since detaching already
+requires a stopped instance, insisting on a detach would add a stop/attach cycle
+and no safety (DECISIONS #43).
+
+### `POST /volumes/{id}/snapshots` → 202
+
+```json
+{ "name": "before-upgrade", "description": "optional" }
+```
+
+Backgrounded. The response is the row as written, always `Creating`; poll the
+list for the outcome.
+
+| Status | When |
+|---|---|
+| 202 | Accepted |
+| 404 | No such volume |
+| 409 | A running instance holds it; the name is already used on this volume; the volume is not Available or Attached |
+| 422 | The name is unusable as a qcow2 tag (blank, leading `-`, line breaks) |
+
+### `GET /volumes/{id}/snapshots` → 200
+
+Oldest first.
+
+### `POST /volumes/{id}/snapshots/{sid}/restore` → 200
+
+Synchronous — applying a qcow2 snapshot rewrites metadata, not data. Discards
+everything written to the volume since. The instance it is attached to is **not**
+rolled back. Refused with 409 while a running instance holds the volume, and
+while the snapshot is not `Available`.
+
+### `DELETE /volumes/{id}/snapshots/{sid}` → 202
+
+Backgrounded; the row disappears once the snapshot is gone. Deleting the volume
+deletes its snapshots with it — they live inside the volume's qcow2.
+
+---
+
 ## Projects
 
 A project groups instances, images and key pairs so a dashboard holding three

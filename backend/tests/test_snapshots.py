@@ -10,6 +10,8 @@ one that says no.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from datetime import datetime, timezone
 
 import pytest
@@ -31,6 +33,7 @@ class SnapshottingFake(FakeQemuEngine):
     def __init__(self, name: str = "qemu") -> None:
         super().__init__(name)
         self.snaps: dict[str, list[SnapshotInfo]] = {}
+        self.volume_snaps: dict[str, list[SnapshotInfo]] = {}
         self.fail_next: str | None = None
 
     def create_snapshot(self, name, tag):
@@ -53,6 +56,38 @@ class SnapshottingFake(FakeQemuEngine):
 
     def delete_snapshot(self, name, tag):
         self.snaps[name] = [s for s in self.snaps.get(name, []) if s.tag != tag]
+
+    # -- volume snapshots -------------------------------------------------- #
+    # Keyed by path rather than by name, because that is how a volume is
+    # identified on disk. Kept in this fake rather than a second one so that a
+    # test can assert instance and volume snapshots really are independent
+    # while both go through the same engine.
+    supports_volume_snapshots = True
+
+    def create_volume_snapshot(self, volume_path, tag):
+        if self.fail_next:
+            message, self.fail_next = self.fail_next, None
+            raise ComputeEngineError(message)
+        if not Path(volume_path).exists():
+            raise ComputeEngineError(f"No volume file at {volume_path}")
+        info = SnapshotInfo(
+            tag=tag, size_bytes=0, created_at=datetime.now(timezone.utc), hypervisor_id="1"
+        )
+        self.volume_snaps.setdefault(str(volume_path), []).append(info)
+        return info
+
+    def list_volume_snapshots(self, volume_path):
+        return list(self.volume_snaps.get(str(volume_path), []))
+
+    def restore_volume_snapshot(self, volume_path, tag):
+        if tag not in {s.tag for s in self.volume_snaps.get(str(volume_path), [])}:
+            raise ComputeEngineError(f"no volume snapshot {tag}")
+
+    def delete_volume_snapshot(self, volume_path, tag):
+        key = str(volume_path)
+        self.volume_snaps[key] = [
+            s for s in self.volume_snaps.get(key, []) if s.tag != tag
+        ]
 
 
 @pytest.fixture()

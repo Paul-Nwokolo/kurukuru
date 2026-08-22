@@ -361,6 +361,35 @@ class ApiClient:
         )
 
     # ------------------------------------------------------------------ #
+    # Volume snapshots
+    # ------------------------------------------------------------------ #
+    # Separate from the instance snapshot calls above, and not a parameterised
+    # version of them: they address different resources, and collapsing the two
+    # into one method taking a "kind" would make every call site say which kind
+    # anyway, less legibly.
+    def volume_snapshots(self, volume_id: str) -> list[dict]:
+        return self.request("GET", f"/volumes/{volume_id}/snapshots")
+
+    def create_volume_snapshot(
+        self, volume_id: str, name: str, description: str | None = None
+    ) -> dict:
+        return self.request(
+            "POST",
+            f"/volumes/{volume_id}/snapshots",
+            json={"name": name, "description": description},
+        )
+
+    def restore_volume_snapshot(self, volume_id: str, snapshot_id: str) -> dict:
+        return self.request(
+            "POST",
+            f"/volumes/{volume_id}/snapshots/{snapshot_id}/restore",
+            timeout=BLOCKING_TIMEOUT,
+        )
+
+    def delete_volume_snapshot(self, volume_id: str, snapshot_id: str) -> dict:
+        return self.request("DELETE", f"/volumes/{volume_id}/snapshots/{snapshot_id}")
+
+    # ------------------------------------------------------------------ #
     # Images
     # ------------------------------------------------------------------ #
     def images(self) -> list[dict]:

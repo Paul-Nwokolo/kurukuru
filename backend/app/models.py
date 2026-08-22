@@ -440,6 +440,27 @@ class KeyPairRead(SQLModel):
     created_at: datetime
 
 
+def validate_snapshot_tag(v: str) -> str:
+    """Keep a snapshot name usable as a qcow2 tag.
+
+    ``qemu-img`` takes the tag as a positional argument, so a leading dash would
+    be read as a flag, and the listing is parsed back out of a column-formatted
+    table where a newline would corrupt the row.
+
+    Shared by instance and volume snapshots deliberately: both end up as tags
+    inside a qcow2 through the same tool, so a rule that held for one and not
+    the other would be a difference with no cause.
+    """
+    v = v.strip()
+    if not v:
+        raise ValueError("Snapshot name cannot be blank")
+    if v.startswith("-"):
+        raise ValueError("Snapshot name cannot start with '-'")
+    if any(c in v for c in "\r\n\t"):
+        raise ValueError("Snapshot name cannot contain line breaks or tabs")
+    return v
+
+
 class SnapshotStatus(str, Enum):
     """Lifecycle of a snapshot row.
 
@@ -487,20 +508,7 @@ class SnapshotCreate(SQLModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
-        """Keep the name usable as a qcow2 snapshot tag.
-
-        qemu-img takes the tag as a positional argument, so a leading dash
-        would be read as a flag, and the listing is parsed back out of a
-        column-formatted table where a newline would corrupt the row.
-        """
-        v = v.strip()
-        if not v:
-            raise ValueError("Snapshot name cannot be blank")
-        if v.startswith("-"):
-            raise ValueError("Snapshot name cannot start with '-'")
-        if any(c in v for c in "\r\n\t"):
-            raise ValueError("Snapshot name cannot contain line breaks or tabs")
-        return v
+        return validate_snapshot_tag(v)
 
 
 class SnapshotRead(SQLModel):
@@ -764,6 +772,65 @@ class Volume(SQLModel, table=True):
     attach_order: int | None = Field(default=None)
     project_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+class VolumeSnapshot(SQLModel, table=True):
+    """A point-in-time state of one volume's qcow2.
+
+    A separate table from :class:`Snapshot` rather than a shared one with a
+    discriminator, for three reasons (DECISIONS #43). ``Snapshot.instance_id``
+    is NOT NULL with a real foreign key, so sharing would need it nullable
+    alongside a nullable ``volume_id`` and a mutual-exclusion rule enforced in
+    application code. The semantics are opposite: an instance snapshot dies with
+    its instance, while a volume outlives every instance it is attached to and
+    its snapshots must outlive them too. And making a NOT NULL column nullable
+    in SQLite is a table rebuild — the create-copy-swap this project's additive
+    migrations deliberately never do — on the table holding restore points.
+
+    Like an instance snapshot, this lives *inside* the volume's qcow2, which is
+    why deleting the volume takes its snapshots with it and no hypervisor work
+    is needed to clean them up.
+    """
+
+    __tablename__ = "volume_snapshots"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    volume_id: str = Field(foreign_key="volumes.id", index=True)
+    #: Unique per volume, enforced in the router. Also the qcow2 tag.
+    name: str = Field(index=True, min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=500)
+    #: VM state size as qemu-img reports it. Always zero here — a volume has no
+    #: VM state — but carried so the shape matches an instance snapshot rather
+    #: than inventing a difference the reader has to explain to themselves.
+    size_bytes: int | None = Field(default=None)
+    status: SnapshotStatus = Field(default=SnapshotStatus.CREATING, index=True)
+    error_message: str | None = Field(default=None)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class VolumeSnapshotCreate(SQLModel):
+    """Body for POST /volumes/{id}/snapshots."""
+
+    name: str = Field(min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return validate_snapshot_tag(v)
+
+
+class VolumeSnapshotRead(SQLModel):
+    """Response schema for the volume snapshots API."""
+
+    id: str
+    volume_id: str
+    name: str
+    description: str | None
+    size_bytes: int | None
+    status: SnapshotStatus
+    error_message: str | None
+    created_at: datetime
 
 
 class VolumeCreate(SQLModel):

@@ -1263,11 +1263,58 @@ class QemuEngine(ComputeEngine):
     supports_port_forwards = True
     supports_volumes = True
     supports_snapshots = True
+    supports_volume_snapshots = True
     snapshots_require_stopped = True
 
     def _disk_path(self, name: str) -> Path:
         return self._dir(name) / _DISK_FILE
 
+    # ---- qcow2 snapshot mechanics, shared by instances and volumes -------- #
+    #
+    # An instance snapshot and a volume snapshot are the same operation on
+    # different files: a qcow2 internal snapshot taken with qemu-img while
+    # nothing has the file open. The difference is entirely in *who decides it
+    # is safe* — an instance is checked against its own QEMU process here, a
+    # volume is checked against the instance holding it, up in the router. So
+    # the mechanics live once, below, and the two entry points differ only in
+    # how they resolve a path and what they refuse.
+
+    def _snapshot_create(self, disk: Path, tag: str, subject: str) -> SnapshotInfo:
+        self._run(
+            [self._img_binary, "snapshot", "-c", tag, str(disk)],
+            timeout=self._settings.qemu_snapshot_timeout_seconds,
+        )
+        logger.info("Created snapshot '%s' of %s", tag, subject)
+        for snapshot in self._snapshot_list(disk):
+            if snapshot.tag == tag:
+                return snapshot
+        # qemu-img exited 0, so it exists; report what we know rather than fail.
+        return SnapshotInfo(tag=tag)
+
+    def _snapshot_list(self, disk: Path) -> list[SnapshotInfo]:
+        if not disk.exists():
+            return []
+        proc = self._run(
+            [self._img_binary, "snapshot", "-l", str(disk)],
+            timeout=self._settings.cli_timeout_seconds,
+        )
+        return _parse_snapshot_list(proc.stdout)
+
+    def _snapshot_restore(self, disk: Path, tag: str, subject: str) -> None:
+        self._run(
+            [self._img_binary, "snapshot", "-a", tag, str(disk)],
+            timeout=self._settings.qemu_snapshot_timeout_seconds,
+        )
+        logger.info("Restored %s to snapshot '%s'", subject, tag)
+
+    def _snapshot_delete(self, disk: Path, tag: str, subject: str) -> None:
+        self._run(
+            [self._img_binary, "snapshot", "-d", tag, str(disk)],
+            timeout=self._settings.qemu_snapshot_timeout_seconds,
+        )
+        logger.info("Deleted snapshot '%s' of %s", tag, subject)
+
+    # ---- instances --------------------------------------------------------- #
     def create_snapshot(self, name: str, tag: str) -> SnapshotInfo:
         """Take a qcow2 internal snapshot of the instance's overlay.
 
@@ -1281,30 +1328,11 @@ class QemuEngine(ComputeEngine):
         if not disk.exists():
             raise ComputeEngineError(f"No disk for instance '{name}' at {disk}")
         self._refuse_if_running(name, "snapshot")
-
-        self._run(
-            [self._img_binary, "snapshot", "-c", tag, str(disk)],
-            timeout=self._settings.qemu_snapshot_timeout_seconds,
-        )
-        logger.info("Created snapshot '%s' of '%s'", tag, name)
-
-        for snapshot in self.list_snapshots(name):
-            if snapshot.tag == tag:
-                return snapshot
-        # qemu-img exited 0, so it exists; report what we know rather than fail.
-        return SnapshotInfo(tag=tag)
+        return self._snapshot_create(disk, tag, f"'{name}'")
 
     def list_snapshots(self, name: str) -> list[SnapshotInfo]:
         """Snapshots held in the overlay, newest last (qcow2 ordering)."""
-        disk = self._disk_path(name)
-        if not disk.exists():
-            return []
-
-        proc = self._run(
-            [self._img_binary, "snapshot", "-l", str(disk)],
-            timeout=self._settings.cli_timeout_seconds,
-        )
-        return _parse_snapshot_list(proc.stdout)
+        return self._snapshot_list(self._disk_path(name))
 
     def restore_snapshot(self, name: str, tag: str) -> None:
         """Roll the overlay back to ``tag``, discarding everything since."""
@@ -1312,12 +1340,7 @@ class QemuEngine(ComputeEngine):
         if not disk.exists():
             raise ComputeEngineError(f"No disk for instance '{name}' at {disk}")
         self._refuse_if_running(name, "restore")
-
-        self._run(
-            [self._img_binary, "snapshot", "-a", tag, str(disk)],
-            timeout=self._settings.qemu_snapshot_timeout_seconds,
-        )
-        logger.info("Restored '%s' to snapshot '%s'", name, tag)
+        self._snapshot_restore(disk, tag, f"'{name}'")
 
     def delete_snapshot(self, name: str, tag: str) -> None:
         """Drop a snapshot from the overlay. Absent is not an error."""
@@ -1333,11 +1356,41 @@ class QemuEngine(ComputeEngine):
         # nothing about instances. Refusing here turns it into a sentence that
         # names the instance and the fix.
         self._refuse_if_running(name, "delete a snapshot of")
-        self._run(
-            [self._img_binary, "snapshot", "-d", tag, str(disk)],
-            timeout=self._settings.qemu_snapshot_timeout_seconds,
-        )
-        logger.info("Deleted snapshot '%s' of '%s'", tag, name)
+        self._snapshot_delete(disk, tag, f"'{name}'")
+
+    # ---- volumes ----------------------------------------------------------- #
+    #
+    # These take a path rather than a name because that is what a volume is
+    # identified by on disk: the file is named by uuid and nothing outside the
+    # database refers to it (DECISIONS #22). There is no "is it running" check
+    # to make here — a volume has no process of its own. The safety question is
+    # whether a *running instance* holds it, which only the router can answer,
+    # and it does before calling any of these.
+
+    def create_volume_snapshot(self, volume_path: str, tag: str) -> SnapshotInfo:
+        disk = Path(volume_path)
+        if not disk.exists():
+            raise ComputeEngineError(f"No volume file at {disk}")
+        return self._snapshot_create(disk, tag, f"volume {disk.name}")
+
+    def list_volume_snapshots(self, volume_path: str) -> list[SnapshotInfo]:
+        return self._snapshot_list(Path(volume_path))
+
+    def restore_volume_snapshot(self, volume_path: str, tag: str) -> None:
+        disk = Path(volume_path)
+        if not disk.exists():
+            raise ComputeEngineError(f"No volume file at {disk}")
+        self._snapshot_restore(disk, tag, f"volume {disk.name}")
+
+    def delete_volume_snapshot(self, volume_path: str, tag: str) -> None:
+        """Drop a snapshot from the volume. Absent is not an error."""
+        disk = Path(volume_path)
+        if not disk.exists():
+            return
+        if tag not in {s.tag for s in self._snapshot_list(disk)}:
+            logger.info("Volume snapshot '%s' already gone", tag)
+            return
+        self._snapshot_delete(disk, tag, f"volume {disk.name}")
 
     def _refuse_if_running(self, name: str, action: str) -> None:
         """Refuse any snapshot operation on a live instance.

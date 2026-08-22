@@ -32,6 +32,12 @@ volumes_app = typer.Typer(
     no_args_is_help=True,
 )
 
+# `iaas volumes snapshot ...` lives under volumes rather than beside
+# `iaas snapshot`, which already means an instance's disk. Mounted here, and
+# imported at the bottom of this module, because that sub-app resolves volumes
+# through resolve_volume above.
+
+
 _STATUS_STYLES = {
     "Available": "green",
     "Attached": "cyan",
@@ -261,3 +267,8 @@ def rm(
 
     client.delete_volume(volume["id"])
     out.human(f"{volume['name']} deleted")
+
+
+from app.cli.commands_volume_snapshots import volume_snapshots_app  # noqa: E402
+
+volumes_app.add_typer(volume_snapshots_app, name="snapshot")
