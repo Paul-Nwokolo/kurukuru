@@ -1186,3 +1186,37 @@ def test_a_windows_clone_also_gets_usb_input(eng):
         )
     cmd = eng.build_launch_command("winclone", eng._read_runtime("winclone"))
     assert "usb-kbd,bus=xhci.0" in cmd
+
+
+def test_info_reports_an_unreachable_monitor_without_calling_it_stopped(eng):
+    """The state that produced 40 minutes of Running/Stopped flapping, now
+    carried out of the engine instead of only logged."""
+    eng._write_runtime("web", _runtime(pid=4242))
+    with patch("app.engines.qemu.pid_alive", return_value=True), \
+         patch("app.engines.qemu.is_responsive", return_value=False), \
+         patch("app.engines.qemu.is_port_free", return_value=False):
+        info = eng.get_instance_info("web")
+
+    assert info.status is InstanceStatus.RUNNING
+    assert info.monitor_reachable is False
+
+
+def test_info_reports_a_healthy_monitor(eng):
+    eng._write_runtime("web", _runtime(pid=4242))
+    with patch("app.engines.qemu.pid_alive", return_value=True), \
+         patch("app.engines.qemu.is_responsive", return_value=True), \
+         patch.object(QemuEngine, "_probe_ssh_banner", return_value=None):
+        info = eng.get_instance_info("web")
+
+    assert info.monitor_reachable is True
+
+
+def test_a_stopped_instance_has_no_monitor_to_report_on(eng):
+    """None, not False. A stopped VM has no monitor, and reporting it as
+    unanswering would put every stopped instance into a warning state."""
+    eng._write_runtime("web", _runtime(pid=4242))
+    with patch("app.engines.qemu.pid_alive", return_value=False):
+        info = eng.get_instance_info("web")
+
+    assert info.status is InstanceStatus.STOPPED
+    assert info.monitor_reachable is None

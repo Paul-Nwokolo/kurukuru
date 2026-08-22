@@ -155,6 +155,45 @@ Two more rules the pass obeys:
   *with* an address. Only the job — which knows the launch returned — can finish
   the transition for address-less guests.
 
+### Liveness has three states, and QMP serves one client
+
+The reconciler asks two questions about a QEMU instance: is the process alive,
+and does its QMP monitor answer. Those are not one question, and collapsing them
+caused a real failure.
+
+**QEMU's QMP chardev accepts a single client at a time.** While anything else
+holds that socket, a handshake from the backend cannot complete. The original
+two-factor check read that as "not running" and the reconciler rewrote a healthy
+instance to `Stopped`, clearing its pid — observed as a 40-minute
+Running/Stopped flap that ended within one cycle of the competing client
+disconnecting.
+
+So `QemuEngine._liveness` returns three states:
+
+| pid alive | QMP answers | QMP port bindable | verdict |
+|---|---|---|---|
+| no | — | — | `stopped` |
+| yes | yes | — | `running` |
+| yes | no | no | `unreachable` — something else holds the monitor |
+| yes | no | yes | `stopped` — QEMU is gone; this pid is someone else's |
+
+The port is the tie-breaker. QEMU holds its QMP port for as long as it lives, so
+a busy monitor still has something bound to it while a dead QEMU has released
+it. That distinguishes a contended socket from a *recycled pid*, which was the
+reason the QMP check existed in the first place — both concerns are served
+rather than traded off.
+
+`unreachable` counts as up: the process exists, and saying otherwise is simply
+false. It is carried out of the engine on `InstanceInfo.monitor_reachable`,
+persisted by the reconciler, and surfaced as **Degraded** with its own
+explanation — not as healthy, and not as stopped.
+
+**This is an operational constraint, not only an internal detail.** Any second
+consumer of a VM's QMP socket will produce it: a debugging session with `nc`, a
+screendump or console tool, a second backend process pointed at the same state
+directory. If instances start reporting a degraded monitor, look for the other
+client before looking at the VM.
+
 ## Invariants worth stating
 
 - **Name uniqueness is application-enforced**, in `POST /instances`, and scoped

@@ -71,9 +71,11 @@ is in [docs/PORTABILITY.md](docs/PORTABILITY.md).
 
 Not built: authentication, multi-host, golden-image capture from a running VM,
 bridged and host-only networking (both need elevation or a component this
-project does not ship — see DECISIONS #24), live resize, volume snapshots. Snapshots require the instance to be stopped —
-see [DECISIONS #15](docs/DECISIONS.md) for the measurements behind that. See
-[Project status](#project-status).
+project does not ship — see DECISIONS #24), live resize, UEFI boot (the
+mechanism is measured and the design settled — see DECISIONS #42 — but nothing
+consumes it). Snapshots — of an instance or of a volume — require the instance
+to be stopped; see [DECISIONS #15](docs/DECISIONS.md) for the measurements
+behind that. See [Project status](#project-status).
 
 ## Requirements
 
@@ -387,20 +389,14 @@ Raised in review, understood, and not done yet. Listed here rather than left in
 a comment thread, because a known gap that is not written down is
 indistinguishable from one nobody noticed.
 
-- **No backup before a migration.** `init_db()` alters the schema in place on
-  every startup, and the changes so far are additive and idempotent — but
-  "additive" is a property of the migrations written so far, not a guarantee
-  about the next one. A copy of the database taken before the first altering
-  statement of a run would make any of them reversible. Related: the one-time
-  relocation in `app/database.py` already refuses to write over a database
-  that has rows in it, so that path is covered; ordinary migrations are not.
-- **Reconciling is hard to reach and hard to read.** Reconciliation is the
-  mechanism that makes the dashboard agree with the hypervisor, and it is
-  currently a single unlabelled icon in the header that reconciles
-  *everything*. There is no way to ask for one instance, and the result — what
-  it checked, what it changed — is a sentence that appears for four seconds.
-  For a control plane whose whole claim is "this matches reality", that is too
-  little affordance and too little evidence.
+- **Reconciling is hard to reach.** Reconciliation is the mechanism that makes
+  the dashboard agree with the hypervisor, and it is still a single icon in the
+  header that reconciles *everything* — there is no way to ask for one
+  instance. What it found is now reported rather than guessed at, the
+  in-progress state says so in words, and the background poll pauses while a
+  manual reconcile runs so the table cannot change underneath it for an
+  unrelated reason. A success message still fades after four seconds; an error
+  stays until dismissed. Per-instance reconcile is the part still missing.
 
 Guest-facing surfaces are bound to `127.0.0.1` by design — VNC, QMP and the SSH
 port forward — so the console proxy is the only path to a VM's screen. That is a

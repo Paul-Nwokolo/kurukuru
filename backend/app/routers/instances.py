@@ -615,6 +615,12 @@ def _apply_info(
         if value is not None and getattr(instance, field) != value:
             setattr(instance, field, value)
             changed = True
+    # Unlike the fields above, this one *must* be cleared when the engine stops
+    # reporting it: a stopped instance has no monitor, and leaving a stale False
+    # behind would show it as degraded forever. So it is assigned, not merged.
+    if instance.monitor_reachable != info.monitor_reachable:
+        instance.monitor_reachable = info.monitor_reachable
+        changed = True
     if instance.pid != info.pid:
         instance.pid = info.pid
         changed = True

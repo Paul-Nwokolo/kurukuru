@@ -19,6 +19,7 @@ The load-bearing assertions here are about honesty rather than mechanism:
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 
 import pytest
 from sqlmodel import Session, select
@@ -406,3 +407,64 @@ def test_fetch_accepts_a_matching_checksum(tmp_path, monkeypatch):
 
     assert result.exists()
     assert result.read_bytes() == payload
+
+
+# --------------------------------------------------------------------------- #
+# An unreachable QMP monitor is degraded, not healthy and not stopped
+# --------------------------------------------------------------------------- #
+def _read(**overrides):
+    """An InstanceRead as the API would return it.
+
+    `degraded` is computed on the response schema rather than the table, so
+    these assertions have to go through it — which is also the thing the
+    dashboard actually receives.
+    """
+    from app.models import Instance, InstanceRead, InstanceStatus
+
+    base = dict(
+        name="web", flavor="small", status=InstanceStatus.RUNNING,
+        ssh_enabled=True, ip_address="127.0.0.1",
+    )
+    return InstanceRead.model_validate(Instance(**{**base, **overrides}))
+
+
+def test_an_unreachable_monitor_marks_the_instance_degraded():
+    """The condition that flapped a healthy instance for 40 minutes. A user
+    looking at the dashboard should be able to tell it apart from healthy."""
+    instance = _read(monitor_reachable=False)
+
+    assert instance.degraded is True
+    reason = instance.degraded_reason or ""
+    # Names the state, that the process is alive, and the usual cause.
+    assert "not answering" in reason
+    assert "process is alive" in reason
+    assert "one QMP client at a time" in reason
+
+
+def test_a_reachable_monitor_with_an_address_is_not_degraded():
+    instance = _read(monitor_reachable=True)
+
+    assert instance.degraded is False
+    assert instance.degraded_reason is None
+
+
+def test_a_stopped_instance_is_never_degraded_by_its_monitor():
+    """monitor_reachable is cleared on stop, but even a stale False must not
+    make a stopped instance look broken."""
+    from app.models import InstanceStatus
+
+    instance = _read(status=InstanceStatus.STOPPED, monitor_reachable=False)
+
+    assert instance.degraded is False
+
+
+def test_the_monitor_reason_is_distinguishable_from_the_address_one():
+    """Two different failures must not share one sentence — the fixes differ."""
+    monitor = _read(monitor_reachable=False)
+    no_address = _read(
+        ip_address=None, updated_at=datetime(2020, 1, 1, tzinfo=timezone.utc)
+    )
+
+    assert monitor.degraded and no_address.degraded
+    assert monitor.degraded_reason != no_address.degraded_reason
+    assert "cloud-init" in (no_address.degraded_reason or "")

@@ -1131,6 +1131,10 @@ class Instance(InstanceBase, table=True):
     #: on each start, so it describes the process actually running rather than
     #: the one that first created the disk. Null for rows that predate this.
     qemu_version: str | None = Field(default=None)
+    #: False when the VM process is alive but its QMP monitor did not answer.
+    #: Persisted because it is a live engine observation and `degraded` is
+    #: computed from the row. Null means "no monitor concept, or not running".
+    monitor_reachable: bool | None = Field(default=None)
     #: Network this instance is attached to. Null on rows that predate the
     #: model; the API reads that as the default user network, which is what
     #: they have always been on.
@@ -1314,6 +1318,10 @@ class InstanceRead(InstanceBase):
     #: Hypervisor build that last launched this instance. Null until it has been
     #: launched once, and on rows that predate the field.
     qemu_version: str | None = None
+    #: False when the process is alive but its QMP monitor did not answer.
+    #: Read by `degraded` below, so it has to travel on the response schema
+    #: as well as the table.
+    monitor_reachable: bool | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -1346,6 +1354,12 @@ class InstanceRead(InstanceBase):
         """
         if self.status is not InstanceStatus.RUNNING:
             return False
+        # A live process whose monitor will not answer is degraded immediately,
+        # with no grace period: unlike a missing address this is not a state a
+        # healthy VM passes through on the way up. The console needs that
+        # socket, and so does a graceful stop.
+        if self.monitor_reachable is False:
+            return True
         if not self.ssh_enabled or self.ip_address:
             return False
 
@@ -1361,6 +1375,14 @@ class InstanceRead(InstanceBase):
     def degraded_reason(self) -> str | None:
         if not self.degraded:
             return None
+        if self.monitor_reachable is False:
+            return (
+                "Running, but its QMP control socket is not answering. The VM "
+                "process is alive — this is not a stopped instance — but the "
+                "console and a graceful stop both need that socket. QEMU serves "
+                "one QMP client at a time, so the usual cause is something else "
+                "already connected to it."
+            )
         return (
             "Running but no address has appeared. cloud-init may have failed, or "
             "the guest's network did not come up — check the console."

@@ -129,6 +129,11 @@ class InstanceInfo:
     #: Whether the orchestrator's SSH key was injected. Distinguishes "no
     #: address yet" (a problem) from "never going to have one" (by design).
     ssh_enabled: bool | None = None
+    #: Whether the driver's control channel answered. ``None`` for engines that
+    #: have no such channel; ``False`` means the VM process is alive but the
+    #: monitor did not respond, which is a real state and not a synonym for
+    #: stopped — see :meth:`QemuEngine._liveness`.
+    monitor_reachable: bool | None = None
 
 
 @dataclass(frozen=True)

@@ -1187,7 +1187,15 @@ class QemuEngine(ComputeEngine):
             # Directory without runtime state: a provision that died mid-setup.
             return InstanceInfo(name=name, exists=True, status=InstanceStatus.ERROR, ip_address=None)
 
-        running = self._is_running(runtime)
+        state = self._liveness(runtime)
+        running = state != "stopped"
+        if state == "unreachable":
+            logger.warning(
+                "QEMU pid %s is alive but QMP on port %s did not answer — "
+                "treating as running. QMP serves one client at a time, so "
+                "another connection to it will produce this.",
+                runtime.pid, runtime.qmp_port,
+            )
         # A guest with no injected key has no SSH to advertise — true for ISO
         # installs and for images without cloud-init. Claiming an endpoint for
         # them would send users to a port nothing is listening on.
@@ -1223,6 +1231,10 @@ class QemuEngine(ComputeEngine):
             accel=runtime.accel,
             display=runtime.display,
             ssh_enabled=has_key,
+            # Only meaningful while the process is up. A stopped VM has no
+            # monitor to be unreachable, and reporting False for one would put
+            # every stopped instance into a warning state.
+            monitor_reachable=(state == "running") if running else None,
         )
 
     def list_instances(self) -> dict[str, InstanceInfo]:
@@ -1572,15 +1584,7 @@ class QemuEngine(ComputeEngine):
         clone or snapshot read a disk that a live QEMU may be writing just
         because its monitor was busy.
         """
-        state = self._liveness(runtime)
-        if state == "unreachable":
-            logger.warning(
-                "QEMU pid %s is alive but QMP on port %s did not answer — "
-                "treating as running. QMP serves one client at a time, so "
-                "another connection to it will produce this.",
-                runtime.pid, runtime.qmp_port,
-            )
-        return state != "stopped"
+        return self._liveness(runtime) != "stopped"
 
     def _wait_for_ssh(self, name: str, runtime: InstanceRuntime, timeout: int) -> float:
         """Block until the guest's forwarded SSH port accepts a connection.

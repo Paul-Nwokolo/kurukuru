@@ -7,7 +7,12 @@
  * Every mutation invalidates the instances list so the table refetches
  * immediately after start/stop/terminate/launch.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useSelectedProject } from '../lib/project'
 import {
   createInstance,
@@ -195,15 +200,33 @@ export function useHostCapacity() {
   })
 }
 
+/**
+ * Mutation key for the manual reconcile, so other hooks can tell one is in
+ * flight without a second piece of global state to keep in step.
+ */
+export const RECONCILE_KEY = ['reconcile'] as const
+
+/** Whether a manual reconcile is running right now. */
+export function useIsReconciling(): boolean {
+  return useIsMutating({ mutationKey: RECONCILE_KEY }) > 0
+}
+
 export function useInstances(includeTerminated: boolean) {
   // Scoped by the header selector. The project id is part of the query key, so
   // switching projects is a cache miss rather than a stale render of the
   // previous project's rows.
   const [projectId] = useSelectedProject()
+  // The background poll is paused while a manual reconcile is in flight.
+  // Without this the table can update mid-operation for an entirely unrelated
+  // reason — a poll landing at the wrong moment — and the user attributes the
+  // change to the button they just pressed. Pausing costs nothing: the
+  // reconcile invalidates this query when it finishes, so the next render is
+  // the reconciled state and it is attributable.
+  const reconciling = useIsReconciling()
   return useQuery({
     queryKey: queryKeys.instances(includeTerminated, projectId),
     queryFn: () => listInstances(includeTerminated, projectId),
-    refetchInterval: 3_000,
+    refetchInterval: reconciling ? false : 3_000,
   })
 }
 
@@ -456,6 +479,8 @@ export function useTerminateInstance() {
 export function useRefreshInstances() {
   const invalidate = useInvalidateInstances()
   return useMutation({
+    // Keyed so useIsReconciling can see it; see useInstances.
+    mutationKey: RECONCILE_KEY,
     mutationFn: () => refreshInstances(),
     onSuccess: invalidate,
   })

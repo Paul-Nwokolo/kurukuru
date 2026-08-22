@@ -91,7 +91,12 @@ export interface Instance {
    * guest leaves text mode isn't knowable in advance.
    */
   console_caveat: string | null
-  /** Running, but without the address it promised — see degraded_reason. */
+  /**
+   * Running, but not reachable the way it promised to be — see
+   * degraded_reason for which way. Two causes today: no address ever appeared,
+   * or the VM's QMP control socket stopped answering while its process stayed
+   * alive. The second is not a stopped instance and must not read as one.
+   */
   degraded: boolean
   degraded_reason: string | null
   /** Whether the orchestrator's SSH key reached this guest. */

@@ -14,6 +14,11 @@ import { apiErrorMessage } from '../api/client'
  * instances list every three seconds. It is kept because it forces a
  * *reconcile* on the backend, which polling does not, but at the weight of an
  * escape hatch rather than a primary control.
+ *
+ * While it runs, the instances list stops polling (see useInstances). A table
+ * that updated mid-reconcile for an unrelated reason would be attributed to the
+ * button, which is exactly the wrong lesson to teach about the one control
+ * people press when something already looks wrong.
  */
 export function Header({ title }: { title: string }) {
   const refresh = useRefreshInstances()
@@ -74,7 +79,25 @@ export function Header({ title }: { title: string }) {
     <header className="flex items-center justify-between gap-4 border-b border-border bg-surface px-6 py-3">
       <h1 className="text-xl font-semibold tracking-tight text-text">{title}</h1>
       <div className="flex items-center gap-3">
-        {result && (
+        {/* In progress, said in words.
+          *
+          * The spinning icon alone was the whole affordance, and at 16px next
+          * to four other controls it reads as decoration — during a wait of
+          * several seconds the honest question "did that do anything?" had no
+          * answer on screen. This is deliberately a plain label rather than a
+          * progress bar or a percentage: the backend reports nothing about how
+          * far along a reconcile is, and inventing a bar that fills at a made
+          * up rate would claim knowledge this UI does not have.
+          *
+          * It occupies the same slot as the result, so the sequence reads as
+          * one message changing rather than two things appearing. */}
+        {refresh.isPending && (
+          <span role="status" className="flex items-center gap-1.5 text-xs text-text-muted">
+            <RefreshCw className="h-3 w-3 animate-spin" aria-hidden />
+            Reconciling with the hypervisor…
+          </span>
+        )}
+        {!refresh.isPending && result && (
           <span
             role={result.tone === 'error' ? 'alert' : 'status'}
             title={result.text}
@@ -100,7 +123,11 @@ export function Header({ title }: { title: string }) {
         <ThemeToggle />
         <IconButton
           icon={RefreshCw}
-          title="Reconcile with the hypervisor and refetch"
+          title={
+            refresh.isPending
+              ? 'Reconciling…'
+              : 'Reconcile with the hypervisor and refetch'
+          }
           onClick={run}
           disabled={refresh.isPending}
           className={refresh.isPending ? '[&_svg]:animate-spin' : ''}
