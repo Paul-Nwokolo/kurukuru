@@ -468,3 +468,73 @@ def test_the_monitor_reason_is_distinguishable_from_the_address_one():
     assert monitor.degraded and no_address.degraded
     assert monitor.degraded_reason != no_address.degraded_reason
     assert "cloud-init" in (no_address.degraded_reason or "")
+
+
+# --------------------------------------------------------------------------- #
+# Reconcile change detection must cover every field it writes
+# --------------------------------------------------------------------------- #
+def test_every_reconcilable_field_is_in_the_snapshot():
+    """The guard for a bug that hid in plain sight.
+
+    The reconcile pass commits only when a row's snapshot changed. A field that
+    `_apply_info` writes but `_row_snapshot` omits is therefore computed,
+    assigned, and then thrown away when the pass ends without committing —
+    silently, and only when nothing else about the row moved. `monitor_reachable`
+    did exactly that: a VM whose QMP monitor went unreachable never persisted it,
+    because status, pid and the ports were all unchanged.
+
+    Rather than re-listing the fields (which is the mistake), this drives
+    `_apply_info` with an InstanceInfo that differs in one field at a time and
+    asserts the snapshot notices.
+    """
+    from app.engines.base import InstanceInfo
+    from app.models import Instance, InstanceStatus
+    from app.routers.instances import _apply_info, _row_snapshot
+
+    # One differing value per field the engine reports.
+    differing = {
+        "status": InstanceStatus.STOPPED,
+        "ip_address": "127.0.0.1",
+        "ssh_port": 2299,
+        "vnc_port": 5999,
+        "qmp_port": 4499,
+        "pid": 4242,
+        "accel": "tcg",
+        "display": "virtio",
+        "ssh_enabled": False,
+        "monitor_reachable": False,
+    }
+
+    for field, value in differing.items():
+        instance = Instance(
+            name="web", flavor="small", status=InstanceStatus.RUNNING,
+            ssh_port=2200, vnc_port=5900, qmp_port=4400, pid=1,
+            accel="whpx", display="std", ssh_enabled=True,
+            monitor_reachable=True, ip_address=None,
+        )
+        info = InstanceInfo(
+            name="web", exists=True, status=InstanceStatus.RUNNING,
+            ip_address=None, ssh_port=2200, vnc_port=5900, qmp_port=4400,
+            pid=1, accel="whpx", display="std", ssh_enabled=True,
+            monitor_reachable=True,
+        )
+        object.__setattr__(info, field, value)
+
+        before = _row_snapshot(instance)
+        _apply_info(instance, info, authoritative=True)
+        after = _row_snapshot(instance)
+
+        assert before != after, (
+            f"a change to {field!r} is invisible to _row_snapshot, so the "
+            f"reconcile pass would discard it"
+        )
+
+
+def test_the_snapshot_and_its_field_names_stay_in_step():
+    """They are one list now; this fails if someone splits them again."""
+    from app.models import Instance, InstanceStatus
+    from app.routers.instances import _SNAPSHOT_FIELDS, _row_snapshot
+
+    instance = Instance(name="web", flavor="small", status=InstanceStatus.RUNNING)
+
+    assert len(_row_snapshot(instance)) == len(_SNAPSHOT_FIELDS)

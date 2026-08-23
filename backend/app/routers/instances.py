@@ -452,23 +452,44 @@ def _engine_for(registry: EngineRegistry, instance: Instance) -> ComputeEngine:
         ) from exc
 
 
-def _row_snapshot(instance: Instance) -> tuple:
-    """Everything reconciliation is allowed to change — for change detection."""
-    return (
-        instance.status,
-        instance.ip_address,
-        instance.error_message,
-        instance.ssh_port,
-        instance.vnc_port,
-        instance.qmp_port,
-        instance.pid,
-    )
-
-
-#: Field order for :func:`_row_snapshot`, so a diff can name what changed.
+#: Every field :func:`_apply_info` may write, in the order a correction diff
+#: reads them. Status leads because it is the change a person cares about.
+#:
+#: **This list is load-bearing for persistence, not only for reporting.** The
+#: reconcile pass commits only when a row's snapshot actually changed, so a
+#: field missing from here is a field whose changes are computed, assigned to
+#: the row, and then silently discarded when the pass ends without a commit.
+#: That is not hypothetical: ``monitor_reachable`` was written by ``_apply_info``
+#: and absent here, so a VM whose QMP monitor went unreachable — with nothing
+#: else about it changing — never once persisted that state. ``accel``,
+#: ``display`` and ``ssh_enabled`` had the same hole and survived only because
+#: they are set on the same pass that moves ``status``, which did commit.
+#:
+#: Anything added to ``_apply_info`` belongs here too;
+#: ``test_every_reconcilable_field_is_in_the_snapshot`` fails if it is not.
 _SNAPSHOT_FIELDS = (
-    "status", "ip_address", "error_message", "ssh_port", "vnc_port", "qmp_port", "pid",
+    "status",
+    "ip_address",
+    "error_message",
+    "ssh_port",
+    "vnc_port",
+    "qmp_port",
+    "pid",
+    "accel",
+    "display",
+    "ssh_enabled",
+    "monitor_reachable",
 )
+
+
+def _row_snapshot(instance: Instance) -> tuple:
+    """Everything reconciliation is allowed to change — for change detection.
+
+    Built from :data:`_SNAPSHOT_FIELDS` rather than listing the attributes a
+    second time, so the tuple and the names used to describe a diff cannot fall
+    out of step with each other.
+    """
+    return tuple(getattr(instance, field) for field in _SNAPSHOT_FIELDS)
 
 
 #: Instances with an API operation currently running against the hypervisor,

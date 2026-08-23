@@ -1822,6 +1822,73 @@ deleting function's job because it is the only place that knows the dependency
 exists.
 
 
+## 44. Change detection that omits a field silently discards writes to it
+
+**Context.** Phase 14 Part E added `monitor_reachable` — the engine's report that
+a VM's process is alive but its QMP monitor will not answer. Every layer tested
+green: the probe returned False under contention, the engine returned
+`monitor_reachable=False` with the status still Running, and the model turned
+that into Degraded with its own explanation. Driven through the API against a
+live backend, the row stayed `monitor=True`. The phase shipped with that gap
+flagged rather than explained, and "probably uvicorn reload flakiness" as the
+guess. **The guess was wrong.**
+
+**The mechanism.** The reconcile pass is deliberately structured as
+read-decide-write in one boundary, and it commits only when something changed:
+
+```python
+before = _row_snapshot(instance)
+_apply_info(instance, info)
+after = _row_snapshot(instance)
+if before != after:
+    session.add(instance)
+    updated += 1
+if updated:
+    session.commit()
+```
+
+`_apply_info` assigned `instance.monitor_reachable = False`. `_row_snapshot`
+returned a hand-written tuple of seven attributes that did not include it. So
+`before == after`, the row was never added, `updated` stayed zero, no commit was
+issued — and the assignment was discarded when the session was next rolled back.
+The write happened. It just never landed.
+
+**It was wider than the new field.** `_apply_info` also writes `accel`,
+`display` and `ssh_enabled`, and none of those were in the tuple either. They had
+survived by luck: they are set on the same pass that first moves `status`, and
+that pass commits for the status change, carrying them along. A change to any of
+them *on its own* — a VM relaunched under a different accelerator, say — would
+have been discarded the same way. `monitor_reachable` only exposed it because it
+is the first such field that flips repeatedly while everything else holds still.
+
+**The fix is structural, not a longer list.** `_SNAPSHOT_FIELDS` is now the one
+definition and `_row_snapshot` builds its tuple from it, so the names used to
+describe a correction and the values used to detect one cannot drift apart. The
+guard is a test that drives `_apply_info` with an `InstanceInfo` differing in one
+field at a time and asserts the snapshot notices — rather than re-listing the
+fields, which is the mistake being guarded against. Reverted against the old
+list, it fails on `accel` first, which is how the wider hole was found.
+
+**The lesson, which is not new here.** This is the same shape as decision 34: a
+check that passes because it is looking at something adjacent to the thing that
+matters. There, four signed files were validated and none of them executed. Here,
+seven fields were compared and the one that changed was not among them. In both
+cases every individual layer was correct and the composition was not, and in both
+cases the failing observation was available early and got explained away —
+"structurally complete media" then, "probably a reload artefact" now.
+
+The general rule: **when a system decides whether to persist by comparing a
+projection of its state, the projection is part of the write path.** A field
+absent from it is not merely unreported; it is unwritable. Adding a field to the
+model and to the code that computes it is two of the three edits.
+
+**Verified end to end on a freshly started backend**, no `--reload` involved:
+holding the QMP socket from another process moved the row to Degraded with the
+monitor's own explanation, kept `status` Running and the pid intact across
+repeated reconciles — where the pre-Phase-13 code flapped to Stopped — and
+returned to healthy when the socket was released.
+
+
 - **No license chosen.** Until one exists, the code is not usable by anyone else.
 - **No authentication.** Anything beyond a single trusted machine needs it first.
 - **SQLite, single writer.** Fine now; a multi-process deployment would need
