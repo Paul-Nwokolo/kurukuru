@@ -20,6 +20,7 @@ import typer
 from typer.core import TyperGroup
 
 from app.cli import (
+    commands_auth,
     commands_events,
     commands_images,
     commands_networks,
@@ -79,6 +80,7 @@ app = typer.Typer(
 commands_instances.register(app)
 commands_system.register(app)
 commands_events.register(app)
+app.add_typer(commands_auth.auth_app, name="auth")
 app.add_typer(commands_images.images_app, name="images")
 app.add_typer(commands_images.isos_app, name="isos")
 app.add_typer(commands_snapshots.snapshots_app, name="snapshot")

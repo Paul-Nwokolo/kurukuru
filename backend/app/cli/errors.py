@@ -30,6 +30,9 @@ class ExitCode(IntEnum):
     CONFLICT = 5        # API 409 — wrong state for the operation
     INVALID = 6         # API 422 — validation or a capacity refusal
     TIMEOUT = 7         # --wait gave up before the instance settled
+    #: API 401. Its own code because the remedy is specific and nothing
+    #: else shares it: sign in, or create the first account.
+    UNAUTHENTICATED = 8
 
 
 class CliError(Exception):

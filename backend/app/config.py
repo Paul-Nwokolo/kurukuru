@@ -130,6 +130,16 @@ class Settings(BaseSettings):
     # directory always wins over the root — see _root_unset_dirs.
     state_dir: str = DEFAULT_STATE_DIR
 
+    # --- Authentication (Phase 15) ---
+    # Where the CLI keeps its API token. Under state_dir with everything else,
+    # and locked to the owning OS user at write time — see app.fs_permissions
+    # for what that is actually worth on each platform.
+    #
+    # This is a convenience, not a trust boundary: the token in it is an
+    # ordinary API token, revocable like any other. Anyone who can read it could
+    # also read the SSH private key and every VM disk sitting beside it.
+    auth_token_file: str = f"{DEFAULT_STATE_DIR}/cli-token"
+
     # --- Database backups (Phase 14) ---
     # A copy of the database is taken automatically immediately before an
     # additive migration changes its shape, and never otherwise — an ordinary
@@ -277,6 +287,10 @@ class Settings(BaseSettings):
     #: spelling on both sides of the comparison.
     _DATABASE_LEAF = "iaas.db"
 
+    #: Same treatment for the CLI's token file: a path, not a directory, so it
+    #: needs its own line in the re-rooting below.
+    _AUTH_TOKEN_LEAF = "cli-token"
+
     @model_validator(mode="after")
     def _apply_state_dir(self) -> Settings:
         """Re-root the paths that were left at their defaults.
@@ -298,6 +312,10 @@ class Settings(BaseSettings):
         if self.database_url == f"sqlite:///{DEFAULT_STATE_DIR}/{self._DATABASE_LEAF}":
             object.__setattr__(
                 self, "database_url", f"sqlite:///{root}/{self._DATABASE_LEAF}"
+            )
+        if self.auth_token_file == f"{DEFAULT_STATE_DIR}/{self._AUTH_TOKEN_LEAF}":
+            object.__setattr__(
+                self, "auth_token_file", f"{root}/{self._AUTH_TOKEN_LEAF}"
             )
         return self
 

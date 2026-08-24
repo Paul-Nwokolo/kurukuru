@@ -68,6 +68,34 @@ async def _reconcile_loop(interval: int) -> None:
             logger.exception("Background reconciliation pass failed")
 
 
+def _warn_if_no_account() -> None:
+    """Say what to run when the install has no owner yet.
+
+    Without this the symptom is every request answering 401 and nothing
+    explaining why — which is exactly what an upgrade to this version looks
+    like from the outside. The instruction is logged at WARNING so it survives
+    a quiet log level, and names the command rather than describing it.
+    """
+    from sqlmodel import Session, select
+
+    from app.database import engine
+    from app.models import User
+
+    try:
+        with Session(engine) as session:
+            if session.exec(select(User)).first() is not None:
+                return
+    except Exception as exc:  # pragma: no cover - a broken DB is reported elsewhere
+        logger.debug("Could not check for accounts: %s", exc)
+        return
+
+    logger.warning(
+        "No account exists yet, so every request except /health and the login "
+        "routes will answer 401. Create the owner account on this machine with: "
+        "iaas auth init"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown hooks."""
@@ -128,6 +156,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Background reconciler every %ss", settings.reconcile_interval_seconds
         )
 
+    _warn_if_no_account()
     logger.info("%s v%s ready.", settings.app_name, settings.app_version)
     yield
 

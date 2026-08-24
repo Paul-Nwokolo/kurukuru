@@ -36,7 +36,17 @@ def config_of(ctx: typer.Context) -> CliConfig:
 
 
 def client_of(ctx: typer.Context) -> ApiClient:
-    return ApiClient(config_of(ctx).api_url)
+    """The API client, carrying this machine's token if there is one.
+
+    Read here rather than inside ApiClient so that a test injecting a transport
+    is not silently given the developer's real credential as well. An absent
+    token is not an error: the API answers 401 and the CLI turns that into a
+    sentence naming `auth login`.
+    """
+    from app.cli import auth_store
+
+    stored = auth_store.load()
+    return ApiClient(config_of(ctx).api_url, token=stored.token if stored else None)
 
 
 def resolve_instance(
