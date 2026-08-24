@@ -80,19 +80,17 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
-    # Optional regex of additional allowed origins. **Off by default, and
-    # development-only.** Vite takes the next free port when 5173 is busy, and
-    # the dashboard then fails every request with a CORS error that names none
-    # of that; this exists so a developer can opt out of the annoyance for a
-    # session, e.g.
-    #
-    #     IAAS_CORS_ORIGIN_REGEX='http://(localhost|127\.0\.0\.1)(:\d+)?'
-    #
-    # It is deliberately not the default. CORS is a security control, and the
-    # right fix for a port collision is to free the port — widening a default
-    # for the convenience of the machine that hit the problem is how a
-    # development shortcut becomes a shipped posture.
-    cors_origin_regex: str = ""
+    # There is deliberately no origin *regex* escape hatch. One existed for a
+    # single session's convenience — Vite takes the next free port when 5173 is
+    # busy, and the documented example matched any port on localhost. With no
+    # authentication that cost little: the API was open, so CORS was not the
+    # thing protecting it. A session cookie changes that completely. Every
+    # localhost port is the *same site*, so the cookie is sent to whatever is
+    # listening there, and a permissive origin regex plus allow_credentials
+    # turns any page served from any local port into a fully authenticated API
+    # client. That is precisely the "malicious page on the same machine" this
+    # phase exists to shut out, so the hatch is gone rather than narrowed. The
+    # fix for a port collision is still to free the port (DECISIONS #45).
 
     # --- Compute engine ---
     # Timeout for short-lived hypervisor tool calls (qemu-img, --version probes).

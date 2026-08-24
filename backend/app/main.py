@@ -140,11 +140,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# The React frontend (Vite dev server) is the only intended consumer.
+# The React frontend (Vite dev server) is the only intended consumer, named by
+# exact origin. `allow_credentials=True` is what makes the exactness matter: it
+# permits the session cookie to travel, so every entry in this list is a page
+# allowed to act as the signed-in user. There is no regex form (DECISIONS #45).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_origin_regex=settings.cors_origin_regex or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
