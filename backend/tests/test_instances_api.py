@@ -266,15 +266,21 @@ def client(monkeypatch, tmp_path, iso_dir, small_host):
 
 @pytest.fixture()
 def anon_client(client):
-    """The same application, with the credential removed.
+    """A *second* client over the same application, carrying no credential.
 
-    Used by the route-coverage test and anywhere a 401 is the subject. Derived
-    from `client` rather than built separately so the two cannot drift apart in
-    how the app is wired.
+    Separate rather than the same object with its header stripped: several
+    tests need an authenticated and an anonymous caller at once — create a
+    token, then prove it works — and mutating one shared client makes those
+    quietly test nothing.
+
+    Constructed without the context manager on purpose. `client` already ran
+    the lifespan; entering it again would re-run startup against the same
+    database.
     """
-    client.headers.pop("Authorization", None)
-    client.cookies.clear()
-    return client
+    c = TestClient(app)
+    c.db_engine = client.db_engine  # type: ignore[attr-defined]
+    c.fake = client.fake            # type: ignore[attr-defined]
+    return c
 
 
 def legacy_multipass_row(client, name: str, **kwargs) -> str:

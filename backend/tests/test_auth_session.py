@@ -1,0 +1,305 @@
+"""Sessions, CSRF, tokens, and the ways each of them must stop working.
+
+The CSRF assertions here are the server-side half of a measurement taken in a
+real browser, and they exist because the reasoning behind them is easy to get
+backwards. Chrome, two pages on different localhost ports, one backend:
+
+    login from http://localhost:8101          -> 200, httpOnly cookie set
+    form POST from http://localhost:8102      -> 403, not 401
+
+401 would have meant the cookie was never sent — SameSite treating the two
+ports as different sites. **403 means the cookie was sent** and the CSRF token
+is what refused it. Port is not part of a site, so every localhost port is
+same-site with this backend and ``SameSite=Strict`` stops none of them. The CSRF
+token is not belt-and-braces here; it is the only thing standing there, and no
+amount of same-origin packaging changes that (DECISIONS #45).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app import auth
+from app.models import ApiToken, Session as SessionRow, User
+from sqlmodel import Session, select
+
+from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
+
+PASSWORD = "test-password-1234"
+
+
+@pytest.fixture(autouse=True)
+def _clear_throttle():
+    auth.throttle.reset()
+    yield
+    auth.throttle.reset()
+
+
+def _login(c, username: str = "owner", password: str = PASSWORD):
+    return c.post("/auth/login", json={"username": username, "password": password})
+
+
+@pytest.fixture()
+def browser(anon_client):  # noqa: F811
+    """A client authenticated the way a browser is: cookie plus CSRF token."""
+    response = _login(anon_client)
+    assert response.status_code == 200, response.text
+    anon_client.csrf = response.headers[auth.CSRF_HEADER]  # type: ignore[attr-defined]
+    return anon_client
+
+
+# --------------------------------------------------------------------------- #
+# The cookie
+# --------------------------------------------------------------------------- #
+def test_login_sets_an_httponly_cookie(anon_client):  # noqa: F811
+    response = _login(anon_client)
+
+    assert response.status_code == 200
+    cookie = response.headers["set-cookie"]
+    assert auth.SESSION_COOKIE in cookie
+    # httpOnly is what stops a hostile script reading the session outright.
+    # Confirmed in a real browser too: document.cookie was empty after login.
+    assert "httponly" in cookie.lower()
+    assert "samesite=strict" in cookie.lower()
+
+
+def test_a_cookie_session_can_read(browser):
+    assert browser.get("/instances").status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# CSRF — the browser measurement, pinned
+# --------------------------------------------------------------------------- #
+def test_a_cookie_write_without_the_csrf_token_is_refused(browser):
+    """The exact case a hostile page on another localhost port produces."""
+    response = browser.post("/instances/refresh")
+
+    assert response.status_code == 403
+    assert "CSRF" in response.json()["detail"]
+
+
+def test_a_cookie_write_with_the_csrf_token_succeeds(browser):
+    response = browser.post(
+        "/instances/refresh", headers={auth.CSRF_HEADER: browser.csrf}
+    )
+
+    assert response.status_code == 200
+
+
+def test_a_wrong_csrf_token_is_refused(browser):
+    response = browser.post(
+        "/instances/refresh", headers={auth.CSRF_HEADER: "not-the-right-token"}
+    )
+
+    assert response.status_code == 403
+
+
+def test_401_and_403_really_do_discriminate(anon_client, browser):  # noqa: F811
+    """The discriminator the browser test relied on.
+
+    If a missing credential and a missing CSRF token both returned the same
+    status, the 403 observed in Chrome would have proved nothing about whether
+    the cookie was sent.
+    """
+    browser.cookies.clear()
+    assert browser.post("/instances/refresh").status_code == 401
+
+
+def test_bearer_writes_need_no_csrf_token(client):  # noqa: F811
+    """Not a hole: a browser cannot be made to attach an Authorization header
+    to a cross-origin request, so its presence is proof of intent."""
+    assert client.post("/instances/refresh").status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Ending a session
+# --------------------------------------------------------------------------- #
+def test_logout_invalidates_the_session_server_side(browser):
+    assert browser.post("/auth/logout", headers={auth.CSRF_HEADER: browser.csrf}).status_code == 204
+
+    # Even replaying the cookie by hand does not work: the row is gone.
+    assert browser.get("/instances").status_code == 401
+
+
+def test_password_change_invalidates_every_session_and_token(browser, client):  # noqa: F811
+    """A password change is what you do when you think a credential leaked, so
+    a flow that leaves the old ones alive has missed the point."""
+    token_before = client.headers["Authorization"]
+
+    response = browser.post(
+        "/auth/password",
+        headers={auth.CSRF_HEADER: browser.csrf},
+        json={"current_password": PASSWORD, "new_password": "a-brand-new-passphrase"},
+    )
+    assert response.status_code == 204, response.text
+
+    # The session that made the change is gone too.
+    assert browser.get("/instances").status_code == 401
+    # And so is the API token issued before it.
+    client.headers["Authorization"] = token_before
+    assert client.get("/instances").status_code == 401
+
+
+def test_the_old_password_stops_working_and_the_new_one_starts(browser, anon_client):  # noqa: F811
+    browser.post(
+        "/auth/password",
+        headers={auth.CSRF_HEADER: browser.csrf},
+        json={"current_password": PASSWORD, "new_password": "a-brand-new-passphrase"},
+    )
+    anon_client.cookies.clear()
+
+    assert _login(anon_client, password=PASSWORD).status_code == 401
+    assert _login(anon_client, password="a-brand-new-passphrase").status_code == 200
+
+
+def test_changing_to_the_same_password_is_refused(browser):
+    response = browser.post(
+        "/auth/password",
+        headers={auth.CSRF_HEADER: browser.csrf},
+        json={"current_password": PASSWORD, "new_password": PASSWORD},
+    )
+
+    assert response.status_code == 400
+
+
+def test_a_wrong_current_password_cannot_change_it(browser):
+    response = browser.post(
+        "/auth/password",
+        headers={auth.CSRF_HEADER: browser.csrf},
+        json={"current_password": "wrong-password-here", "new_password": "another-passphrase"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_a_short_new_password_is_refused(browser):
+    response = browser.post(
+        "/auth/password",
+        headers={auth.CSRF_HEADER: browser.csrf},
+        json={"current_password": PASSWORD, "new_password": "short"},
+    )
+
+    assert response.status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# API tokens
+# --------------------------------------------------------------------------- #
+def test_a_token_is_shown_once_and_never_again(client):  # noqa: F811
+    created = client.post("/auth/tokens", json={"name": "laptop"})
+    assert created.status_code == 201
+    secret = created.json()["token"]
+
+    listed = client.get("/auth/tokens").json()
+    assert all("token" not in row for row in listed)
+    # And the stored form is not the secret.
+    with Session(client.db_engine) as session:
+        rows = session.exec(select(ApiToken)).all()
+        assert all(row.token_hash != secret for row in rows)
+
+
+def test_a_new_token_authenticates(client, anon_client):  # noqa: F811
+    secret = client.post("/auth/tokens", json={"name": "laptop"}).json()["token"]
+    anon_client.headers["Authorization"] = f"Bearer {secret}"
+
+    assert anon_client.get("/instances").status_code == 200
+
+
+def test_revoking_a_token_stops_it_immediately(client, anon_client):  # noqa: F811
+    created = client.post("/auth/tokens", json={"name": "laptop"}).json()
+    anon_client.headers["Authorization"] = f"Bearer {created['token']}"
+    assert anon_client.get("/instances").status_code == 200
+
+    assert client.delete(f"/auth/tokens/{created['id']}").status_code == 200
+
+    assert anon_client.get("/instances").status_code == 401
+
+
+def test_a_revoked_token_is_still_listed(client):  # noqa: F811
+    created = client.post("/auth/tokens", json={"name": "laptop"}).json()
+    client.delete(f"/auth/tokens/{created['id']}")
+
+    rows = {r["id"]: r for r in client.get("/auth/tokens").json()}
+    assert rows[created["id"]]["revoked_at"] is not None
+
+
+def test_a_made_up_token_is_rejected(anon_client):  # noqa: F811
+    anon_client.headers["Authorization"] = "Bearer iaas_not-a-real-token"
+
+    assert anon_client.get("/instances").status_code == 401
+
+
+# --------------------------------------------------------------------------- #
+# Login failures
+# --------------------------------------------------------------------------- #
+def test_an_unknown_user_and_a_wrong_password_are_indistinguishable(anon_client):  # noqa: F811
+    """Anything that tells the two apart is an account enumeration oracle."""
+    unknown = _login(anon_client, username="nobody", password="whatever-1234")
+    wrong = _login(anon_client, password="wrong-password-here")
+
+    assert unknown.status_code == wrong.status_code == 401
+    assert unknown.json()["detail"] == wrong.json()["detail"]
+
+
+def test_repeated_failures_lock_the_account_out(anon_client):  # noqa: F811
+    for _ in range(auth.throttle.limit):
+        _login(anon_client, password="wrong-password-here")
+
+    # Even the correct password is refused while the lockout holds.
+    response = _login(anon_client)
+    assert response.status_code == 429
+    assert "Retry-After" in response.headers
+
+
+def test_the_lockout_releases(anon_client, monkeypatch):  # noqa: F811
+    for _ in range(auth.throttle.limit):
+        _login(anon_client, password="wrong-password-here")
+    assert _login(anon_client).status_code == 429
+
+    # Rather than sleeping out the window, move the clock the throttle reads.
+    import time as _time
+
+    later = _time.monotonic() + auth.throttle.window + 1
+    monkeypatch.setattr(auth.time, "monotonic", lambda: later)
+
+    assert _login(anon_client).status_code == 200
+
+
+def test_a_successful_login_clears_the_failure_count(anon_client):  # noqa: F811
+    for _ in range(auth.throttle.limit - 1):
+        _login(anon_client, password="wrong-password-here")
+    assert _login(anon_client).status_code == 200
+
+    for _ in range(auth.throttle.limit - 1):
+        _login(anon_client, password="wrong-password-here")
+    assert _login(anon_client).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Identity
+# --------------------------------------------------------------------------- #
+def test_whoami_reports_the_account_and_never_the_hash(client):  # noqa: F811
+    body = client.get("/auth/whoami").json()
+
+    assert body["username"] == "owner"
+    assert body["is_owner"] is True
+    assert "password_hash" not in body
+
+
+def test_first_run_reports_configured_once_an_account_exists(anon_client):  # noqa: F811
+    assert anon_client.get("/auth/first-run").json() == {"configured": True}
+
+
+def test_an_expired_session_is_rejected_and_cleaned_up(browser):
+    from datetime import timedelta
+
+    with Session(browser.db_engine) as session:
+        row = session.exec(select(SessionRow)).first()
+        row.expires_at = auth._utcnow() - timedelta(seconds=1)
+        session.add(row)
+        session.commit()
+
+    assert browser.get("/instances").status_code == 401
+
+    with Session(browser.db_engine) as session:
+        assert session.exec(select(SessionRow)).first() is None
