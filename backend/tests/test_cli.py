@@ -27,7 +27,7 @@ from sqlmodel.pool import StaticPool
 from typer.testing import CliRunner
 
 import app.engines as engines_module
-from tests.conftest import redirect_db_engines
+from tests.conftest import authenticate_test_client, redirect_db_engines
 import app.events as events_module
 import app.routers.images as images_module
 import app.routers.instances as instances_module
@@ -125,7 +125,11 @@ def make_cli(monkeypatch, tmp_path, small_host):
         # in milliseconds rather than seconds.
         monkeypatch.setattr(support, "POLL_SECONDS", 0.01)
         invalidate_cache()
-        return TestClient(api_app), fake
+        http = TestClient(api_app)
+        # The CLI talks to the API over this transport, so the credential
+        # goes on the transport. `iaas auth ...` has its own tests.
+        authenticate_test_client(http, test_engine)
+        return http, fake
 
     yield _factory
     api_app.dependency_overrides.clear()

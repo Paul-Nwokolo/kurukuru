@@ -16,6 +16,10 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse
+
+from app.security import guard as security_guard
 from sqlmodel import Session
 
 from app.config import Settings, get_settings
@@ -138,7 +142,35 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     lifespan=lifespan,
+    # Closed by default. Registered here rather than per router so a route added
+    # later is protected the moment it exists, and making one public is a
+    # deliberate edit to app.security.PUBLIC_ROUTES that a reviewer will see.
+    dependencies=[Depends(security_guard)],
+    # FastAPI's generated documentation routes are registered directly on the
+    # router and do NOT receive the application dependencies above — measured:
+    # the route-coverage test found /docs, /redoc, /openapi.json and
+    # /docs/oauth2-redirect answering 200 to an anonymous caller. They are
+    # turned off here and re-served below, as ordinary routes, so the guard
+    # applies to them like everything else.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
+
+
+@app.get("/openapi.json", include_in_schema=False)
+def openapi_schema() -> dict:
+    return app.openapi()
+
+
+@app.get("/docs", include_in_schema=False)
+def swagger_ui() -> HTMLResponse:
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{settings.app_name} API")
+
+
+@app.get("/redoc", include_in_schema=False)
+def redoc_ui() -> HTMLResponse:
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{settings.app_name} API")
 
 # The React frontend (Vite dev server) is the only intended consumer, named by
 # exact origin. `allow_credentials=True` is what makes the exactness matter: it
@@ -606,10 +638,12 @@ def ssh_key() -> dict[str, str]:
 
 
 from app.routers import (  # noqa: E402
+    auth as auth_routes,
     events, images, instances, keypairs, networks, projects, snapshots, volume_snapshots,
     volumes,
 )
 
+app.include_router(auth_routes.router)
 app.include_router(projects.router)
 app.include_router(instances.router)
 app.include_router(images.router)

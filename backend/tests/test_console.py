@@ -24,7 +24,7 @@ from sqlmodel.pool import StaticPool
 from starlette.websockets import WebSocketDisconnect
 
 import app.engines as engines_module
-from tests.conftest import redirect_db_engines
+from tests.conftest import authenticate_test_client, redirect_db_engines
 import app.events as events_module
 import app.routers.instances as instances_module
 from app.console import CLOSE_CONFLICT, CLOSE_NOT_FOUND, CLOSE_VNC_UNAVAILABLE
@@ -131,6 +131,7 @@ def client(monkeypatch):
 
     with TestClient(app) as c:
         c.db_engine = test_engine  # type: ignore[attr-defined]
+        authenticate_test_client(c, test_engine)
         yield c
 
     app.dependency_overrides.clear()

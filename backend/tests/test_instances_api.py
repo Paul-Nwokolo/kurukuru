@@ -41,7 +41,7 @@ from app.engines import (
 from app.main import app
 from app.host_capacity import invalidate_cache
 from app.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
-from tests.conftest import redirect_db_engines
+from tests.conftest import authenticate_test_client, redirect_db_engines
 
 #: Address the fake hands out, matching QEMU's loopback port-forward model.
 FAKE_IP = "127.0.0.1"
@@ -253,9 +253,28 @@ def client(monkeypatch, tmp_path, iso_dir, small_host):
         c.fake = qemu_fake  # type: ignore[attr-defined]
         c.qemu_fake = qemu_fake  # type: ignore[attr-defined] - same object
         c.db_engine = test_engine  # type: ignore[attr-defined]
+        # Phase 15: the API is closed by default, so a client that does not
+        # authenticate can only assert 401s. Done here, once, rather than in
+        # several hundred tests — and with a Bearer token rather than a cookie
+        # so that existing state-changing calls do not each need a CSRF header
+        # too. `anon_client` below is the unauthenticated one.
+        authenticate_test_client(c, test_engine)
         yield c
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def anon_client(client):
+    """The same application, with the credential removed.
+
+    Used by the route-coverage test and anywhere a 401 is the subject. Derived
+    from `client` rather than built separately so the two cannot drift apart in
+    how the app is wired.
+    """
+    client.headers.pop("Authorization", None)
+    client.cookies.clear()
+    return client
 
 
 def legacy_multipass_row(client, name: str, **kwargs) -> str:
