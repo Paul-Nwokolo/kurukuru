@@ -2019,9 +2019,61 @@ the exact command to run. The failure mode this replaces is every request
 answering 401 with nothing explaining why — which is precisely what upgrading to
 this version looks like from the outside.
 
+## 48. The console is opened with a single-use ticket, not with the session
+
+**Context.** Every other route is authenticated by a session cookie or a Bearer
+header. The VNC console cannot use either. The browser `WebSocket` constructor
+takes a URL and nothing else — no headers, no options object — so a Bearer token
+is not available to it, and while the cookie *is* sent on the upgrade request,
+relying on that would make the console the one endpoint whose authentication
+cannot be reasoned about the same way as the rest.
+
+**The URL is the only channel, and a URL is not a safe place for a credential.**
+It appears in the browser's network panel, in any proxy log, and in whatever
+diagnostic someone pastes into an issue. So the thing put there is built to be
+worthless by the time anyone reads it:
+
+- **Single use.** Redemption deletes the row inside the same transaction that
+  reads it. A replay of a captured URL is refused.
+- **30 seconds.** Long enough for a ~100 kB viewer chunk to load and a socket to
+  open on loopback; short enough that a ticket in a log is expired before the
+  log is read.
+- **Bound to one instance.** The instance id is checked against the one in the
+  path. A ticket minted for a VM you are entitled to see cannot open a
+  different one.
+- **Bound to the session that minted it.** It dies when that session is logged
+  out or expires, so a ticket cannot outlive the authority that created it.
+- **Bound to `credential_version`.** A password change invalidates every
+  outstanding ticket along with every session and token, so "change the password
+  because something leaked" does not leave a live console behind it.
+
+**All four failure modes are tested explicitly**, in `tests/test_console_auth.py`
+— no ticket, a ticket for another instance, a redeemed ticket replayed, and a
+ticket whose session or password is gone. Rejection is uniform: close code 4401
+with one message, so the socket does not become an oracle for which instances
+exist.
+
+**The consequence in the client** is that minting is a separate request that has
+to complete *before* the socket is opened, which is awkward: `openSocket` in
+`src/lib/console.ts` is synchronous by design — the ordering guarantee that the
+viewer is loaded first depends on nothing awaiting inside it, and
+`scripts/check-console-handshake.mjs` fails the build if that order is lost.
+So the ticket is fetched before `connectConsole` is called at all, spending one
+loopback round trip to leave that invariant untouched.
+
+**The alternative considered and rejected** was accepting the session cookie on
+the upgrade. It is less code and it works. It also means the console's
+authentication is a different mechanism from every other route's, silently
+depends on `SameSite` behaviour on a WebSocket upgrade, and gives a leaked URL
+nothing to expire. A ticket costs one request and is auditable.
+
+## Known limitations
 
 - **No license chosen.** Until one exists, the code is not usable by anyone else.
-- **No authentication.** Anything beyond a single trusted machine needs it first.
+- **No authorization.** Authentication exists (decisions 45-48); roles and
+  project isolation do not. Every account is a full administrator.
+- **No transport encryption.** Plain HTTP, so anything beyond loopback needs
+  a TLS-terminating proxy in front of it. See docs/SECURITY.md.
 - **SQLite, single writer.** Fine now; a multi-process deployment would need
   more.
 - **Concurrent-launch name race.** See decision 6 — closable with a partial

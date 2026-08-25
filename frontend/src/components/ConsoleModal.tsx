@@ -9,7 +9,13 @@ import {
   X,
 } from 'lucide-react'
 import type RFB from '@novnc/novnc'
-import { CONSOLE_CLOSE, consoleWsUrl, type Instance } from '../api/client'
+import {
+  CONSOLE_CLOSE,
+  apiErrorMessage,
+  consoleWsUrl,
+  createConsoleTicket,
+  type Instance,
+} from '../api/client'
 import { connectConsole } from '../lib/console'
 import { Button } from '../ui/Button'
 import { StatusBadge } from '../ui/Status'
@@ -82,12 +88,32 @@ export function ConsoleModal({ instance, onClose }: ConsoleModalProps) {
     // scripts/check-console-handshake.mjs for the test that holds the order
     // in place.
     void (async () => {
+      // Minted before connectConsole, because `openSocket` must stay
+      // synchronous — awaiting inside it would reopen the race the ordering in
+      // src/lib/console.ts exists to close. A ticket lives 30 seconds and the
+      // viewer chunk takes ~100 ms, so spending one round trip up front costs
+      // nothing and keeps that invariant intact.
+      //
+      // Its own try, because this failure is an HTTP one and reads nothing like
+      // the two below: a 401 here is a session that expired between opening the
+      // modal and clicking connect.
+      let ticket: string
+      try {
+        ticket = await createConsoleTicket(instanceId)
+      } catch (err) {
+        if (cancelled) return
+        setPhase('disconnected')
+        setDetail(apiErrorMessage(err))
+        return
+      }
+      if (cancelled) return
+
       let attempt
       try {
         attempt = await connectConsole({
           loadViewer: async () => (await import('@novnc/novnc')).default,
           openSocket: () => {
-            socket = new WebSocket(consoleWsUrl(instanceId))
+            socket = new WebSocket(consoleWsUrl(instanceId, ticket))
             socketRef.current = socket
             return socket
           },
@@ -260,6 +286,8 @@ function explainClose(info: { code: number; reason: string } | null): string {
   if (!info) return 'The console connection ended.'
   if (info.reason) return info.reason // backend sent a specific explanation
   switch (info.code) {
+    case CONSOLE_CLOSE.UNAUTHENTICATED:
+      return 'The console ticket was refused. Close this and open it again.'
     case CONSOLE_CLOSE.NOT_FOUND:
       return 'This instance no longer exists.'
     case CONSOLE_CLOSE.CONFLICT:

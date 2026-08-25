@@ -2,6 +2,7 @@ import { useId } from 'react'
 import type {
   InputHTMLAttributes,
   ReactNode,
+  Ref,
   SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from 'react'
@@ -74,7 +75,14 @@ export function Input({
   className = '',
   data = false,
   ...rest
-}: InputHTMLAttributes<HTMLInputElement> & { data?: boolean }) {
+}: InputHTMLAttributes<HTMLInputElement> & {
+  data?: boolean
+  /** React 19 passes `ref` through as an ordinary prop; it only has to be
+   *  declared. Callers that need to move focus — the login form putting the
+   *  cursor back in the password box after a rejection — would otherwise have
+   *  to drop out of the design system to get it. */
+  ref?: Ref<HTMLInputElement>
+}) {
   return (
     <input
       className={[CONTROL, CONTROL_HEIGHT, data ? 'data' : '', className].join(' ')}

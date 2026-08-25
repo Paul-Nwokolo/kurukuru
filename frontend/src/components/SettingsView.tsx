@@ -1,5 +1,6 @@
 import { AlertCircle, CheckCircle2, Cpu, HardDrive, KeyRound, Settings2 } from 'lucide-react'
 import { useDiagnostics, useSettings } from '../hooks/queries'
+import { AccountSection } from './AccountSection'
 import { PathValue } from '../ui/Feedback'
 import { formatBytes } from '../lib/format'
 
@@ -21,7 +22,12 @@ export function SettingsView() {
 
   return (
     <div className="max-w-4xl space-y-6">
-      {/* Live status first — it's what changes, and what people check. */}
+      {/* Account first: it is the only thing on this page that is a control
+          rather than a readout, and it is where someone arrives when they came
+          to rotate a token or change a password. */}
+      <AccountSection />
+
+      {/* Then live status — it's what changes, and what people check. */}
       <section className="rounded-lg border border-border">
         <header className="border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold text-text">Host</h2>
