@@ -1345,7 +1345,7 @@ def test_init_refuses_when_an_account_already_exists(auth_cli):
     assert "already has an account" in result.output
 
 
-def test_the_cli_and_the_backend_agree_on_the_token_path():
+def test_the_cli_and_the_backend_agree_on_the_token_path(monkeypatch):
     """The one value duplicated across the CLI/backend boundary.
 
     ``auth_store`` cannot import ``app.config`` — that is the boundary the test
@@ -1356,6 +1356,11 @@ def test_the_cli_and_the_backend_agree_on_the_token_path():
     """
     from app.cli import auth_store
     from app.config import Settings
+
+    # The suite isolates this via the environment; the comparison is about the
+    # built-in defaults, so the override has to come off first.
+    monkeypatch.delenv("IAAS_AUTH_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("IAAS_STATE_DIR", raising=False)
 
     assert Settings().auth_token_file == (
         f"{auth_store.DEFAULT_STATE_DIR}/{auth_store.TOKEN_LEAF}"

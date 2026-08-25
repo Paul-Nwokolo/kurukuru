@@ -245,6 +245,14 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
 
     state = tmp_path / "state"
     database = tmp_path / "iaas.db"
+
+    # The CLI reads its API token from a file resolved through the environment,
+    # so without this a test run on a machine where somebody has signed in picks
+    # up that person's real credential — and then fails, confusingly, because
+    # the test database has never heard of it. Same rule as the rest of this
+    # fixture: a test must not be able to reach the state of the machine
+    # running it, in either direction.
+    monkeypatch.setenv("IAAS_AUTH_TOKEN_FILE", str(tmp_path / "cli-token"))
     settings = Settings(
         state_dir=str(state),
         database_url=f"sqlite:///{database.as_posix()}",

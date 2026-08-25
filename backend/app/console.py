@@ -36,6 +36,10 @@ _CONNECT_TIMEOUT_SECONDS = 5.0
 
 # Application close codes (RFC 6455 reserves 4000-4999 for applications). The UI
 # maps these to human explanations, so they are part of the API contract.
+#: Its own code. The dashboard must be able to tell "your session ended, sign
+#: in again" from "that VM is stopped" — they look identical as a failed
+#: connection and mean entirely different things.
+CLOSE_UNAUTHENTICATED = 4401
 CLOSE_NOT_FOUND = 4404
 CLOSE_CONFLICT = 4409
 CLOSE_VNC_UNAVAILABLE = 4502

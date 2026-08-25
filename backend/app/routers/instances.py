@@ -34,11 +34,16 @@ from app.config import Settings, get_settings
 from app.console import (
     CLOSE_CONFLICT,
     CLOSE_NOT_FOUND,
+    CLOSE_UNAUTHENTICATED,
     bridge_websocket_to_vnc,
 )
+from starlette.requests import HTTPConnection
+
 from app.engines.qemu import HOST_IP
 from app.database import engine as db_engine
 from app.database import get_session
+from app.auth import mint_console_ticket, redeem_console_ticket
+from app.security import current_principal
 from app.events import record_event
 from app.engines import (
     ComputeEngine,
@@ -72,6 +77,7 @@ from app.models import (
     InstanceKeyPairRead,
     InstanceRead,
     InstanceStatus,
+    ConsoleTicketRead,
     KeyPair,
     _utcnow,
 )
@@ -1759,6 +1765,36 @@ def delete_instance(
     return instance
 
 
+@router.post(
+    "/{instance_id}/console/ticket",
+    response_model=ConsoleTicketRead,
+    summary="Mint a single-use console ticket",
+)
+def create_console_ticket(
+    instance_id: str,
+    conn: HTTPConnection,
+    session: Session = Depends(get_session),
+) -> ConsoleTicketRead:
+    """A short-lived permit to open exactly this instance's console, once.
+
+    Browsers cannot set an ``Authorization`` header on a WebSocket handshake,
+    and the alternatives are worse: a cookie alone would let any same-site page
+    open the console, and every localhost port is same-site (DECISIONS #45); a
+    token in the query string writes a credential into logs and history.
+
+    So authorisation happens here, over an ordinary authenticated request, and
+    the WebSocket only redeems what this issued.
+    """
+    principal = current_principal(conn)
+    instance = session.get(Instance, instance_id)
+    if instance is None:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_id}' not found")
+
+    _row, secret = mint_console_ticket(session, principal, instance_id)
+    logger.info("Console ticket minted for '%s'", instance.name)
+    return ConsoleTicketRead(ticket=secret, expires_at=_row.expires_at)
+
+
 @router.websocket("/{instance_id}/console")
 async def instance_console(websocket: WebSocket, instance_id: str) -> None:
     """Bridge the browser to this VM's VNC framebuffer.
@@ -1772,6 +1808,24 @@ async def instance_console(websocket: WebSocket, instance_id: str) -> None:
     console can stay open for hours and must not hold a pooled connection.
     """
     await websocket.accept()
+
+    # Authentication happens here rather than in the application guard: an
+    # HTTPException cannot become a close frame, and the browser cannot present
+    # a header on the handshake. The ticket is consumed on redemption, so a
+    # replay of the same URL fails even seconds later.
+    ticket = websocket.query_params.get("ticket", "")
+    with Session(db_engine) as session:
+        principal = redeem_console_ticket(session, ticket, instance_id) if ticket else None
+    if principal is None:
+        # Deliberately one message for every rejection — expired, already used,
+        # minted for a different VM, or never valid. A caller holding a bad
+        # ticket learns only that it did not work.
+        await _close_console(
+            websocket,
+            CLOSE_UNAUTHENTICATED,
+            "Console ticket missing, expired, already used, or for a different instance",
+        )
+        return
 
     with Session(db_engine) as session:
         instance = session.get(Instance, instance_id)
