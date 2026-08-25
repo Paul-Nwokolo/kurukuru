@@ -2,29 +2,38 @@
 What the command is called, in one place.
 
 The product name is not final. Every other module asks for :data:`CLI_NAME`
-rather than spelling it, so renaming the tool is this file plus the
+rather than spelling it, so renaming the tool is :mod:`app.product` plus the
 ``[project.scripts]`` entry in ``pyproject.toml`` — two lines, not a grep across
 help text, error hints and documentation strings.
 
-The environment-variable prefix travels with the name for the same reason, and
-because it is already the backend's prefix (``IAAS_``): one namespace for the
-whole product rather than one per surface.
+The name and the environment-variable prefix are defined in :mod:`app.product`
+and re-exported here. They are shared with the backend, which needs the command
+name to tell the dashboard what to tell the user to run, and a module below both
+surfaces is the only place a shared name can live without one importing the
+other. Everything else here is the CLI's alone.
 """
 
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version as _package_version
 
-#: The command users type. Referenced everywhere; never spelled inline.
-CLI_NAME = "iaas"
+# The names themselves live in ``app.product``, which has no dependencies, so
+# the backend can import them without depending on its own client package. They
+# are re-exported here because every CLI module already asks this module for
+# them, and the indirection is not worth a hundred-line diff.
+from app.product import CLI_NAME, DISTRIBUTION_NAME, ENV_PREFIX
 
-#: Prefix for the CLI's own environment variables (``IAAS_API_URL``, …).
-#: Shared with the backend's ``pydantic-settings`` prefix on purpose — the
-#: backend ignores keys it doesn't declare, so the two cannot collide.
-ENV_PREFIX = "IAAS_"
-
-#: Distribution that ships the command; the source of ``<cli> version``.
-DISTRIBUTION_NAME = "local-iaas"
+__all__ = [
+    "CLI_NAME",
+    "CONFIG_PATH",
+    "DEFAULT_API_URL",
+    "DEFAULT_DASHBOARD_URL",
+    "DISTRIBUTION_NAME",
+    "ENV_PREFIX",
+    "UNINSTALLED_VERSION",
+    "cli_version",
+    "env_var",
+]
 
 #: Where a user's persistent CLI settings live. Under the same directory the
 #: backend already owns (keys, images, instances), so there is one place to look.

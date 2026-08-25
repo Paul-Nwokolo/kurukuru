@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { onUnauthenticated, refreshCsrfToken, whoami } from '../api/client'
-import type { User } from '../api/client'
+import {
+  getFirstRunStatus,
+  onUnauthenticated,
+  refreshCsrfToken,
+  whoami,
+} from '../api/client'
+import type { FirstRunStatus, User } from '../api/client'
 import { LoginScreen } from './LoginScreen'
 
 /**
@@ -22,11 +27,17 @@ import { LoginScreen } from './LoginScreen'
  *    click to be the request that discovers the session is gone. The client
  *    publishes 401s, this subscribes once, and the cached data is dropped so
  *    the next session cannot see the previous one's rows.
+ *
+ * It also makes the one public call — `/auth/first-run` — before anything
+ * renders, and shares the answer with the login screen. That call carries the
+ * name of the CLI, which copy on both sides of the gate needs, so fetching it
+ * here means no component ever renders before the name is known.
  */
 export function SessionGate({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const [user, setUser] = useState<User | null>(null)
   const [checked, setChecked] = useState(false)
+  const [firstRun, setFirstRun] = useState<FirstRunStatus | null>(null)
 
   const establish = useCallback(async () => {
     const me = await whoami()
@@ -38,11 +49,17 @@ export function SessionGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
-    establish()
-      .catch(() => undefined) // 401 here simply means "show the login screen"
-      .finally(() => {
-        if (!cancelled) setChecked(true)
-      })
+    // Both settle before anything renders. `first-run` failing means the
+    // backend is unreachable, which the login screen says in those words —
+    // it is not a wrong password and must not be shown as one.
+    void Promise.allSettled([
+      getFirstRunStatus().then((status) => {
+        if (!cancelled) setFirstRun(status)
+      }),
+      establish(), // rejecting here simply means "show the login screen"
+    ]).then(() => {
+      if (!cancelled) setChecked(true)
+    })
     return () => {
       cancelled = true
     }
@@ -66,6 +83,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
   if (!user) {
     return (
       <LoginScreen
+        status={firstRun}
         onSignedIn={() => {
           void establish().then(() => queryClient.invalidateQueries())
         }}

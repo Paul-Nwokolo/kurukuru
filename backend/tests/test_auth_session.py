@@ -17,6 +17,8 @@ amount of same-origin packaging changes that (DECISIONS #45).
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from app import auth
@@ -287,7 +289,38 @@ def test_whoami_reports_the_account_and_never_the_hash(client):  # noqa: F811
 
 
 def test_first_run_reports_configured_once_an_account_exists(anon_client):  # noqa: F811
-    assert anon_client.get("/auth/first-run").json() == {"configured": True}
+    assert anon_client.get("/auth/first-run").json()["configured"] is True
+
+
+def test_first_run_tells_the_dashboard_what_the_command_is_called(anon_client):  # noqa: F811
+    """The dashboard prints the CLI's name; it must not spell it itself.
+
+    The product name is not settled. The login screen's instructions ("run
+    ``<cli> auth init``") are shown to someone who is, by definition, locked
+    out and following them literally — so a rename that left the dashboard
+    naming the old command would break the one path that has no other way
+    through. This is the field that stops the name being duplicated in TSX.
+    """
+    from app.product import CLI_NAME
+
+    assert anon_client.get("/auth/first-run").json()["cli_name"] == CLI_NAME
+
+
+def test_the_cli_name_has_exactly_one_definition():
+    """``app.cli.naming`` re-exports it rather than holding a second copy.
+
+    The re-export exists so the hundred CLI modules that already import from
+    ``naming`` keep working. If someone later "tidies" it back into a literal,
+    the backend and the CLI can drift to different names without any test
+    noticing — this is the one that notices.
+    """
+    from app import product
+    from app.cli import naming
+
+    assert naming.CLI_NAME is product.CLI_NAME
+
+    source = (pathlib.Path(naming.__file__)).read_text(encoding="utf-8")
+    assert 'CLI_NAME = "' not in source, "naming.py should import the name, not define it"
 
 
 def test_an_expired_session_is_rejected_and_cleaned_up(browser):

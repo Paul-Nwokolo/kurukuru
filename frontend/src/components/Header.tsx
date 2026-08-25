@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { RefreshCw, X } from 'lucide-react'
+import { AccountMenu } from './AccountMenu'
 import { HealthIndicator } from './HealthIndicator'
 import { ProjectSelector } from './ProjectSelector'
 import { ThemeToggle } from './ThemeToggle'
@@ -134,6 +135,8 @@ export function Header({ title }: { title: string }) {
         />
         <div className="h-4 w-px bg-border" aria-hidden />
         <HealthIndicator />
+        <div className="h-4 w-px bg-border" aria-hidden />
+        <AccountMenu />
       </div>
     </header>
   )

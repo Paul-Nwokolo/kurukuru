@@ -128,8 +128,31 @@ export interface ApiTokenRow {
   revoked_at: string | null
 }
 
-export async function getFirstRunStatus(): Promise<{ configured: boolean }> {
-  const { data } = await http.get<{ configured: boolean }>('/auth/first-run')
+export interface FirstRunStatus {
+  configured: boolean
+  /** What the command-line tool is called on this install. */
+  cli_name: string
+}
+
+/**
+ * The name of the CLI, as this backend reports it.
+ *
+ * Null until `getFirstRunStatus` has answered. The product name is not settled,
+ * so no part of the dashboard spells it: copy that names a command reads it
+ * from here, and copy that cannot render without it renders nothing rather than
+ * guessing. A hardcoded fallback would be the one thing that survives a rename
+ * and be wrong — silently, in the instructions someone is following because
+ * they are already stuck.
+ */
+let cliNameValue: string | null = null
+
+export function cliName(): string | null {
+  return cliNameValue
+}
+
+export async function getFirstRunStatus(): Promise<FirstRunStatus> {
+  const { data } = await http.get<FirstRunStatus>('/auth/first-run')
+  if (data.cli_name) cliNameValue = data.cli_name
   return data
 }
 
@@ -161,6 +184,14 @@ export async function refreshCsrfToken(): Promise<string> {
   const { data } = await http.get<{ csrf_token: string }>('/auth/csrf')
   setCsrfToken(data.csrf_token)
   return data.csrf_token
+}
+
+/** A command as the user should type it, e.g. `iaas auth login`. Null when the
+ *  backend has not been asked yet — callers omit the sentence rather than
+ *  invent a name. */
+export function cliCommand(rest: string): string | null {
+  const name = cliName()
+  return name ? `${name} ${rest}` : null
 }
 
 export async function changePassword(

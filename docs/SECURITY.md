@@ -45,7 +45,8 @@ everything that can talk to the port without those.
 **Every route is closed by default.** Three are public, each for a stated
 reason: `/health` (liveness, and it deliberately reports nothing about
 instances), `/auth/login`, and `/auth/first-run` (whether any account exists,
-which an install with none cannot hide anyway). The guard is applied to the
+which an install with none cannot hide anyway, plus the name of the CLI so the
+login screen can name the command to run without spelling it). The guard is applied to the
 application, not to each router, and `tests/test_auth_coverage.py` enumerates
 the routes the app actually registered and fails if any answers anything but
 401 to an anonymous caller. That test found four open routes on its first run —

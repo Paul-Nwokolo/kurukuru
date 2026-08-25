@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { KeyRound, LogOut, Plus, ShieldCheck, Trash2 } from 'lucide-react'
+import { KeyRound, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import {
   apiErrorMessage,
   changePassword,
+  cliCommand,
   createApiToken,
   getApiTokens,
   logout,
@@ -31,26 +32,20 @@ export function AccountSection() {
 
   return (
     <section className="rounded-lg border border-border">
-      <header className="flex items-start justify-between gap-4 border-b border-border px-4 py-3">
-        <div className="flex items-start gap-2">
-          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" aria-hidden />
-          <div>
-            <h2 className="text-sm font-semibold text-text">Account</h2>
-            <p className="mt-0.5 text-xs text-text-subtle">
-              Signed in as{' '}
-              <span className="data text-text">{user?.username ?? '…'}</span>
-              {user?.is_owner && ' · owner'}. Every account has full control of
-              every VM — there are no roles.
-            </p>
-          </div>
+      {/* No sign-out button here: that lives in the header, where identity
+          does, and one exit is easier to find than two. This page is for the
+          changes worth reading about before making them. */}
+      <header className="flex items-start gap-2 border-b border-border px-4 py-3">
+        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" aria-hidden />
+        <div>
+          <h2 className="text-sm font-semibold text-text">Account</h2>
+          <p className="mt-0.5 text-xs text-text-subtle">
+            Signed in as{' '}
+            <span className="data text-text">{user?.username ?? '…'}</span>
+            {user?.is_owner && ' · owner'}. Every account has full control of
+            every VM — there are no roles.
+          </p>
         </div>
-        <Button
-          icon={LogOut}
-          size="sm"
-          onClick={() => void logout()}
-        >
-          Sign out
-        </Button>
       </header>
 
       <PasswordForm />
@@ -75,10 +70,11 @@ function PasswordForm() {
       // state worth rendering — a background poll would 401 within seconds and
       // replace it with the login screen anyway. Go there deliberately, with
       // the explanation, instead of being sent there by a race.
+      const relogin = cliCommand('auth login')
       setSignOutNotice(
         'Password changed. Every session and API token was invalidated, ' +
-          'including this one. Run `iaas auth login` again on any machine ' +
-          'using the CLI.',
+          'including this one.' +
+          (relogin ? ` Run \`${relogin}\` again on any machine using the CLI.` : ''),
       )
       void logout()
     },
@@ -200,10 +196,15 @@ function TokenList() {
         API tokens
       </h3>
       <p className="mt-1 text-xs leading-relaxed text-text-subtle">
-        Used by the CLI. <code className="data">iaas auth login</code> creates
-        one and stores it in a file locked to your OS user; create one here if
-        you want a second machine or a script to have its own, revocable
-        credential.
+        Used by the CLI.{' '}
+        {cliCommand('auth login') && (
+          <>
+            <code className="data">{cliCommand('auth login')}</code> creates one
+            and stores it in a file locked to your OS user;{' '}
+          </>
+        )}
+        create one here if you want a second machine or a script to have its own,
+        revocable credential.
       </p>
 
       {error && (

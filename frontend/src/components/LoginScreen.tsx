@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { LogIn, ShieldCheck, Terminal } from 'lucide-react'
-import {
-  apiErrorMessage,
-  getFirstRunStatus,
-  login,
-  takeSignOutNotice,
-} from '../api/client'
+import { apiErrorMessage, cliCommand, login, takeSignOutNotice } from '../api/client'
+import type { FirstRunStatus } from '../api/client'
 import { Button } from '../ui/Button'
 import { Field, Input } from '../ui/Field'
 import { Alert } from '../ui/Feedback'
@@ -25,33 +21,28 @@ import { Alert } from '../ui/Feedback'
  * report either of the above, and telling someone their password was wrong when
  * the server is off is the worst of the three messages.
  */
-export function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
+export function LoginScreen({
+  /** Null when `/auth/first-run` did not answer — that is the "backend
+   *  unreachable" case, and it is reported as itself. */
+  status,
+  onSignedIn,
+}: {
+  status: FirstRunStatus | null
+  onSignedIn: () => void
+}) {
   const [username, setUsername] = useState('owner')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [configured, setConfigured] = useState<boolean | null>(null)
-  const [reachable, setReachable] = useState(true)
   // Read once, on mount, and cleared as it is read: whatever put us here is
   // true now and will not be true of the next visit to this screen.
   const [notice] = useState(takeSignOutNotice)
   const passwordRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    getFirstRunStatus()
-      .then((status) => {
-        if (cancelled) return
-        setConfigured(status.configured)
-        setReachable(true)
-      })
-      .catch(() => {
-        if (!cancelled) setReachable(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const reachable = status !== null
+  const configured = status?.configured ?? null
+  const initCommand = cliCommand('auth init')
+  const resetCommand = cliCommand('auth reset-password')
 
   useEffect(() => {
     if (configured) passwordRef.current?.focus()
@@ -109,7 +100,7 @@ export function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
                   Create the owner account on the machine running the backend:
                 </p>
                 <pre className="overflow-x-auto rounded-lg bg-bg px-3 py-2 font-mono text-xs text-text">
-                  iaas auth init
+                  {initCommand}
                 </pre>
                 <p>
                   It is done on the host rather than here on purpose: a setup
@@ -175,11 +166,15 @@ export function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
           )
         )}
 
-        <p className="text-center text-xs text-text-muted">
-          Forgotten the password? Run{' '}
-          <code className="font-mono">iaas auth reset-password</code> on the
-          host.
-        </p>
+        {/* Omitted rather than guessed when the backend has not told us what
+            the command is called — instructions naming a command that does not
+            exist are worse than no instructions. */}
+        {resetCommand && (
+          <p className="text-center text-xs text-text-muted">
+            Forgotten the password? Run{' '}
+            <code className="font-mono">{resetCommand}</code> on the host.
+          </p>
+        )}
       </div>
     </div>
   )

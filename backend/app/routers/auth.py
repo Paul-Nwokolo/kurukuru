@@ -23,6 +23,7 @@ from sqlmodel import select
 
 from app import auth
 from app.database import get_session
+from app.product import CLI_NAME
 from app.models import (
     ApiToken,
     ApiTokenCreate,
@@ -67,14 +68,23 @@ def _set_session_cookie(response: Response, secret: str) -> None:
 
 
 @router.get("/first-run", summary="Whether an account exists yet")
-def first_run_status(db: DbSession = Depends(get_session)) -> dict[str, bool]:
+def first_run_status(db: DbSession = Depends(get_session)) -> dict[str, object]:
     """Public, and carries no information an attacker can use.
 
     Whether *any* account exists is not a secret — an install with none is
     reachable by anyone anyway — and the dashboard needs it to choose between a
     login form and instructions for creating the owner account.
+
+    ``cli_name`` rides along because this is the endpoint whose entire purpose
+    is "tell the user which command to run", and because the dashboard needs the
+    name *before* anyone is signed in. The product name is not settled; the
+    dashboard prints it rather than spelling it, so a rename does not leave the
+    login screen naming a command nobody has. See :mod:`app.product`.
     """
-    return {"configured": db.exec(select(User)).first() is not None}
+    return {
+        "configured": db.exec(select(User)).first() is not None,
+        "cli_name": CLI_NAME,
+    }
 
 
 @router.post("/login", response_model=UserRead, summary="Sign in")
