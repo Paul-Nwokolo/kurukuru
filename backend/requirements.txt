@@ -27,4 +27,5 @@ rich>=13.0
 
 # --- Dev / tooling (optional but recommended) ---
 httpx==0.28.1          # FastAPI TestClient, the CLI's transport, base-image downloads
+argon2-cffi==23.1.0    # argon2id password hashing; the KDF, not a bare hash
 pytest==8.3.5

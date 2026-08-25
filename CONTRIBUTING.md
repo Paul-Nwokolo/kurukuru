@@ -20,7 +20,7 @@ prove the mock.
 Frontend (from `frontend/`):
 
 ```bash
-npm run verify      # typecheck, lint, colour guard, contrast, build
+npm run verify      # typecheck, lint, colour, contrast, console, name, build
 ```
 
 Or individually:
@@ -31,6 +31,7 @@ npm run lint           # oxlint
 npm run check:colour   # no hard-coded colours outside the token layer
 npm run check:contrast # WCAG AA over every token pair the UI uses
 npm run check:console  # the VNC console's connect ordering
+npm run check:name     # the product's name is never spelled in copy
 npm run build
 ```
 
@@ -48,6 +49,16 @@ the backend suite plus live verification covers it. What guards the design
 system instead is `check:colour` (no hard-coded colours outside
 `src/styles/tokens.css`) and `check:contrast` (WCAG AA over every token pair the
 UI actually renders).
+
+`check:name` guards a different kind of drift. The CLI is called `iaas` today
+and will not be forever, so the name has one definition — `CLI_NAME` in
+`backend/app/product.py` — and reaches the dashboard as `cli_name` on
+`GET /auth/first-run`. Copy renders it through `cliCommand()`; nothing spells
+it. The strings this protects are the ones on the **login screen**, read by
+someone who is locked out and following them literally: a rename that left
+those naming the old command would break the one path with no workaround.
+Comment lines are exempt, and so are wire identifiers (the CSRF header, the
+cookie, localStorage keys), each with its reason in the script's allowlist.
 
 `check:console` is the exception to "thin enough", and it is worth
 understanding as a pattern rather than a one-off. The console panel once sat on

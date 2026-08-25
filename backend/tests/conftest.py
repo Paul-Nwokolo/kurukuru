@@ -245,6 +245,14 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
 
     state = tmp_path / "state"
     database = tmp_path / "iaas.db"
+
+    # The CLI reads its API token from a file resolved through the environment,
+    # so without this a test run on a machine where somebody has signed in picks
+    # up that person's real credential — and then fails, confusingly, because
+    # the test database has never heard of it. Same rule as the rest of this
+    # fixture: a test must not be able to reach the state of the machine
+    # running it, in either direction.
+    monkeypatch.setenv("IAAS_AUTH_TOKEN_FILE", str(tmp_path / "cli-token"))
     settings = Settings(
         state_dir=str(state),
         database_url=f"sqlite:///{database.as_posix()}",
@@ -365,3 +373,42 @@ def small_host():
     ):
         yield
     invalidate_cache()
+
+
+def authenticate_test_client(client, engine) -> str:
+    """Give a TestClient the owner account and a Bearer token for it.
+
+    Phase 15 closed the API by default, so a client that does not authenticate
+    can only assert 401s. Every per-module client fixture calls this, once,
+    rather than several hundred tests each learning about credentials.
+
+    A Bearer token rather than a session cookie on purpose: token requests are
+    exempt from the CSRF check (a browser cannot be tricked into attaching an
+    Authorization header cross-origin), so existing state-changing tests do not
+    each need a CSRF header bolted on. The cookie path has its own tests.
+
+    Rows are written straight to the database rather than through the login
+    route: the first-run and login flows have their own tests, and the rest of
+    the suite should not fail when those flows change shape.
+    """
+    from sqlmodel import Session as _Session
+
+    from app import auth as _auth
+    from app.models import User as _User
+
+    with _Session(engine) as session:
+        user = _User(
+            username="owner",
+            password_hash=_auth.hash_password("test-password-1234"),
+            is_owner=True,
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        _row, secret = _auth.create_api_token(session, user, "test-suite")
+
+    client.headers["Authorization"] = f"Bearer {secret}"
+    client.api_token = secret          # type: ignore[attr-defined]
+    client.owner_username = "owner"    # type: ignore[attr-defined]
+    client.owner_password = "test-password-1234"  # type: ignore[attr-defined]
+    return secret

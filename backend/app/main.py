@@ -16,6 +16,10 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse
+
+from app.security import guard as security_guard
 from sqlmodel import Session
 
 from app.config import Settings, get_settings
@@ -62,6 +66,34 @@ async def _reconcile_loop(interval: int) -> None:
             await asyncio.to_thread(_reconcile_once)
         except Exception:  # noqa: BLE001 - the loop must outlive any single pass
             logger.exception("Background reconciliation pass failed")
+
+
+def _warn_if_no_account() -> None:
+    """Say what to run when the install has no owner yet.
+
+    Without this the symptom is every request answering 401 and nothing
+    explaining why — which is exactly what an upgrade to this version looks
+    like from the outside. The instruction is logged at WARNING so it survives
+    a quiet log level, and names the command rather than describing it.
+    """
+    from sqlmodel import Session, select
+
+    from app.database import engine
+    from app.models import User
+
+    try:
+        with Session(engine) as session:
+            if session.exec(select(User)).first() is not None:
+                return
+    except Exception as exc:  # pragma: no cover - a broken DB is reported elsewhere
+        logger.debug("Could not check for accounts: %s", exc)
+        return
+
+    logger.warning(
+        "No account exists yet, so every request except /health and the login "
+        "routes will answer 401. Create the owner account on this machine with: "
+        "iaas auth init"
+    )
 
 
 @asynccontextmanager
@@ -124,6 +156,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Background reconciler every %ss", settings.reconcile_interval_seconds
         )
 
+    _warn_if_no_account()
     logger.info("%s v%s ready.", settings.app_name, settings.app_version)
     yield
 
@@ -138,13 +171,43 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     lifespan=lifespan,
+    # Closed by default. Registered here rather than per router so a route added
+    # later is protected the moment it exists, and making one public is a
+    # deliberate edit to app.security.PUBLIC_ROUTES that a reviewer will see.
+    dependencies=[Depends(security_guard)],
+    # FastAPI's generated documentation routes are registered directly on the
+    # router and do NOT receive the application dependencies above — measured:
+    # the route-coverage test found /docs, /redoc, /openapi.json and
+    # /docs/oauth2-redirect answering 200 to an anonymous caller. They are
+    # turned off here and re-served below, as ordinary routes, so the guard
+    # applies to them like everything else.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
-# The React frontend (Vite dev server) is the only intended consumer.
+
+@app.get("/openapi.json", include_in_schema=False)
+def openapi_schema() -> dict:
+    return app.openapi()
+
+
+@app.get("/docs", include_in_schema=False)
+def swagger_ui() -> HTMLResponse:
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{settings.app_name} API")
+
+
+@app.get("/redoc", include_in_schema=False)
+def redoc_ui() -> HTMLResponse:
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{settings.app_name} API")
+
+# The React frontend (Vite dev server) is the only intended consumer, named by
+# exact origin. `allow_credentials=True` is what makes the exactness matter: it
+# permits the session cookie to travel, so every entry in this list is a page
+# allowed to act as the signed-in user. There is no regex form (DECISIONS #45).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_origin_regex=settings.cors_origin_regex or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -604,10 +667,12 @@ def ssh_key() -> dict[str, str]:
 
 
 from app.routers import (  # noqa: E402
+    auth as auth_routes,
     events, images, instances, keypairs, networks, projects, snapshots, volume_snapshots,
     volumes,
 )
 
+app.include_router(auth_routes.router)
 app.include_router(projects.router)
 app.include_router(instances.router)
 app.include_router(images.router)

@@ -1889,8 +1889,191 @@ repeated reconciles — where the pre-Phase-13 code flapped to Stopped — and
 returned to healthy when the socket was released.
 
 
+## 45. Every localhost port is the same site, so CSRF tokens are permanent
+
+**Context.** Phase 15 gave the browser a session cookie. The usual reasoning is
+that `SameSite=Strict` plus a same-origin deployment makes CSRF protection
+unnecessary, and that packaging would eventually deliver the same-origin half.
+Both halves are wrong here, and the second is wrong in a way that would never
+have shown up as a bug.
+
+**`SameSite` is computed from scheme and registrable domain. Port is not part of
+a site.** So `http://localhost:9999` and `http://localhost:8000` are the *same
+site*, and a cookie set by this backend is sent with requests originating from a
+page on any other local port — a stale dev server, a docs preview, a package's
+build tool. For a tool that binds to loopback, `SameSite` therefore defends
+against nothing that matters, and no amount of same-origin packaging changes it.
+
+**Measured, because the argument is easy to get backwards.** Chrome, an isolated
+backend on 8100, two pages:
+
+| Step | Result |
+|---|---|
+| login from `http://localhost:8101` | 200, cookie set, `document.cookie` empty (httpOnly holds) |
+| plain form POST from `http://localhost:8102` | **403**, not 401 |
+
+401 would have meant the cookie was never sent. **403 means it was sent** and
+the CSRF token refused it. Controls, so the discriminator is not assumed: no
+credential → 401; cookie without the CSRF header → 403; cookie with it → 200.
+
+So the CSRF token is not defence in depth. It is the only thing standing there.
+It is required on every state-changing request authenticated by cookie, stored
+on the session row rather than derived, and returned in a response body rather
+than a cookie — a cookie would travel automatically, which is precisely what
+makes cookies unsuitable for this job.
+
+**Bearer tokens are exempt, and that is not a hole.** A browser cannot be
+induced to attach an `Authorization` header to a cross-origin request, so the
+header's presence is itself evidence the caller intended the request.
+
+**The same finding retired `cors_origin_regex`.** It existed so a developer
+could widen origins for a session when Vite took a different port, and its
+documented example matched *any* port on localhost. With no authentication that
+cost nothing — the API was open, so CORS was not what protected it. With
+`allow_credentials=True` and a session cookie it would make any page on any
+local port a fully authenticated API client. Removed rather than narrowed; the
+fix for a port collision is to free the port.
+
+## 46. Token secrets are hashed with SHA-256, deliberately not with a KDF
+
+**Context.** Passwords here use argon2id. Session secrets and API tokens use a
+single SHA-256. That looks inconsistent — "secret means KDF" is a strong and
+usually correct instinct — and it is the kind of thing a later contributor
+"fixes". This entry exists so that fix does not happen by accident.
+
+**A KDF exists to make *guessing* expensive.** It is slow on purpose, because
+the attacker's advantage against a password is that humans choose from a small,
+predictable space: a stolen hash can be attacked with a dictionary, and argon2's
+cost per attempt is what makes that uneconomic. Every parameter it exposes —
+time, memory, parallelism — is about raising the price of a guess.
+
+**None of that applies to these secrets.** They are `secrets.token_urlsafe(32)`:
+256 bits from the OS CSPRNG. There is no dictionary, no structure and no
+plausible guess. Brute force against 2^256 is not slowed usefully by making each
+attempt a hundred thousand times more expensive — it is already impossible, and
+argon2 would move it from impossible to impossible.
+
+**And the cost is not theoretical.** A password hash is verified when someone
+logs in. A token hash is verified on **every authenticated request** — every
+poll of the instances list, every CLI call, every dashboard refresh. argon2id at
+sane parameters is tens of milliseconds and tens of megabytes *by design*. Using
+it here would put that on the request path of the whole API: a self-inflicted
+rate limit that protects nothing, and one whose memory cost is trivially
+turned into a denial of service by an attacker sending unauthenticated garbage
+tokens.
+
+**What SHA-256 is doing here is the job that remains**: making the stored form
+useless to someone who reads the database. It is a one-way function over a
+high-entropy input, and that is exactly the situation it is fit for. The
+comparison is `hmac.compare_digest`, so a timing side channel does not leak the
+digest either.
+
+**The rule, stated for whoever finds this next.** Choose the KDF when the secret
+was chosen by a human. Choose a plain cryptographic hash when the secret was
+chosen by a CSPRNG and is verified often. Both are in this codebase, for those
+reasons, and swapping either one is a regression.
+
+## 47. The first account is created on the host, not over the API
+
+**Context.** Something has to create the first account, and every option has a
+cost. The brief listed three: an interactive CLI command, a generated password
+printed once at startup, or a setup screen reachable only from localhost.
+
+**The setup screen is out on the same grounds as bind-dependent auth** — it
+trusts topology, and any process or page on the machine is "local".
+
+**Printing a generated password at startup** works headlessly but puts a
+credential into the log stream, where it is captured by whatever collects logs
+and read by anyone who can see them. It also fails the case where the backend
+runs as a service and nobody is watching the console.
+
+**So: `iaas auth init`, prompted interactively, host-local.** The password is
+never a flag — a flag lands in shell history and in this project's own approved
+-command list, which is the exact leak CONTRIBUTING documents — and it is
+refused outright when stdin is not a terminal rather than quietly accepting a
+pipe.
+
+**It does not go through the API, and that is the point.** Creating the first
+account over HTTP needs a public, state-changing route: reachable without a
+credential, callable once, and whoever calls it first owns the machine's VMs. On
+a non-loopback bind that is a race. Doing it on the host requires filesystem
+access to the state directory instead — a *stronger* requirement than any
+credential this product could check, because whoever has that directory can
+already read the orchestrator's SSH private key and every VM disk in it. The
+local path protects more and adds no public surface.
+
+`auth reset-password` is host-local for the same reason plus one more: it is the
+recovery path for someone who has lost their credential, so it cannot require
+one. It invalidates every session and token, including this machine's.
+
+**This is a named exception to a rule the project enforces with a test.**
+`test_the_cli_never_reaches_past_the_api` forbids the CLI from importing the
+database, models or settings, because a CLI that reaches past the API works on
+the developer's machine, breaks when the backend is elsewhere, and gives the CLI
+capabilities no other client can have. The exception is confined to one file,
+`app/cli/host_admin.py`, so it is a filename rather than a scattering of
+imports, and the test names it and says why.
+
+**On not being locked out.** A backend that finds no account logs, at WARNING,
+the exact command to run. The failure mode this replaces is every request
+answering 401 with nothing explaining why — which is precisely what upgrading to
+this version looks like from the outside.
+
+## 48. The console is opened with a single-use ticket, not with the session
+
+**Context.** Every other route is authenticated by a session cookie or a Bearer
+header. The VNC console cannot use either. The browser `WebSocket` constructor
+takes a URL and nothing else — no headers, no options object — so a Bearer token
+is not available to it, and while the cookie *is* sent on the upgrade request,
+relying on that would make the console the one endpoint whose authentication
+cannot be reasoned about the same way as the rest.
+
+**The URL is the only channel, and a URL is not a safe place for a credential.**
+It appears in the browser's network panel, in any proxy log, and in whatever
+diagnostic someone pastes into an issue. So the thing put there is built to be
+worthless by the time anyone reads it:
+
+- **Single use.** Redemption deletes the row inside the same transaction that
+  reads it. A replay of a captured URL is refused.
+- **30 seconds.** Long enough for a ~100 kB viewer chunk to load and a socket to
+  open on loopback; short enough that a ticket in a log is expired before the
+  log is read.
+- **Bound to one instance.** The instance id is checked against the one in the
+  path. A ticket minted for a VM you are entitled to see cannot open a
+  different one.
+- **Bound to the session that minted it.** It dies when that session is logged
+  out or expires, so a ticket cannot outlive the authority that created it.
+- **Bound to `credential_version`.** A password change invalidates every
+  outstanding ticket along with every session and token, so "change the password
+  because something leaked" does not leave a live console behind it.
+
+**All four failure modes are tested explicitly**, in `tests/test_console_auth.py`
+— no ticket, a ticket for another instance, a redeemed ticket replayed, and a
+ticket whose session or password is gone. Rejection is uniform: close code 4401
+with one message, so the socket does not become an oracle for which instances
+exist.
+
+**The consequence in the client** is that minting is a separate request that has
+to complete *before* the socket is opened, which is awkward: `openSocket` in
+`src/lib/console.ts` is synchronous by design — the ordering guarantee that the
+viewer is loaded first depends on nothing awaiting inside it, and
+`scripts/check-console-handshake.mjs` fails the build if that order is lost.
+So the ticket is fetched before `connectConsole` is called at all, spending one
+loopback round trip to leave that invariant untouched.
+
+**The alternative considered and rejected** was accepting the session cookie on
+the upgrade. It is less code and it works. It also means the console's
+authentication is a different mechanism from every other route's, silently
+depends on `SameSite` behaviour on a WebSocket upgrade, and gives a leaked URL
+nothing to expire. A ticket costs one request and is auditable.
+
+## Known limitations
+
 - **No license chosen.** Until one exists, the code is not usable by anyone else.
-- **No authentication.** Anything beyond a single trusted machine needs it first.
+- **No authorization.** Authentication exists (decisions 45-48); roles and
+  project isolation do not. Every account is a full administrator.
+- **No transport encryption.** Plain HTTP, so anything beyond loopback needs
+  a TLS-terminating proxy in front of it. See docs/SECURITY.md.
 - **SQLite, single writer.** Fine now; a multi-process deployment would need
   more.
 - **Concurrent-launch name race.** See decision 6 — closable with a partial

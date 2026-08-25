@@ -69,13 +69,40 @@ is in [docs/PORTABILITY.md](docs/PORTABILITY.md).
   every error rather than the most recent, restores (which change no row at
   all), and corrections the reconciler made on its own.
 
-Not built: authentication, multi-host, golden-image capture from a running VM,
+Not built: authorization and roles, multi-host, golden-image capture from a running VM,
 bridged and host-only networking (both need elevation or a component this
 project does not ship — see DECISIONS #24), live resize, UEFI boot (the
 mechanism is measured and the design settled — see DECISIONS #42 — but nothing
 consumes it). Snapshots — of an instance or of a volume — require the instance
 to be stopped; see [DECISIONS #15](docs/DECISIONS.md) for the measurements
 behind that. See [Project status](#project-status).
+
+### Authentication
+
+Every route requires a credential; the exceptions are `/health` and the login
+flow, and a test enumerates the application's routes and fails if any other one
+answers something other than 401 to an anonymous caller.
+
+```
+iaas auth init          # once, on the host: creates the owner account
+iaas auth login         # stores an API token for this machine
+iaas auth whoami
+iaas auth token ls|create|rm
+```
+
+The browser signs in with a password and gets an httpOnly session cookie plus a
+CSRF token. The CLI uses a long-lived API token, kept in a file locked to your
+OS user. The console is opened with a single-use ticket bound to one instance
+and to the session that minted it.
+
+Creating the first account is a **host-local** operation rather than an HTTP
+route, because a public route for it would hand ownership of every VM to
+whoever called it first. Requiring filesystem access to the state directory is
+strictly stronger — that directory already holds the SSH private key and every
+VM disk.
+
+What this does and does not protect, and how to recover a forgotten password,
+is in [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Requirements
 
@@ -334,10 +361,14 @@ Early, and honest about it. It runs real VMs and has been used to do real work,
 but:
 
 - **Single host.** No clustering, no remote hypervisors.
-- **No authentication.** None. Every endpoint is unauthenticated, and anyone who
-  can reach port 8000 can create, destroy and open a console into your VMs.
-  **Do not expose this on a shared or untrusted network.** It is bound to
-  localhost by default; keep it that way until authentication exists.
+- **No authorization.** There *is* authentication — every route requires it —
+  but every account is equal. Projects organise resources without isolating
+  them, and a second account is a second full administrator, not a restricted
+  user.
+- **No transport encryption.** Plain HTTP: on loopback that is fine, and beyond
+  it means credentials and VM framebuffers cross the wire in the clear. Put a
+  reverse proxy in front of it and terminate TLS there. See
+  [docs/SECURITY.md](docs/SECURITY.md).
 - **Windows-validated only.** Other platforms are unexercised. (That is the
   *host*. Windows **guests** are a separate matter — see below.)
 - **Linux guests only, in practice.** Windows guests get the right virtual
@@ -423,6 +454,8 @@ ergonomics.
   run.
 - [Tools](tools/README.md) — the media checker and the alternating-runs
   measurement harness, and the mistakes that made each necessary.
+- [Security](docs/SECURITY.md) — the threat model, what is deliberately not
+  protected, and how to recover a password or revoke a token.
 - [Decisions](docs/DECISIONS.md) — why things are the way they are.
 - [Contributing](CONTRIBUTING.md) — running the tests and the conventions in use.
 - [History](docs/history/) — the phase briefs this was built from.

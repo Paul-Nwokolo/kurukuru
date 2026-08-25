@@ -564,6 +564,24 @@ export function useSettings() {
   })
 }
 
+/**
+ * One setting's value by key, or null while it loads.
+ *
+ * For copy that has to name a real path or a real default rather than the
+ * shipped one — the ISO directory and the guest username both move with
+ * `IAAS_ISO_DIR` and `IAAS_DEFAULT_VM_USER`, and instructions naming the
+ * default on an install that changed it send the user to the wrong place.
+ */
+export function useSettingValue(key: string): string | null {
+  const { data } = useSettings()
+  if (!data) return null
+  for (const group of data) {
+    const found = group.settings.find((setting) => setting.key === key)
+    if (found) return String(found.value)
+  }
+  return null
+}
+
 /** Host-side facts for the Settings view. Slow poll: disk and accel do move. */
 export function useDiagnostics() {
   return useQuery({

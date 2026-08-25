@@ -41,7 +41,7 @@ from app.engines import (
 from app.main import app
 from app.host_capacity import invalidate_cache
 from app.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
-from tests.conftest import redirect_db_engines
+from tests.conftest import authenticate_test_client, redirect_db_engines
 
 #: Address the fake hands out, matching QEMU's loopback port-forward model.
 FAKE_IP = "127.0.0.1"
@@ -253,9 +253,34 @@ def client(monkeypatch, tmp_path, iso_dir, small_host):
         c.fake = qemu_fake  # type: ignore[attr-defined]
         c.qemu_fake = qemu_fake  # type: ignore[attr-defined] - same object
         c.db_engine = test_engine  # type: ignore[attr-defined]
+        # Phase 15: the API is closed by default, so a client that does not
+        # authenticate can only assert 401s. Done here, once, rather than in
+        # several hundred tests — and with a Bearer token rather than a cookie
+        # so that existing state-changing calls do not each need a CSRF header
+        # too. `anon_client` below is the unauthenticated one.
+        authenticate_test_client(c, test_engine)
         yield c
 
     app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def anon_client(client):
+    """A *second* client over the same application, carrying no credential.
+
+    Separate rather than the same object with its header stripped: several
+    tests need an authenticated and an anonymous caller at once — create a
+    token, then prove it works — and mutating one shared client makes those
+    quietly test nothing.
+
+    Constructed without the context manager on purpose. `client` already ran
+    the lifespan; entering it again would re-run startup against the same
+    database.
+    """
+    c = TestClient(app)
+    c.db_engine = client.db_engine  # type: ignore[attr-defined]
+    c.fake = client.fake            # type: ignore[attr-defined]
+    return c
 
 
 def legacy_multipass_row(client, name: str, **kwargs) -> str:

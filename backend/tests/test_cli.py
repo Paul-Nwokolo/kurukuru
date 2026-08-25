@@ -27,7 +27,7 @@ from sqlmodel.pool import StaticPool
 from typer.testing import CliRunner
 
 import app.engines as engines_module
-from tests.conftest import redirect_db_engines
+from tests.conftest import authenticate_test_client, redirect_db_engines
 import app.events as events_module
 import app.routers.images as images_module
 import app.routers.instances as instances_module
@@ -125,7 +125,12 @@ def make_cli(monkeypatch, tmp_path, small_host):
         # in milliseconds rather than seconds.
         monkeypatch.setattr(support, "POLL_SECONDS", 0.01)
         invalidate_cache()
-        return TestClient(api_app), fake
+        http = TestClient(api_app)
+        http.app_engine = test_engine  # type: ignore[attr-defined]
+        # The CLI talks to the API over this transport, so the credential
+        # goes on the transport. `iaas auth ...` has its own tests.
+        authenticate_test_client(http, test_engine)
+        return http, fake
 
     yield _factory
     api_app.dependency_overrides.clear()
@@ -714,9 +719,20 @@ def test_the_cli_never_reaches_past_the_api():
     (and every other client) cannot have. This is the guard that keeps a
     missing endpoint being fixed as a missing endpoint.
 
-    ``serve`` is the one exception, and only to locate the package it runs;
-    it imports uvicorn and starts the app rather than driving it.
+    ``serve`` is one exception, and only to locate the package it runs; it
+    imports uvicorn and starts the app rather than driving it.
+
+    ``host_admin.py`` is the other, added in Phase 15, and it is deliberately a
+    whole file rather than a scattering of imports so the exception is one
+    filename. It creates the first account and resets a forgotten password.
+    Neither can be an API call: the first would need a public, state-changing
+    route that hands ownership to whoever calls it first, and the second is the
+    recovery path for someone with no credential, so it cannot require one.
+    Both instead require filesystem access to the state directory, which is a
+    *stronger* requirement — whoever has it can already read the orchestrator's
+    SSH private key and every VM disk beside it (DECISIONS #47).
     """
+    exempt = {"host_admin.py"}
     import ast
     from pathlib import Path
 
@@ -738,6 +754,8 @@ def test_the_cli_never_reaches_past_the_api():
 
     offences: list[str] = []
     for source in sorted(Path(cli_package.__file__).parent.glob("*.py")):
+        if source.name in exempt:
+            continue
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -1178,3 +1196,176 @@ def test_an_unknown_volume_snapshot_exits_not_found(vol_snap_cli):
 
     assert result.exit_code == ExitCode.NOT_FOUND
     assert "no snapshot named" in result.output
+
+
+# --------------------------------------------------------------------------- #
+# iaas auth — first run, sign in, tokens
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def auth_cli(cli, tmp_path, monkeypatch):
+    """The CLI harness with its own token file, and no token in it yet.
+
+    `cli` authenticates its transport directly (every other test needs that);
+    these tests are about the credential the CLI resolves for itself, so the
+    header is removed and the token file redirected somewhere disposable.
+    """
+    from app.cli import auth_store
+
+    token_file = tmp_path / "cli-token"
+    monkeypatch.setattr(auth_store, "token_path", lambda settings=None: token_file)
+    # host_admin talks to the database directly (it is the one CLI module allowed
+    # to). Point it at this test's engine, or `auth init` would read the real
+    # one — the developer's ~/.local-iaas/iaas.db — and answer from it.
+    import app.database as database_module
+
+    monkeypatch.setattr(database_module, "engine", cli.http.app_engine)  # type: ignore[attr-defined]
+    monkeypatch.setattr(database_module, "init_db", lambda: None)
+    cli.http.headers.pop("Authorization", None)
+    cli.token_file = token_file  # type: ignore[attr-defined]
+    return cli
+
+
+def _interactive(passwords):
+    """Patch the prompt, and claim a terminal so the password path runs."""
+    from unittest.mock import patch
+
+    import typer as _typer
+
+    from app.cli.output import Output
+
+    values = list(passwords)
+    return (
+        patch.object(Output, "interactive", property(lambda self: True)),
+        patch.object(_typer, "prompt", side_effect=values if len(values) > 1
+                     else lambda *a, **k: values[0]),
+    )
+
+
+def test_a_command_without_a_credential_says_how_to_sign_in(auth_cli):
+    result = auth_cli("ls")
+
+    assert result.exit_code == ExitCode.UNAUTHENTICATED
+    assert "Not authenticated" in result.output
+    assert "auth login" in result.output
+    assert "auth init" in result.output
+
+
+def test_auth_login_stores_a_token_and_unlocks_the_cli(auth_cli):
+    interactive, prompt = _interactive(["test-password-1234"])
+    with interactive, prompt:
+        result = auth_cli("auth", "login")
+
+    assert result.exit_code == 0, result.output
+    assert "Signed in as owner" in result.output
+    assert auth_cli.token_file.exists()
+    # And the CLI now works without any further help.
+    assert auth_cli("auth", "whoami").exit_code == 0
+
+
+def test_the_stored_token_is_not_the_password(auth_cli):
+    interactive, prompt = _interactive(["test-password-1234"])
+    with interactive, prompt:
+        auth_cli("auth", "login")
+
+    contents = auth_cli.token_file.read_text()
+    assert "test-password-1234" not in contents
+    assert "iaas_" in contents
+
+
+def test_a_wrong_password_is_refused_generically(auth_cli):
+    interactive, prompt = _interactive(["wrong-password-here"])
+    with interactive, prompt:
+        result = auth_cli("auth", "login")
+
+    assert result.exit_code == ExitCode.UNAUTHENTICATED
+    assert "Incorrect username or password" in result.output
+    assert not auth_cli.token_file.exists()
+
+
+def test_login_refuses_when_stdin_is_not_a_terminal(auth_cli):
+    """A password must never come from a flag or a pipe by accident — that is
+    how it ends up in shell history and in this project's approved-command
+    list, which is the leak CONTRIBUTING documents."""
+    result = auth_cli("auth", "login")
+
+    assert result.exit_code == ExitCode.USAGE
+    assert "not a terminal" in result.output
+
+
+def test_logout_revokes_the_token_and_removes_the_file(auth_cli):
+    interactive, prompt = _interactive(["test-password-1234"])
+    with interactive, prompt:
+        auth_cli("auth", "login")
+    stored = auth_cli.token_file.read_text()
+
+    assert auth_cli("auth", "logout").exit_code == 0
+
+    assert not auth_cli.token_file.exists()
+    # Revoked server-side too, not merely forgotten locally.
+    import json
+
+    secret = json.loads(stored)["token"]
+    auth_cli.http.headers["Authorization"] = f"Bearer {secret}"
+    assert auth_cli.http.get("/instances").status_code == 401
+
+
+def test_token_create_prints_the_secret_once(auth_cli):
+    interactive, prompt = _interactive(["test-password-1234"])
+    with interactive, prompt:
+        auth_cli("auth", "login")
+
+    result = auth_cli("auth", "token", "create", "ci-runner")
+
+    assert result.exit_code == 0
+    assert "iaas_" in result.output
+    # A second look never shows it again.
+    listed = auth_cli("auth", "token", "ls")
+    assert "iaas_" in listed.output          # the prefix is shown
+    assert result.output.strip().splitlines()[0] not in listed.output
+
+
+def test_token_rm_revokes(auth_cli):
+    interactive, prompt = _interactive(["test-password-1234"])
+    with interactive, prompt:
+        auth_cli("auth", "login")
+    auth_cli("auth", "token", "create", "ci-runner")
+
+    removed = auth_cli("auth", "token", "rm", "ci-runner", "--yes")
+
+    assert removed.exit_code == 0
+    assert "revoked" in auth_cli("auth", "token", "ls").output
+
+
+def test_init_refuses_when_an_account_already_exists(auth_cli):
+    interactive, prompt = _interactive(["another-long-password"] * 2)
+    with interactive, prompt:
+        result = auth_cli("auth", "init")
+
+    assert result.exit_code == ExitCode.CONFLICT
+    assert "already has an account" in result.output
+
+
+def test_the_cli_and_the_backend_agree_on_the_token_path(monkeypatch):
+    """The one value duplicated across the CLI/backend boundary.
+
+    ``auth_store`` cannot import ``app.config`` — that is the boundary the test
+    above enforces — so the token file's default location is written down twice.
+    Duplication is the right trade there, but only if something notices when the
+    two drift, because the symptom otherwise is the CLI writing a token the
+    backend never reads and a login that appears to succeed and changes nothing.
+    """
+    from app.cli import auth_store
+    from app.config import Settings
+
+    # The suite isolates this via the environment; the comparison is about the
+    # built-in defaults, so the override has to come off first.
+    monkeypatch.delenv("IAAS_AUTH_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("IAAS_STATE_DIR", raising=False)
+
+    assert Settings().auth_token_file == (
+        f"{auth_store.DEFAULT_STATE_DIR}/{auth_store.TOKEN_LEAF}"
+    )
+    # And the re-rooting rule matches too.
+    assert Settings(state_dir="/srv/iaas").auth_token_file == (
+        f"/srv/iaas/{auth_store.TOKEN_LEAF}"
+    )

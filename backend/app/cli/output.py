@@ -125,6 +125,17 @@ class Output:
     # ------------------------------------------------------------------ #
     # Prompting
     # ------------------------------------------------------------------ #
+    @property
+    def interactive(self) -> bool:
+        """Whether a human is at the other end.
+
+        The same test `confirm` uses. A password prompt has to refuse rather
+        than block forever when stdin is a pipe.
+        """
+        import sys
+
+        return sys.stdin is not None and sys.stdin.isatty()
+
     def confirm(self, question: str, *, assume_yes: bool, action: str) -> None:
         """Ask before something destructive — or refuse to ask, and say so.
 

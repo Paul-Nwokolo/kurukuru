@@ -1,0 +1,134 @@
+"""Locking a secret to its owner, and refusing to claim it when we cannot.
+
+The whole point of this module is that it does not lie. ``os.chmod`` on NTFS
+returns success and changes nothing about who can read the file — measured, the
+DACL is byte-identical — so a hardening routine that reports "done" because a
+call did not raise is worse than none: it produces a token file everyone can
+read and a log line saying it is safe.
+
+So the assertions here are mostly about the *reporting* being honest, not about
+the mechanism working on a good day.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from app.fs_permissions import (
+    HardenResult,
+    PermissionHardeningError,
+    describe_protection,
+    harden_file,
+)
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows ACL behaviour")
+
+
+@pytest.fixture()
+def secret(tmp_path: Path) -> Path:
+    path = tmp_path / "api.token"
+    path.write_text("t0k3n")
+    yield path
+    if sys.platform == "win32" and path.exists():
+        # Give the ACL back so pytest's tmp_path cleanup can remove it.
+        subprocess.run(["icacls", str(path), "/grant", f"{os.environ['USERNAME']}:(F)"],
+                       capture_output=True)
+
+
+def test_hardening_leaves_the_file_usable_by_its_owner(secret):
+    """A protected secret nobody can read is not a feature."""
+    result = harden_file(secret)
+
+    assert result.protected, result.detail
+    assert secret.read_text() == "t0k3n"
+    secret.write_text("rotated")
+    assert secret.read_text() == "rotated"
+
+
+def test_the_result_is_truthy_only_when_the_os_enforced_something():
+    assert bool(HardenResult(Path("x"), True, "ok")) is True
+    assert bool(HardenResult(Path("x"), False, "no acls here")) is False
+
+
+@windows_only
+def test_hardening_removes_the_inherited_entries(secret):
+    """Inheritance under the user profile grants SYSTEM and Administrators.
+    Leaving them is a weaker protection than the one being reported."""
+    harden_file(secret)
+
+    described = describe_protection(secret)
+    assert "Administrators" not in described
+    assert "SYSTEM" not in described
+    assert os.environ["USERNAME"] in described
+
+
+@windows_only
+def test_a_filesystem_without_acls_is_reported_as_unprotected(secret, monkeypatch):
+    """The case the brief asked for. icacls reports success on some of these,
+    so the filesystem is checked *before* believing the command."""
+    monkeypatch.setattr("app.fs_permissions._windows_filesystem", lambda p: "FAT32")
+
+    result = harden_file(secret)
+
+    assert not result.protected
+    assert "FAT32" in result.detail
+    assert "cannot be restricted" in result.detail
+    # And it names the way out rather than only the problem.
+    assert "IAAS_STATE_DIR" in result.detail
+
+
+@windows_only
+def test_strict_mode_raises_rather_than_writing_a_secret_in_the_open(secret, monkeypatch):
+    monkeypatch.setattr("app.fs_permissions._windows_filesystem", lambda p: "exFAT")
+
+    with pytest.raises(PermissionHardeningError) as excinfo:
+        harden_file(secret, strict=True)
+
+    assert "exFAT" in str(excinfo.value)
+
+
+@windows_only
+def test_a_failed_grant_is_not_reported_as_success(secret, monkeypatch):
+    def failing(*args, **kwargs):
+        return subprocess.CompletedProcess(args, 5, "", "Access is denied.")
+
+    monkeypatch.setattr("app.fs_permissions._icacls", failing)
+
+    result = harden_file(secret)
+
+    assert not result.protected
+    assert "Access is denied" in result.detail
+
+
+@windows_only
+def test_chmod_alone_would_not_have_protected_it(secret):
+    """The measurement this module exists because of, pinned as a test.
+
+    If a future refactor 'simplifies' harden_file back to os.chmod, this fails.
+    """
+    before = describe_protection(secret)
+    os.chmod(secret, 0o600)
+    assert describe_protection(secret) == before, (
+        "chmod changed the DACL on this platform — the premise of this module "
+        "has changed and its comments need revisiting"
+    )
+
+    harden_file(secret)
+    assert describe_protection(secret) != before
+
+
+def test_describe_protection_handles_a_missing_file(tmp_path):
+    assert "does not exist" in describe_protection(tmp_path / "nope")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
+def test_posix_hardening_sets_0600(secret):
+    result = harden_file(secret)
+
+    assert result.protected
+    assert secret.stat().st_mode & 0o777 == 0o600

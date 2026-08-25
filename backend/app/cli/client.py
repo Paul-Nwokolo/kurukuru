@@ -41,6 +41,7 @@ BLOCKING_TIMEOUT = 900.0
 
 #: Status codes whose meaning the exit-code table pins down.
 _STATUS_EXIT_CODES = {
+    401: ExitCode.UNAUTHENTICATED,
     404: ExitCode.NOT_FOUND,
     409: ExitCode.CONFLICT,
     422: ExitCode.INVALID,
@@ -97,10 +98,20 @@ def _detail(response: httpx.Response) -> str:
 class ApiClient:
     """Thin, typed-enough wrapper over the orchestrator's HTTP API."""
 
-    def __init__(self, base_url: str, *, http: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        http: httpx.Client | None = None,
+        token: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self._http = http or _injected
         self._owned: httpx.Client | None = None
+        # Resolved once, here, rather than read from disk per call. None means
+        # "send nothing" — the API answers 401 and the CLI turns that into a
+        # sentence telling the user to sign in.
+        self._token = token
 
     # ------------------------------------------------------------------ #
     # Plumbing
@@ -137,6 +148,13 @@ class ApiClient:
     ) -> Any:
         """One HTTP call, with transport and status failures already translated."""
         client = self._client()
+        if self._token:
+            # Bearer rather than a cookie: the CLI is not a browser, and a token
+            # request is exempt from the CSRF check because a browser cannot be
+            # tricked into attaching this header cross-origin.
+            headers = dict(kwargs.pop("headers", None) or {})
+            headers.setdefault("Authorization", f"Bearer {self._token}")
+            kwargs["headers"] = headers
         if self._http is None:
             # Per-call budget, but only for a transport we own. An injected one
             # (FastAPI's TestClient) runs in-process with nothing to wait for,
@@ -155,6 +173,15 @@ class ApiClient:
         except httpx.TransportError as exc:
             raise self._unreachable(exc) from exc
 
+        if response.status_code == 401:
+            raise CliError(
+                "Not authenticated.",
+                ExitCode.UNAUTHENTICATED,
+                hint=(
+                    f"Run '{CLI_NAME} auth login'. If this install has no account "
+                    f"yet, run '{CLI_NAME} auth init' on the machine hosting it."
+                ),
+            )
         if response.status_code >= 400:
             raise CliError(
                 _detail(response),
@@ -171,6 +198,44 @@ class ApiClient:
                 f"is {self.base_url} really the orchestrator?",
                 ExitCode.FAILURE,
             ) from exc
+
+    # ------------------------------------------------------------------ #
+    # Authentication
+    # ------------------------------------------------------------------ #
+    # The CLI signs in only to mint a token, then throws the session away. It
+    # keeps the token, never the password. These three calls are the only place
+    # a cookie is used, so they handle the CSRF header themselves rather than
+    # complicating every other request with it.
+    def login(self, username: str, password: str) -> dict:
+        client = self._client()
+        response = client.request(
+            "POST", f"{self.base_url}/auth/login",
+            json={"username": username, "password": password},
+        )
+        if response.status_code == 401:
+            raise CliError(
+                "Incorrect username or password.", ExitCode.UNAUTHENTICATED,
+                hint=f"Reset it on the host with '{CLI_NAME} auth reset-password'.",
+            )
+        if response.status_code == 429:
+            raise CliError(_detail(response), ExitCode.CONFLICT,
+                           hint="Too many attempts; wait and try again.")
+        if response.status_code >= 400:
+            raise CliError(_detail(response), ExitCode.FAILURE)
+        return {"user": response.json(), "csrf": response.headers.get("X-IAAS-CSRF", "")}
+
+    def create_token_with_csrf(self, csrf: str, name: str) -> dict:
+        return self.request(
+            "POST", "/auth/tokens", json={"name": name}, headers={"X-IAAS-CSRF": csrf}
+        )
+
+    def logout_with_csrf(self, csrf: str) -> None:
+        try:
+            self.request("POST", "/auth/logout", headers={"X-IAAS-CSRF": csrf})
+        except CliError:
+            # The token is already minted and stored; a session left to expire
+            # is not worth failing the command over.
+            pass
 
     # ------------------------------------------------------------------ #
     # System

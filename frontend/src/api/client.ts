@@ -15,7 +15,93 @@ const http = axios.create({
   baseURL: API_URL,
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
+  // The session cookie is httpOnly, so script never sees it — but it has to be
+  // *sent*, and the dev server is a different origin from the API.
+  withCredentials: true,
 })
+
+/**
+ * The CSRF token for this session.
+ *
+ * Held in memory rather than in a cookie or localStorage, deliberately. A
+ * cookie would be attached automatically by the browser, which is precisely
+ * what makes cookies unusable for this job; localStorage would survive a tab
+ * that should have forgotten it.
+ *
+ * It is required on every state-changing request, and that is not belt and
+ * braces. `SameSite` is computed from scheme and registrable domain — port is
+ * not part of a site — so every localhost port is the same site as the API and
+ * the cookie is sent to requests from any of them. Measured: a page on another
+ * local port POSTing to the API is answered 403 (cookie sent, CSRF refused),
+ * not 401. See docs/SECURITY.md.
+ */
+let csrfToken: string | null = null
+
+export function setCsrfToken(token: string | null): void {
+  csrfToken = token
+}
+
+export function getCsrfToken(): string | null {
+  return csrfToken
+}
+
+const UNSAFE = new Set(['post', 'put', 'patch', 'delete'])
+
+http.interceptors.request.use((config) => {
+  if (csrfToken && UNSAFE.has((config.method ?? 'get').toLowerCase())) {
+    config.headers.set('X-IAAS-CSRF', csrfToken)
+  }
+  return config
+})
+
+/**
+ * Callbacks fired when the API says the session is gone.
+ *
+ * A 401 can arrive from any query at any time — a background poll is as likely
+ * as a click. Rather than every call site handling it, the app subscribes once
+ * and shows the login screen.
+ */
+type Listener = () => void
+const unauthenticatedListeners = new Set<Listener>()
+
+export function onUnauthenticated(listener: Listener): () => void {
+  unauthenticatedListeners.add(listener)
+  return () => unauthenticatedListeners.delete(listener)
+}
+
+/**
+ * A sentence for the login screen to show about why it is being shown.
+ *
+ * Landing back at a login form with no explanation is the worst part of any
+ * session-expiry flow — "did I get logged out, or did something break?". The
+ * one case where the app *knows* the answer is when it caused it: a sign-out,
+ * or a password change that deliberately invalidated everything. It is read
+ * once and cleared, so a later ordinary expiry does not inherit a stale reason.
+ */
+let signOutNotice: string | null = null
+
+export function setSignOutNotice(notice: string | null): void {
+  signOutNotice = notice
+}
+
+export function takeSignOutNotice(): string | null {
+  const notice = signOutNotice
+  signOutNotice = null
+  return notice
+}
+
+function notifyUnauthenticated(): void {
+  csrfToken = null
+  unauthenticatedListeners.forEach((listener) => listener())
+}
+
+http.interceptors.response.use(
+  (response) => response,
+  (error: AxiosError) => {
+    if (error.response?.status === 401) notifyUnauthenticated()
+    return Promise.reject(error)
+  },
+)
 
 // start/stop/delete block synchronously on the backend while a VM boots or
 // tears down — which can take well over 15s, and minutes under software
@@ -23,6 +109,122 @@ const http = axios.create({
 // window so the mutation resolves with the real result instead of a spurious
 // client-side timeout.
 const HYPERVISOR_OP_TIMEOUT = 610_000
+
+// --- Authentication ------------------------------------------------------ //
+
+export interface User {
+  id: string
+  username: string
+  is_owner: boolean
+  created_at: string
+}
+
+export interface ApiTokenRow {
+  id: string
+  name: string
+  prefix: string
+  created_at: string
+  last_used_at: string | null
+  revoked_at: string | null
+}
+
+export interface FirstRunStatus {
+  configured: boolean
+  /** What the command-line tool is called on this install. */
+  cli_name: string
+}
+
+/**
+ * The name of the CLI, as this backend reports it.
+ *
+ * Null until `getFirstRunStatus` has answered. The product name is not settled,
+ * so no part of the dashboard spells it: copy that names a command reads it
+ * from here, and copy that cannot render without it renders nothing rather than
+ * guessing. A hardcoded fallback would be the one thing that survives a rename
+ * and be wrong — silently, in the instructions someone is following because
+ * they are already stuck.
+ */
+let cliNameValue: string | null = null
+
+export function cliName(): string | null {
+  return cliNameValue
+}
+
+export async function getFirstRunStatus(): Promise<FirstRunStatus> {
+  const { data } = await http.get<FirstRunStatus>('/auth/first-run')
+  if (data.cli_name) cliNameValue = data.cli_name
+  return data
+}
+
+export async function login(username: string, password: string): Promise<User> {
+  const response = await http.post<User>('/auth/login', { username, password })
+  // The CSRF token comes back in a header rather than a cookie, so that the
+  // browser cannot replay it on its own.
+  setCsrfToken(response.headers['x-iaas-csrf'] ?? null)
+  return response.data
+}
+
+export async function logout(): Promise<void> {
+  // Deliberately not awaited for the outcome: whether the server accepted it or
+  // the session had already expired, this client is signed out either way.
+  await http.post('/auth/logout').catch(() => undefined)
+  setCsrfToken(null)
+  // A 401 is not coming — logout succeeds — so the "session is gone" event is
+  // published here. It is the same event, and it is equally true.
+  notifyUnauthenticated()
+}
+
+export async function whoami(): Promise<User> {
+  const { data } = await http.get<User>('/auth/whoami')
+  return data
+}
+
+/** Recover the CSRF token after a reload, without asking for the password. */
+export async function refreshCsrfToken(): Promise<string> {
+  const { data } = await http.get<{ csrf_token: string }>('/auth/csrf')
+  setCsrfToken(data.csrf_token)
+  return data.csrf_token
+}
+
+/** A command as the user should type it, e.g. `iaas auth login`. Null when the
+ *  backend has not been asked yet — callers omit the sentence rather than
+ *  invent a name. */
+export function cliCommand(rest: string): string | null {
+  const name = cliName()
+  return name ? `${name} ${rest}` : null
+}
+
+export async function changePassword(
+  current_password: string,
+  new_password: string,
+): Promise<void> {
+  await http.post('/auth/password', { current_password, new_password })
+  // Every session died, including this one.
+  setCsrfToken(null)
+}
+
+export async function getApiTokens(): Promise<ApiTokenRow[]> {
+  const { data } = await http.get<ApiTokenRow[]>('/auth/tokens')
+  return data
+}
+
+export async function createApiToken(name: string): Promise<ApiTokenRow & { token: string }> {
+  const { data } = await http.post<ApiTokenRow & { token: string }>('/auth/tokens', { name })
+  return data
+}
+
+export async function revokeApiToken(id: string): Promise<ApiTokenRow> {
+  const { data } = await http.delete<ApiTokenRow>(`/auth/tokens/${id}`)
+  return data
+}
+
+/** A single-use permit to open one instance's console. */
+export async function createConsoleTicket(instanceId: string): Promise<string> {
+  const { data } = await http.post<{ ticket: string; expires_at: string }>(
+    `/instances/${instanceId}/console/ticket`,
+  )
+  return data.ticket
+}
 
 // --- Domain types (mirror backend/app/models.py) ------------------------- //
 
@@ -237,10 +439,16 @@ export async function getInstance(id: string): Promise<Instance> {
  * is opened same-origin and never becomes a cross-origin upgrade. In a build,
  * it is derived from the configured API base.
  */
-export function consoleWsUrl(instanceId: string): string {
+export function consoleWsUrl(instanceId: string, ticket: string): string {
   const base = import.meta.env.DEV ? window.location.origin : API_URL
   const url = new URL(`/instances/${encodeURIComponent(instanceId)}/console`, base)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  // The browser WebSocket API cannot set request headers, so the credential
+  // has to travel in the URL. That is exactly why it is a ticket rather than
+  // the session or an API token: single-use, 30 seconds, bound to this one
+  // instance and to the session that minted it. A URL that leaks into a log is
+  // then worth nothing by the time anyone reads it.
+  url.searchParams.set('ticket', ticket)
   return url.toString()
 }
 
@@ -249,6 +457,7 @@ export function consoleWsUrl(instanceId: string): string {
  * 4000-4999 for applications). Mirrors backend/app/console.py.
  */
 export const CONSOLE_CLOSE = {
+  UNAUTHENTICATED: 4401,
   NOT_FOUND: 4404,
   CONFLICT: 4409,
   VNC_UNAVAILABLE: 4502,

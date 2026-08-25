@@ -80,19 +80,17 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
-    # Optional regex of additional allowed origins. **Off by default, and
-    # development-only.** Vite takes the next free port when 5173 is busy, and
-    # the dashboard then fails every request with a CORS error that names none
-    # of that; this exists so a developer can opt out of the annoyance for a
-    # session, e.g.
-    #
-    #     IAAS_CORS_ORIGIN_REGEX='http://(localhost|127\.0\.0\.1)(:\d+)?'
-    #
-    # It is deliberately not the default. CORS is a security control, and the
-    # right fix for a port collision is to free the port — widening a default
-    # for the convenience of the machine that hit the problem is how a
-    # development shortcut becomes a shipped posture.
-    cors_origin_regex: str = ""
+    # There is deliberately no origin *regex* escape hatch. One existed for a
+    # single session's convenience — Vite takes the next free port when 5173 is
+    # busy, and the documented example matched any port on localhost. With no
+    # authentication that cost little: the API was open, so CORS was not the
+    # thing protecting it. A session cookie changes that completely. Every
+    # localhost port is the *same site*, so the cookie is sent to whatever is
+    # listening there, and a permissive origin regex plus allow_credentials
+    # turns any page served from any local port into a fully authenticated API
+    # client. That is precisely the "malicious page on the same machine" this
+    # phase exists to shut out, so the hatch is gone rather than narrowed. The
+    # fix for a port collision is still to free the port (DECISIONS #45).
 
     # --- Compute engine ---
     # Timeout for short-lived hypervisor tool calls (qemu-img, --version probes).
@@ -131,6 +129,16 @@ class Settings(BaseSettings):
     # set any individual directory to place just that one. An explicit
     # directory always wins over the root — see _root_unset_dirs.
     state_dir: str = DEFAULT_STATE_DIR
+
+    # --- Authentication (Phase 15) ---
+    # Where the CLI keeps its API token. Under state_dir with everything else,
+    # and locked to the owning OS user at write time — see app.fs_permissions
+    # for what that is actually worth on each platform.
+    #
+    # This is a convenience, not a trust boundary: the token in it is an
+    # ordinary API token, revocable like any other. Anyone who can read it could
+    # also read the SSH private key and every VM disk sitting beside it.
+    auth_token_file: str = f"{DEFAULT_STATE_DIR}/cli-token"
 
     # --- Database backups (Phase 14) ---
     # A copy of the database is taken automatically immediately before an
@@ -279,6 +287,10 @@ class Settings(BaseSettings):
     #: spelling on both sides of the comparison.
     _DATABASE_LEAF = "iaas.db"
 
+    #: Same treatment for the CLI's token file: a path, not a directory, so it
+    #: needs its own line in the re-rooting below.
+    _AUTH_TOKEN_LEAF = "cli-token"
+
     @model_validator(mode="after")
     def _apply_state_dir(self) -> Settings:
         """Re-root the paths that were left at their defaults.
@@ -300,6 +312,10 @@ class Settings(BaseSettings):
         if self.database_url == f"sqlite:///{DEFAULT_STATE_DIR}/{self._DATABASE_LEAF}":
             object.__setattr__(
                 self, "database_url", f"sqlite:///{root}/{self._DATABASE_LEAF}"
+            )
+        if self.auth_token_file == f"{DEFAULT_STATE_DIR}/{self._AUTH_TOKEN_LEAF}":
+            object.__setattr__(
+                self, "auth_token_file", f"{root}/{self._AUTH_TOKEN_LEAF}"
             )
         return self
 

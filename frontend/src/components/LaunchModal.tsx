@@ -23,6 +23,7 @@ import {
   useIsos,
   useKeyPairs,
   useLaunchInstance,
+  useSettingValue,
 } from '../hooks/queries'
 import { useSelectedProject } from '../lib/project'
 import { formatBytes, formatMemory } from '../lib/format'
@@ -119,6 +120,11 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
   const { data: capacity } = useHostCapacity()
   const { data: keypairs } = useKeyPairs()
   const { data: projects } = useProjects()
+  // Named in copy below, so read from the backend rather than assumed: both
+  // move with an environment variable, and telling someone to drop an ISO in a
+  // directory this install does not use is a bug that looks like a typo.
+  const isoDir = useSettingValue('iso_dir')
+  const guestUser = useSettingValue('default_vm_user')
   const launch = useLaunchInstance()
   // Defaults to whatever the header is scoped to, so launching while looking
   // at one project files it there. Overridable, because the header selector is
@@ -535,7 +541,8 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
             empty={
               <>
                 No ISOs found. Drop <code>.iso</code> files into the backend's ISO
-                directory (<code>~/.local-iaas/isos</code>) and reopen this dialog.
+                directory{isoDir && <> (<code>{isoDir}</code>)</>} and reopen this
+                dialog.
               </>
             }
             items={(isos ?? []).map((f) => ({
@@ -717,7 +724,10 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
             </div>
             <p className="mb-2 text-xs text-text-subtle">
               Whoever holds the matching private key can SSH in as{' '}
-              <code className="rounded bg-surface px-1 py-0.5 text-text-muted">iaas</code>.
+              <code className="rounded bg-surface px-1 py-0.5 text-text-muted">
+                {guestUser ?? '…'}
+              </code>
+              .
             </p>
 
             {!keypairs?.length ? (

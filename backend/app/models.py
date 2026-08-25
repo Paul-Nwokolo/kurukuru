@@ -136,6 +136,21 @@ class Flavor(str, Enum):
     LARGE = "large"
 
 
+#: Minimum password length. Deliberately a length floor and nothing else: no
+#: character-class rules, which push people towards `Password1!` and are worse
+#: than length. Long enough that argon2id makes an offline guess impractical.
+MIN_PASSWORD_LENGTH = 12
+
+
+def validate_password(value: str) -> str:
+    """The one password rule, shared by the API and the CLI so they cannot differ."""
+    if len(value) < MIN_PASSWORD_LENGTH:
+        raise ValueError(
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
+        )
+    return value
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1406,3 +1421,171 @@ class InstanceRead(InstanceBase):
         from app.config import get_settings
 
         return get_settings().default_vm_user
+
+# --------------------------------------------------------------------------- #
+# Authentication (Phase 15)
+# --------------------------------------------------------------------------- #
+#: Every credential carries the ``credential_version`` of the user it was issued
+#: for. Changing a password bumps that number, which invalidates every session
+#: and every API token in one write — no sweep, no chance of missing one, and no
+#: window where a stolen cookie outlives the password it was obtained with.
+#: Comparing it is the whole mechanism; see :func:`app.auth.resolve_principal`.
+
+
+class User(SQLModel, table=True):
+    """One account. Every account is equal — this phase has no roles.
+
+    ``is_owner`` marks the account created by the first-run flow. It confers no
+    extra permission today and exists so a later authorization phase has
+    something to attach one to, and so the reset procedure can name an account
+    that is guaranteed to exist.
+    """
+
+    __tablename__ = "users"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    username: str = Field(index=True, unique=True, min_length=1, max_length=64)
+    #: argon2id. Never a bare hash — a password is low-entropy by nature and the
+    #: KDF is what makes an offline guess expensive.
+    password_hash: str
+    #: Bumped on every password change. See the note above this class.
+    credential_version: int = Field(default=1)
+    is_owner: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class Session(SQLModel, table=True):
+    """A browser session, stored server-side rather than signed into a cookie.
+
+    A signed stateless cookie would avoid this table, and would also make
+    "log out" and "revoke everything" impossible to honour before expiry. The
+    cookie carries an opaque secret; this row is what it means.
+    """
+
+    __tablename__ = "sessions"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    #: SHA-256 of the cookie secret. Not argon2: the secret is 32 random bytes,
+    #: so there is no dictionary to slow down, and this is verified on *every*
+    #: request — a KDF here would be a self-inflicted rate limit.
+    token_hash: str = Field(index=True, unique=True)
+    #: Paired with the session and required on state-changing requests. Stored
+    #: rather than derived so that revoking the session revokes it too.
+    csrf_token: str
+    credential_version: int = Field(default=1)
+    created_at: datetime = Field(default_factory=_utcnow)
+    expires_at: datetime
+    last_seen_at: datetime = Field(default_factory=_utcnow)
+
+
+class ApiToken(SQLModel, table=True):
+    """A long-lived credential for the CLI and scripts.
+
+    Shown once at creation and stored hashed, so the database is not a list of
+    working credentials. ``prefix`` exists purely so a human can tell two tokens
+    apart in ``auth token ls`` without the product having to keep the secret.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    name: str = Field(min_length=1, max_length=64)
+    token_hash: str = Field(index=True, unique=True)
+    #: First few characters of the secret, for display only.
+    prefix: str = Field(max_length=16)
+    credential_version: int = Field(default=1)
+    created_at: datetime = Field(default_factory=_utcnow)
+    last_used_at: datetime | None = Field(default=None)
+    #: Set rather than deleted, so a revoked token stays visible in the list
+    #: long enough for a human to confirm they revoked the right one.
+    revoked_at: datetime | None = Field(default=None)
+
+
+class ConsoleTicket(SQLModel, table=True):
+    """A single-use, short-lived permit to open one instance's console.
+
+    Browsers cannot set an Authorization header on a WebSocket handshake, and
+    the alternatives are all worse: a cookie alone would make the console
+    reachable by any same-site page (every localhost port is same-site), and a
+    token in the query string writes a credential into logs and history.
+
+    So the console is authorised out of band: mint over authenticated HTTP,
+    redeem once on connect. The ticket is bound to **both** the instance and the
+    session that minted it, so a ticket for one VM cannot open another, and a
+    ticket outlives neither its single use nor its session.
+    """
+
+    __tablename__ = "console_tickets"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    token_hash: str = Field(index=True, unique=True)
+    user_id: str = Field(foreign_key="users.id", index=True)
+    instance_id: str = Field(index=True)
+    #: The session that minted it, when a browser did. None when a token did —
+    #: a token has no session row to die with.
+    session_id: str | None = Field(default=None, index=True)
+    #: Snapshot of the user's credential version, so a password change kills
+    #: outstanding tickets too. Carried on the ticket rather than looked up
+    #: through the session, because a token-minted ticket has no session.
+    credential_version: int = Field(default=1)
+    created_at: datetime = Field(default_factory=_utcnow)
+    expires_at: datetime
+    #: Stamped on redemption. Presence is what makes it single-use.
+    used_at: datetime | None = Field(default=None)
+
+
+class LoginRequest(SQLModel):
+    """Body for POST /auth/login."""
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordChange(SQLModel):
+    """Body for POST /auth/password."""
+
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        return validate_password(v)
+
+
+class UserRead(SQLModel):
+    """Response schema for the signed-in account. Never carries the hash."""
+
+    id: str
+    username: str
+    is_owner: bool
+    created_at: datetime
+
+
+class ApiTokenCreate(SQLModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+class ApiTokenRead(SQLModel):
+    """A token as listed. The secret is absent by construction."""
+
+    id: str
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+
+class ApiTokenCreated(ApiTokenRead):
+    """The one response that carries the secret, returned once at creation."""
+
+    token: str
+
+
+class ConsoleTicketRead(SQLModel):
+    ticket: str
+    expires_at: datetime

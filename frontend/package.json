@@ -12,7 +12,8 @@
     "check:contrast": "node scripts/check-contrast.mjs",
     "check:colour": "node scripts/check-raw-colour.mjs",
     "check:console": "node scripts/check-console-handshake.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run check:colour && npm run check:contrast && npm run check:console && npm run build"
+    "verify": "npm run typecheck && npm run lint && npm run check:colour && npm run check:contrast && npm run check:console && npm run check:name && npm run build",
+    "check:name": "node scripts/check-product-name.mjs"
   },
   "dependencies": {
     "@novnc/novnc": "^1.7.0",
