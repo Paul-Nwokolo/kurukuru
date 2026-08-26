@@ -24,7 +24,7 @@ from sqlmodel.pool import StaticPool
 from starlette.websockets import WebSocketDisconnect
 
 import kurukuru.engines as engines_module
-from tests.conftest import authenticate_test_client, redirect_db_engines
+from tests.conftest import api_client, api_ws, authenticate_test_client, redirect_db_engines
 import kurukuru.events as events_module
 import kurukuru.routers.instances as instances_module
 from kurukuru.console import CLOSE_CONFLICT, CLOSE_NOT_FOUND, CLOSE_VNC_UNAVAILABLE
@@ -129,7 +129,7 @@ def client(monkeypatch):
     app.dependency_overrides[get_session] = _session_override
     app.dependency_overrides[get_engine_registry] = lambda: registry
 
-    with TestClient(app) as c:
+    with api_client(app) as c:
         c.db_engine = test_engine  # type: ignore[attr-defined]
         authenticate_test_client(c, test_engine)
         yield c
@@ -147,7 +147,7 @@ def _console_url(client, instance_id: str) -> str:
     """
     response = client.post(f"/instances/{instance_id}/console/ticket")
     assert response.status_code == 200, response.text
-    return f"/instances/{instance_id}/console?ticket={response.json()['ticket']}"
+    return api_ws(f"/instances/{instance_id}/console?ticket={response.json()['ticket']}")
 
 
 def _add_row(client, **kwargs) -> str:
@@ -229,7 +229,7 @@ def test_an_unknown_instance_does_not_reveal_that_it_is_unknown(client):
     from kurukuru.console import CLOSE_UNAUTHENTICATED
 
     with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect("/instances/nope/console") as ws:
+        with client.websocket_connect(api_ws("/instances/nope/console")) as ws:
             ws.receive_bytes()
     assert exc.value.code == CLOSE_UNAUTHENTICATED
 

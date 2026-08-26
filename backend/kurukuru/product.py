@@ -77,6 +77,23 @@ DATABASE_LEAF = "kurukuru.db"
 #: definition has to sit below both, which is here.
 CSRF_HEADER = "X-Kurukuru-CSRF"
 
+#: Where the HTTP API is mounted. Everything the CLI and the dashboard call
+#: lives under it; nothing else does.
+#:
+#: **It exists because the dashboard and the API were the same eight URLs.**
+#: The dashboard has a client-side route per page — ``/images``, ``/volumes``,
+#: ``/instances/{id}`` — and the API had a route with the identical path and
+#: method for each one. Serving both from one origin, which is what packaging
+#: means, made ``GET /images`` two different requests distinguishable only by an
+#: ``Accept`` header nobody sets deliberately. Deciding what to return from a
+#: header like that is how you get a tool that works in a browser and returns
+#: HTML to ``curl``.
+#:
+#: So the API moved and the dashboard kept the readable paths, because the
+#: dashboard's are the ones a person types and bookmarks. Defined here, below
+#: both surfaces, for the same reason :data:`CSRF_HEADER` is.
+API_PREFIX = "/api"
+
 
 # --------------------------------------------------------------------------- #
 # What this was called before Phase 16

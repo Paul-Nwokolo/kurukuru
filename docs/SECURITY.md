@@ -81,7 +81,7 @@ constant-time.
 ### CSRF, and why `SameSite` is not enough
 
 `SameSite` is computed from scheme and registrable domain. **Port is not part of
-a site.** So `http://localhost:9999` is the *same site* as `http://localhost:8000`,
+a site.** So `http://localhost:9999` is the *same site* as `http://localhost:7842`,
 and a cookie set by this backend is sent with requests originating from a page on
 any other local port — a stale dev server, a docs preview, a package's build
 tool.

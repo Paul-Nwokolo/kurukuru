@@ -2167,6 +2167,119 @@ name. Extending the guard found `Local IaaS` living in *two* files while the
 script's own comment claimed it had exactly one home — the check only knew about
 the lower-case command name, so the display name had never been guarded at all.
 
+## 50. The API moved under `/api`, because the dashboard already owned those URLs
+
+**Context.** Packaging means one process on one port serving both the API and
+the dashboard. The dashboard has a client-side route per page, and the API had a
+route with the identical path *and method* for each one:
+
+| Path | The API meant | The dashboard meant |
+|---|---|---|
+| `/instances` | list instances | the Instances page |
+| `/images` | list images | the Images page |
+| `/isos` | list boot media | the ISOs page |
+| `/volumes` | list volumes | the Volumes page |
+| `/networks` | list networks | the Networks page |
+| `/keypairs` | list key pairs | the Key pairs page |
+| `/projects` | list projects | the Projects page |
+| `/settings` | system settings | the Settings page |
+
+Eight exact collisions, plus `/instances/{id}` — simultaneously a dashboard deep
+link and an API resource. On two origins none of this was visible. On one it is
+a direct conflict.
+
+**The only same-path resolution is content negotiation, and it is a trap.** A
+browser sends `Accept: text/html` and `fetch` sends `application/json`, so
+branching on the header appears to work. But `curl` sends `*/*`, and so does
+most tooling that was never told to care; each of those silently gets whichever
+side the branch prefers. A tool whose response depends on a header nobody sets
+deliberately is a tool that behaves differently in a terminal than in a browser,
+for reasons invisible in the URL.
+
+**Decision.** The API mounts under `API_PREFIX` (`/api`) and the dashboard keeps
+the readable paths. The dashboard's are the ones a person types, bookmarks and
+pastes into chat, and the brief's own requirement — that `/instances/{id}`
+resolve as a deep link — settles which side moves.
+
+One `APIRouter` collects everything and is mounted once, so there is a single
+place that decides where the API lives, and a test asserts that no route is
+registered outside it. The dashboard's catch-all is registered **last**;
+Starlette matches in registration order, and that ordering is the entire
+guarantee that an API route always wins.
+
+`kurukuru/dashboard.py` serves the built bundle with the two rules a
+single-page app needs, and one it is easy to miss:
+
+- hashed assets are cached `immutable` for a year — the content hash *is* the
+  cache key, so the name is never reused for different bytes;
+- `index.html` is never cached, because it names the current hashed bundles and
+  a cached copy pins the browser to the previous build's asset names, which
+  after an upgrade are the files that no longer exist;
+- an unmatched path **under the prefix** is a JSON 404 rather than the
+  dashboard. Handing HTML to a JSON client turns a typo in a URL into a parse
+  error one stack frame away from the mistake.
+
+**Consequences, and they are breaking.** Every API path moved. The CLI and the
+dashboard both append the prefix in one place each, so a user configures an
+*origin* and never a path — and an origin that already carries `/api` (what you
+get by copying out of the address bar after opening the docs) is tolerated
+rather than doubled. `tests/test_dashboard.py` re-derives both route sets from
+the frontend's own router and asserts they cannot overlap, plus a
+guards-the-guard test asserting the historical collision is still visible with
+the prefix stripped — otherwise the disjointness test would pass while proving
+nothing.
+
+The tables in `kurukuru/security.py` stay keyed **without** the prefix, through
+one shared normaliser. Keying them by the mount point would mean that moving it
+silently unprotects everything, since a path matching no key is simply not
+public. Stripping fails the other way.
+
+## 51. Loopback, an unfamiliar port, and CSRF confirmed rather than assumed
+
+**Context.** Part B had three smaller decisions attached, and one obligation:
+the brief asked whether making the dashboard same-origin lets the CSRF token
+retire.
+
+**It does not, and this was re-measured rather than reasoned about.** Decision
+45 turns on `SameSite` being computed from scheme and registrable domain, with
+port excluded — so a page on *any other local port* is same-site and the cookie
+travels. Same-origin packaging changes nothing about a different port. Measured
+in Chrome against the packaged build, signed in on `127.0.0.1:7842`, with a page
+served from `127.0.0.1:8099`:
+
+| From the other port | Result |
+|---|---|
+| `fetch()` with `credentials: include` | preflight `OPTIONS` → **400**; blocked by CORS before it was sent |
+| plain form POST (no preflight; CORS does not gate it) | **403** |
+| `document.cookie` on the backend's own origin | `""` — httpOnly holds |
+
+**403, not 401** — the cookie *was* sent and the CSRF token is what refused it.
+No project was created. Controls on the same run: no credential → 401, cookie
+without the header → 403, cookie with it → 201. The token is not defence in
+depth here; it is still the only thing standing there.
+
+**CORS ships empty.** Same-origin means there is no cross-origin request to
+permit, so the correct list is the empty one — and the measurement above shows
+it doing real work, refusing the preflight outright. Development is the
+exception and is stated explicitly rather than left as a default production
+inherits: the Vite dev server needs `KURUKURU_CORS_ORIGINS` set, which
+`backend/.env.example` carries commented for exactly that.
+
+**Loopback by default, and 7842 rather than 8000.** Everything served is either
+unauthenticated at the network layer or protected by a session cookie over plain
+HTTP — VM consoles, SSH forwards, the API — so a wildcard bind publishes all of
+it. `--host` is accepted and warns about precisely what was accepted.
+
+8000 is contended enough to be taken on a developer's own machine most of the
+time. But the number matters less than the handling, because **a fixed default
+cannot be guaranteed bindable on Windows at all**: the TCP dynamic port range
+starts at 1024 on a default install, and Hyper-V and WSL reserve blocks inside
+it that move across reboots. So a port with nothing listening on it can still
+refuse to bind, with `WSAEACCES` — which reads as "run me as administrator",
+which is wrong and does not help. `serve` probes the port first and distinguishes
+the two cases by name, giving the `netsh` command that lists the reserved ranges
+for the one where that is the answer.
+
 ## Known limitations
 
 - **No license chosen.** Until one exists, the code is not usable by anyone else.

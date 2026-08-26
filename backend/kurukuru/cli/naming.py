@@ -22,6 +22,7 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 # are re-exported here because every CLI module already asks this module for
 # them, and the indirection is not worth a hundred-line diff.
 from kurukuru.product import (
+    API_PREFIX,
     CLI_NAME,
     CSRF_HEADER,
     DISTRIBUTION_NAME,
@@ -31,6 +32,7 @@ from kurukuru.product import (
 )
 
 __all__ = [
+    "API_PREFIX",
     "CLI_NAME",
     "CSRF_HEADER",
     "PRODUCT_NAME",
@@ -49,11 +51,15 @@ __all__ = [
 #: backend already owns (keys, images, instances), so there is one place to look.
 CONFIG_PATH = "~/.kurukuru/cli.toml"
 
-#: Last resort when nothing else says where the API is.
-DEFAULT_API_URL = "http://127.0.0.1:8000"
+#: Last resort when nothing else says where the API is. An *origin*: the
+#: API's mount point is appended by ``ApiClient``, in one place.
+DEFAULT_API_URL = "http://127.0.0.1:7842"
 
-#: The Vite dev server's default. Only used to open a console in a browser.
-DEFAULT_DASHBOARD_URL = "http://127.0.0.1:5173"
+#: Where the dashboard is. Only used to open a console in a browser.
+#: The same origin as the API now, because the backend serves the dashboard
+#: itself — it is a separate setting only so that a development session
+#: pointing at the Vite dev server can still say so.
+DEFAULT_DASHBOARD_URL = "http://127.0.0.1:7842"
 
 
 def env_var(suffix: str) -> str:

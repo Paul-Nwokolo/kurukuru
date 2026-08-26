@@ -22,8 +22,8 @@ resolve the same way wherever it is launched from.
 `--reload` is safe with running VMs: they are spawned detached, so they survive
 a backend restart and are picked up again by the reconciler.
 
-- Swagger UI: <http://localhost:8000/docs>
-- OpenAPI schema: <http://localhost:8000/openapi.json>
+- Swagger UI: <http://localhost:7842/api/docs>
+- OpenAPI schema: <http://localhost:7842/api/openapi.json>
 
 ## Tests
 

@@ -318,6 +318,49 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# Talking to the API
+# --------------------------------------------------------------------------- #
+def api_client(app, **kwargs) -> "TestClient":
+    """A ``TestClient`` whose base URL already carries the API's prefix.
+
+    Every route now lives under ``API_PREFIX``, because the dashboard is served
+    from the same origin and its client-side routes were the same eight URLs as
+    the API's. Rather than rewrite several hundred call sites, the prefix goes
+    on the client's base URL — which is exactly what the real CLI and the real
+    dashboard do, so the tests exercise the same joining the product does.
+
+    The distinction matters for what a *wrong* path now returns: an unmatched
+    path outside the prefix is the dashboard's catch-all and answers 200 with
+    HTML, so a test that accidentally dropped the prefix would see a puzzling
+    success rather than a 404. Going through here is what stops that.
+    """
+    from fastapi.testclient import TestClient
+
+    from kurukuru.product import API_PREFIX
+
+    base = kwargs.pop("base_url", "http://testserver")
+    return TestClient(app, base_url=f"{base.rstrip('/')}{API_PREFIX}", **kwargs)
+
+
+def api_ws(path: str) -> str:
+    """A WebSocket path with the API prefix on it.
+
+    Separate from :func:`api_client` because Starlette's
+    ``TestClient.websocket_connect`` does **not** use the client's ``base_url``
+    — it joins against a hard-coded ``ws://testserver`` — so a WebSocket path
+    has to carry the prefix itself even on a client that already has one.
+
+    Worth knowing beyond the tests: the same asymmetry exists in the browser.
+    axios has a ``baseURL``; the ``WebSocket`` constructor has nothing of the
+    kind, so ``consoleWsUrl`` in the dashboard builds its URL from the prefix
+    explicitly too.
+    """
+    from kurukuru.product import API_PREFIX
+
+    return f"{API_PREFIX}{path}"
+
+
+# --------------------------------------------------------------------------- #
 # The guard
 # --------------------------------------------------------------------------- #
 @pytest.fixture(autouse=True)

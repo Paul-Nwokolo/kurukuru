@@ -22,7 +22,7 @@ from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
 import kurukuru.engines as engines_module
-from tests.conftest import authenticate_test_client, redirect_db_engines
+from tests.conftest import api_client, authenticate_test_client, redirect_db_engines
 import kurukuru.events as events_module
 import kurukuru.routers.images as images_module
 import kurukuru.routers.instances as instances_module
@@ -96,7 +96,7 @@ def client(monkeypatch, settings: Settings, small_host):
     app.dependency_overrides[get_engine_registry] = lambda: registry
     app.dependency_overrides[get_settings] = lambda: settings
 
-    with TestClient(app) as c:
+    with api_client(app) as c:
         c.db_engine = test_engine  # type: ignore[attr-defined]
         authenticate_test_client(c, test_engine)
         yield c

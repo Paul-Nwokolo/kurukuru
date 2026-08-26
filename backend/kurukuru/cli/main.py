@@ -29,6 +29,7 @@ from kurukuru.cli import (
     commands_snapshots,
     commands_volumes,
     commands_system,
+    serve,
 )
 from kurukuru.cli.config import RESOLUTION_HELP, load_config
 from kurukuru.cli.errors import CliError, ExitCode
@@ -86,6 +87,7 @@ app = typer.Typer(
 
 commands_instances.register(app)
 commands_system.register(app)
+serve.register(app)
 commands_events.register(app)
 app.add_typer(commands_auth.auth_app, name="auth")
 app.add_typer(commands_images.images_app, name="images")

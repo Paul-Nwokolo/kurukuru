@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 
 from kurukuru.cli.errors import CliError, ExitCode
-from kurukuru.cli.naming import CLI_NAME, CSRF_HEADER, env_var
+from kurukuru.cli.naming import API_PREFIX, CLI_NAME, CSRF_HEADER, env_var
 
 #: Reads and quick mutations. Generous enough for a loaded host, short enough
 #: that a wedged backend doesn't look like a hang.
@@ -105,7 +105,18 @@ class ApiClient:
         http: httpx.Client | None = None,
         token: str | None = None,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        # The user configures an *origin*; the API's mount point is appended
+        # here, in one place, so it cannot drift from the backend's. Tolerating
+        # an origin that already carries the prefix matters more than it looks:
+        # "http://host:7842/api" is what somebody copies out of a browser's
+        # address bar after opening the docs, and silently producing
+        # "/api/api/health" from it would be a confusing 404 that blames the
+        # backend.
+        origin = base_url.rstrip("/")
+        if origin.endswith(API_PREFIX):
+            origin = origin[: -len(API_PREFIX)]
+        self.origin = origin
+        self.base_url = f"{origin}{API_PREFIX}"
         self._http = http or _injected
         self._owned: httpx.Client | None = None
         # Resolved once, here, rather than read from disk per call. None means

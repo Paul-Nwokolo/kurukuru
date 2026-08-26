@@ -41,7 +41,7 @@ from kurukuru.engines import (
 from kurukuru.main import app
 from kurukuru.host_capacity import invalidate_cache
 from kurukuru.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
-from tests.conftest import authenticate_test_client, redirect_db_engines
+from tests.conftest import api_client, authenticate_test_client, redirect_db_engines
 
 #: Address the fake hands out, matching QEMU's loopback port-forward model.
 FAKE_IP = "127.0.0.1"
@@ -249,7 +249,7 @@ def client(monkeypatch, tmp_path, iso_dir, small_host):
 
     invalidate_cache()
 
-    with TestClient(app) as c:
+    with api_client(app) as c:
         c.fake = qemu_fake  # type: ignore[attr-defined]
         c.qemu_fake = qemu_fake  # type: ignore[attr-defined] - same object
         c.db_engine = test_engine  # type: ignore[attr-defined]
@@ -277,7 +277,7 @@ def anon_client(client):
     the lifespan; entering it again would re-run startup against the same
     database.
     """
-    c = TestClient(app)
+    c = api_client(app)
     c.db_engine = client.db_engine  # type: ignore[attr-defined]
     c.fake = client.fake            # type: ignore[attr-defined]
     return c

@@ -196,8 +196,8 @@ pip install -r requirements.txt
 uvicorn kurukuru.main:app --reload --port 8000
 ```
 
-The API is then on <http://localhost:8000>, with interactive docs at
-<http://localhost:8000/docs>.
+The API is then on <http://localhost:7842>, with interactive docs at
+<http://localhost:7842/api/docs>.
 
 ### Frontend
 

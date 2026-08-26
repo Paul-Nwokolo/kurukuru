@@ -2,13 +2,31 @@
  * Single source of truth for all backend HTTP access.
  *
  * Components never import axios directly — they call the typed functions
- * exported here. Base URL comes from VITE_API_URL (see .env.example),
- * defaulting to the local backend.
+ * exported here.
+ *
+ * **The default is this page's own origin**, because the backend serves this
+ * bundle. That is the shipped shape: one process, one port, no configuration,
+ * and it keeps working when the user changes the port. VITE_API_URL overrides
+ * it and is what the Vite dev server needs, since there the dashboard is served
+ * by Vite and the API is somewhere else.
+ *
+ * Everything the API serves lives under API_PREFIX and nothing else does. The
+ * dashboard's own routes are the readable ones — `/images`, `/instances/:id` —
+ * and they used to be the same eight URLs as the API's. On two origins that was
+ * invisible; on one it is a conflict, so the API moved.
  */
 import axios, { AxiosError } from 'axios'
 
-export const API_URL =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, '') || 'http://localhost:8000'
+/** Where the API is mounted. Mirrors API_PREFIX in backend/kurukuru/product.py. */
+const API_PREFIX = '/api'
+
+/** Origin serving the API — this page's own, unless told otherwise. */
+export const API_ORIGIN =
+  import.meta.env.VITE_API_URL?.replace(/\/$/, '') ||
+  (typeof window !== 'undefined' ? window.location.origin : '')
+
+/** Base every request is joined to. */
+export const API_URL = `${API_ORIGIN}${API_PREFIX}`
 
 // Default timeout for fast reads (health, list, flavors, create-202).
 const http = axios.create({
@@ -448,13 +466,16 @@ export async function getInstance(id: string): Promise<Instance> {
 /**
  * WebSocket URL for an instance's VNC console.
  *
- * In dev the Vite server proxies this exact path to the backend, so the socket
- * is opened same-origin and never becomes a cross-origin upgrade. In a build,
- * it is derived from the configured API base.
+ * Built from API_ORIGIN, which is this page's own origin unless VITE_API_URL
+ * overrides it — so in a packaged install the socket is same-origin, and in dev
+ * it points at wherever the backend actually is. The dev server proxies this
+ * exact path, so the DEV branch this used to carry is no longer a difference.
  */
 export function consoleWsUrl(instanceId: string, ticket: string): string {
-  const base = import.meta.env.DEV ? window.location.origin : API_URL
-  const url = new URL(`/instances/${encodeURIComponent(instanceId)}/console`, base)
+  const url = new URL(
+    `${API_PREFIX}/instances/${encodeURIComponent(instanceId)}/console`,
+    API_ORIGIN,
+  )
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   // The browser WebSocket API cannot set request headers, so the credential
   // has to travel in the URL. That is exactly why it is a ticket rather than
@@ -467,7 +488,7 @@ export function consoleWsUrl(instanceId: string, ticket: string): string {
 
 /**
  * Close codes the console endpoint uses to explain a refusal (RFC 6455 reserves
- * 4000-4999 for applications). Mirrors backend/app/console.py.
+ * 4000-4999 for applications). Mirrors backend/kurukuru/console.py.
  */
 export const CONSOLE_CLOSE = {
   UNAUTHENTICATED: 4401,

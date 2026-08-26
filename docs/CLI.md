@@ -36,7 +36,7 @@ kurukuru doctor
 `PASS`, `WARN` or `FAIL`, and every failure comes with the fix:
 
 ```
-PASS API: Kurukuru at http://127.0.0.1:8000
+PASS API: Kurukuru at http://127.0.0.1:7842
 PASS kurukuru CLI: v0.1.0 on Python 3.13.7
 PASS QEMU: QEMU emulator version 11.1.0 (v11.1.0-12130-ge470268ff4)
 PASS Accelerator: whpx
@@ -62,14 +62,14 @@ kurukuru completion powershell >> $PROFILE
 
 The API URL is resolved in this order, and the first one that answers wins:
 
-1. `--api-url http://host:8000`
+1. `--api-url http://host:7842`
 2. `KURUKURU_API_URL` in the environment
 3. `~/.kurukuru/cli.toml`
-4. `http://127.0.0.1:8000`
+4. `http://127.0.0.1:7842`
 
 ```toml
 # ~/.kurukuru/cli.toml
-api_url = "http://127.0.0.1:8000"
+api_url = "http://127.0.0.1:7842"
 dashboard_url = "http://127.0.0.1:5173"   # only used by `kurukuru console`
 ```
 
@@ -81,7 +81,7 @@ When the API cannot be reached, the CLI says which URL it tried and what to do
 about it, and exits 3:
 
 ```
-error: Cannot reach the API at http://127.0.0.1:8000 (ConnectError).
+error: Cannot reach the API at http://127.0.0.1:7842 (ConnectError).
 hint: Is the backend running? Start it with 'kurukuru serve', or point the CLI at
       another host with --api-url or $KURUKURU_API_URL.
 ```

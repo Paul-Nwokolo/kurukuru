@@ -28,7 +28,7 @@ from typer.testing import CliRunner
 
 import kurukuru.auth as auth
 import kurukuru.engines as engines_module
-from tests.conftest import authenticate_test_client, redirect_db_engines
+from tests.conftest import api_client, authenticate_test_client, redirect_db_engines
 import kurukuru.events as events_module
 import kurukuru.routers.images as images_module
 import kurukuru.routers.instances as instances_module
@@ -126,7 +126,7 @@ def make_cli(monkeypatch, tmp_path, small_host):
         # in milliseconds rather than seconds.
         monkeypatch.setattr(support, "POLL_SECONDS", 0.01)
         invalidate_cache()
-        http = TestClient(api_app)
+        http = api_client(api_app)
         http.app_engine = test_engine  # type: ignore[attr-defined]
         # The CLI talks to the API over this transport, so the credential
         # goes on the transport. `kurukuru auth ...` has its own tests.
@@ -733,7 +733,18 @@ def test_the_cli_never_reaches_past_the_api():
     *stronger* requirement — whoever has it can already read the orchestrator's
     SSH private key and every VM disk beside it (DECISIONS #47).
     """
-    exempt = {"host_admin.py"}
+    # Two files, each for a stated reason:
+    #
+    #   host_admin.py — creates the first account on the host, before any
+    #     credential exists to authenticate an API call with (decision 47).
+    #   serve.py      — does not call the backend, it *is* the backend, started
+    #     in this process. uvicorn binds the socket before the application
+    #     loads, so the bind address can never come from the application; the
+    #     launcher has to read the same configuration the backend will.
+    #
+    # Both are whole files rather than exempted lines, so the exception is
+    # visible in a directory listing rather than buried among client commands.
+    exempt = {"host_admin.py", "serve.py"}
     import ast
     from pathlib import Path
 

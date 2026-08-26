@@ -93,11 +93,44 @@ class Settings(BaseSettings):
     # if that is genuinely what you want.
     database_url: str = f"sqlite:///{DEFAULT_STATE_DIR}/{DATABASE_LEAF}"
 
-    # --- CORS (Vite dev server defaults) ---
-    cors_origins: list[str] = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ]
+    # --- Serving ---
+    # Loopback, and changing it is a deliberate act with a warning attached.
+    # Everything this tool exposes is unauthenticated at the network layer or
+    # protected only by a session cookie over plain HTTP: VM consoles, the SSH
+    # forwards, the API. Binding a wildcard puts all of it on the LAN.
+    host: str = "127.0.0.1"
+    # Not 8000. That port is contended enough to be taken on a developer's
+    # machine most of the time, and the failure it produces — a backend that
+    # exits, or worse, a dashboard talking to somebody else's server — is not
+    # worth inheriting for familiarity. 7842 is unassigned by IANA and sits
+    # below the ranges Windows and Hyper-V reserve for themselves.
+    #
+    # A fixed default cannot be guaranteed bindable on Windows in any case: the
+    # dynamic port range starts at 1024 on a default install and Hyper-V
+    # reserves blocks that move across reboots, so a bind can fail with a
+    # *permission* error for a port nothing is listening on. That is why the
+    # message on failure matters more than the number — see
+    # ``kurukuru.cli.commands_system.serve``.
+    port: int = 7842
+    # Where the built dashboard is. Empty means "look in the two places it
+    # normally is" — beside the package in a frozen build, or frontend/dist in
+    # a checkout. Serving no dashboard is a supported state: it is what a
+    # developer running against the Vite dev server wants.
+    dashboard_dir: str = ""
+
+    # --- CORS ---
+    # Empty, and that is the shipped configuration. The dashboard and the API
+    # are the same origin now, so there is no cross-origin request to permit
+    # and the correct list is the empty one.
+    #
+    # Development is the exception and is stated explicitly rather than left as
+    # a default that production then inherits: running the Vite dev server on
+    # 5173 against the backend on another port *is* cross-origin, and needs
+    #
+    #   KURUKURU_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
+    #
+    # which backend/.env.example carries, commented, for exactly that.
+    #
     # There is deliberately no origin *regex* escape hatch. One existed for a
     # single session's convenience — Vite takes the next free port when 5173 is
     # busy, and the documented example matched any port on localhost. With no
@@ -106,9 +139,10 @@ class Settings(BaseSettings):
     # localhost port is the *same site*, so the cookie is sent to whatever is
     # listening there, and a permissive origin regex plus allow_credentials
     # turns any page served from any local port into a fully authenticated API
-    # client. That is precisely the "malicious page on the same machine" this
-    # phase exists to shut out, so the hatch is gone rather than narrowed. The
-    # fix for a port collision is still to free the port (DECISIONS #45).
+    # client. That is precisely the "malicious page on the same machine" Phase
+    # 15 exists to shut out, so the hatch is gone rather than narrowed. The fix
+    # for a port collision is still to free the port (DECISIONS #45).
+    cors_origins: list[str] = []
 
     # --- Compute engine ---
     # Timeout for short-lived hypervisor tool calls (qemu-img, --version probes).

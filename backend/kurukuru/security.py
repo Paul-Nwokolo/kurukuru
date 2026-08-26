@@ -22,6 +22,7 @@ from sqlmodel import Session as DbSession
 
 from kurukuru import auth
 from kurukuru.database import get_session
+from kurukuru.product import API_PREFIX
 
 logger = logging.getLogger("kurukuru.security")
 
@@ -40,6 +41,17 @@ PUBLIC_ROUTES: dict[str, str] = {
         "lets the dashboard choose between a login form and setup instructions. "
         "Reports only whether any account exists, which an install with none "
         "cannot hide anyway."
+    ),
+    "/{full_path:path}": (
+        "the dashboard's own files. It has to be reachable unauthenticated for "
+        "the obvious reason: it *is* the login screen, and a sign-in page behind "
+        "a sign-in is not a page. What it serves is a static JavaScript bundle "
+        "and its assets — the same bytes for every visitor, containing no "
+        "instance data. Everything the bundle then asks for goes through the "
+        "API, which is not public, so an anonymous visitor gets an application "
+        "shell that can do nothing but offer them a login form. Note this entry "
+        "is the *catch-all*, matched only after every API route has declined; "
+        "it cannot widen anything above it."
     ),
 }
 
@@ -60,13 +72,34 @@ TICKET_ROUTES: dict[str, str] = {
 
 
 def route_path(conn: HTTPConnection) -> str:
-    """The matched route *template*, so a parameterised path compares equal.
+    """The matched route *template*, with the API prefix removed.
 
-    ``request.url.path`` would be ``/instances/abc123/console``; the tables above
-    are keyed by ``/instances/{instance_id}/console``.
+    Two normalisations, both so the tables above stay readable:
+
+    ``request.url.path`` would be ``/api/instances/abc123/console``; the tables
+    are keyed by the route template, ``/instances/{instance_id}/console``.
+
+    And the prefix is stripped rather than written into every key. The tables
+    say *why a route is public*, which is a fact about the route and not about
+    where the API happens to be mounted — keying them by the mount point would
+    mean moving it silently unprotects everything, since a path that matches no
+    key is simply not public. Stripping fails the other way: safe.
     """
     route = conn.scope.get("route")
-    return getattr(route, "path", None) or conn.url.path
+    return table_key(getattr(route, "path", None) or conn.url.path)
+
+
+def table_key(path: str) -> str:
+    """A route template as the tables above spell it: without the API prefix.
+
+    Exported because ``tests/test_auth_coverage.py`` enumerates the application's
+    real routes and has to look each one up in those tables. If it normalised
+    paths its own way and the two ever diverged, the coverage test would report
+    green while checking nothing — so both go through this.
+    """
+    if path.startswith(API_PREFIX):
+        return path[len(API_PREFIX):] or "/"
+    return path
 
 
 def is_public(path: str) -> bool:

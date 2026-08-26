@@ -14,7 +14,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse
@@ -25,6 +25,8 @@ from sqlmodel import Session
 from kurukuru.config import Settings, get_settings
 from kurukuru.database import get_session, init_db
 from kurukuru.engines import EngineRegistry, get_engine_registry
+from kurukuru.dashboard import mount_dashboard
+from kurukuru.product import API_PREFIX
 
 logging.basicConfig(
     level=logging.INFO,
@@ -187,24 +189,40 @@ app = FastAPI(
 )
 
 
-@app.get("/openapi.json", include_in_schema=False)
+#: The system endpoints. A router rather than decorators on ``app`` so that
+#: they mount under ``API_PREFIX`` alongside every other route — ``/settings``
+#: in particular is one of the eight paths the dashboard also wants.
+system = APIRouter(tags=["system"])
+
+
+@system.get("/openapi.json", include_in_schema=False)
 def openapi_schema() -> dict:
     return app.openapi()
 
 
-@app.get("/docs", include_in_schema=False)
+@system.get("/docs", include_in_schema=False)
 def swagger_ui() -> HTMLResponse:
-    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{settings.app_name} API")
+    return get_swagger_ui_html(
+        openapi_url=f"{API_PREFIX}/openapi.json", title=f"{settings.app_name} API"
+    )
 
 
-@app.get("/redoc", include_in_schema=False)
+@system.get("/redoc", include_in_schema=False)
 def redoc_ui() -> HTMLResponse:
-    return get_redoc_html(openapi_url="/openapi.json", title=f"{settings.app_name} API")
+    return get_redoc_html(
+        openapi_url=f"{API_PREFIX}/openapi.json", title=f"{settings.app_name} API"
+    )
 
-# The React frontend (Vite dev server) is the only intended consumer, named by
-# exact origin. `allow_credentials=True` is what makes the exactness matter: it
-# permits the session cookie to travel, so every entry in this list is a page
-# allowed to act as the signed-in user. There is no regex form (DECISIONS #45).
+# Empty by default, because the dashboard is served from this origin and there
+# is nothing cross-origin left to permit. `allow_credentials=True` is what makes
+# every entry here expensive: it permits the session cookie to travel, so each
+# origin listed is a page allowed to act as the signed-in user. There is no
+# regex form (DECISIONS #45).
+#
+# The middleware is registered unconditionally even when the list is empty. A
+# CORS middleware with no allowed origins does not *permit* anything; it answers
+# preflights with a refusal, which is a clearer failure for a misconfigured dev
+# setup than no CORS handling at all.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -214,7 +232,7 @@ app.add_middleware(
 )
 
 
-@app.get("/health", tags=["system"])
+@system.get("/health", tags=["system"])
 def health(
     registry: EngineRegistry = Depends(get_engine_registry),
 ) -> dict[str, object]:
@@ -271,7 +289,7 @@ def _qemu_version() -> str | None:
     return (proc.stdout or "").splitlines()[0].strip() or None if proc.returncode == 0 else None
 
 
-@app.get("/diagnostics", tags=["system"])
+@system.get("/diagnostics", tags=["system"])
 def diagnostics(
     request_settings: Settings = Depends(get_settings),
     registry: EngineRegistry = Depends(get_engine_registry),
@@ -361,7 +379,7 @@ def diagnostics(
     return payload
 
 
-@app.get("/settings", tags=["system"])
+@system.get("/settings", tags=["system"])
 def effective_settings(
     request_settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
@@ -549,7 +567,7 @@ def effective_settings(
     }
 
 
-@app.get("/engines", tags=["system"])
+@system.get("/engines", tags=["system"])
 def list_engines(
     registry: EngineRegistry = Depends(get_engine_registry),
 ) -> list[dict[str, object]]:
@@ -569,7 +587,7 @@ def list_engines(
     return catalog
 
 
-@app.get("/host/capacity", tags=["system"])
+@system.get("/host/capacity", tags=["system"])
 def host_capacity(
     session: Session = Depends(get_session),
     request_settings: Settings = Depends(get_settings),
@@ -602,7 +620,7 @@ def host_capacity(
     return payload
 
 
-@app.get("/isos", tags=["system"])
+@system.get("/isos", tags=["system"])
 def list_boot_isos(
     request_settings: Settings = Depends(get_settings),
 ) -> list[dict[str, object]]:
@@ -623,7 +641,7 @@ def list_boot_isos(
     ]
 
 
-@app.get("/flavors", tags=["system"])
+@system.get("/flavors", tags=["system"])
 def list_flavors() -> dict[str, dict[str, int]]:
     """Sizing presets — starting points the launch form can fill in.
 
@@ -641,7 +659,7 @@ def list_flavors() -> dict[str, dict[str, int]]:
     }
 
 
-@app.get("/ssh-key", tags=["system"])
+@system.get("/ssh-key", tags=["system"])
 def ssh_key() -> dict[str, str]:
     """Return the orchestrator's public key so the UI/user can inspect it.
 
@@ -672,13 +690,24 @@ from kurukuru.routers import (  # noqa: E402
     volumes,
 )
 
-app.include_router(auth_routes.router)
-app.include_router(projects.router)
-app.include_router(instances.router)
-app.include_router(images.router)
-app.include_router(keypairs.router)
-app.include_router(snapshots.router)
-app.include_router(events.router)
-app.include_router(volumes.router)
-app.include_router(volume_snapshots.router)
-app.include_router(networks.router)
+# Everything the API serves is collected under one router and mounted once, so
+# there is a single place that decides where the API lives. Nothing is attached
+# to ``app`` directly any more: a route registered outside this block would sit
+# at the root, where the dashboard's own paths are, and shadow a page.
+api = APIRouter(prefix=API_PREFIX)
+api.include_router(system)
+api.include_router(auth_routes.router)
+api.include_router(projects.router)
+api.include_router(instances.router)
+api.include_router(images.router)
+api.include_router(keypairs.router)
+api.include_router(snapshots.router)
+api.include_router(events.router)
+api.include_router(volumes.router)
+api.include_router(volume_snapshots.router)
+api.include_router(networks.router)
+app.include_router(api)
+
+# Last, and the order is what makes it safe: the dashboard's catch-all only ever
+# sees a path no API route claimed.
+_dashboard_root = mount_dashboard(app, settings.dashboard_dir or None)

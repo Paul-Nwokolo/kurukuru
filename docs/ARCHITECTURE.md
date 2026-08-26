@@ -5,9 +5,12 @@
 ```
 React dashboard (Vite, TypeScript)      kurukuru CLI (Typer)   kurukuru/cli/
         │  HTTP + one WebSocket                 │  HTTP
+        │  everything under /api                │  everything under /api
         └──────────────────┬────────────────────┘
                            ▼
 FastAPI control plane          kurukuru/main.py, kurukuru/routers/
+        │  and it serves the dashboard itself, from the same port,
+        │  so a shipped install is one process   kurukuru/dashboard.py
         │
         ├── SQLite (desired state)      kurukuru/models.py, kurukuru/database.py
         │
@@ -50,6 +53,7 @@ the per-row `engine` column survive even though only one driver ships today.
 | `kurukuru/database.py` | Engine, WAL pragma, additive migrations, pre-migration backups |
 | `kurukuru/product.py` | The names — product, command, env prefix, state dir, database leaf — plus what each was called before Phase 16 and the `IAAS_*` env shim. No dependencies, so both the backend and the CLI import it downward |
 | `kurukuru/config.py` | `pydantic-settings`; every knob, `KURUKURU_`-prefixed |
+| `kurukuru/dashboard.py` | Serves the built frontend from the backend: one process, one port. SPA fallback so deep links resolve, hashed assets cached immutably, `index.html` never cached, and an unmatched path under `/api` answered as JSON rather than HTML |
 | `kurukuru/state_migration.py` | Moves a pre-Phase-16 `~/.local-iaas` to `~/.kurukuru` once: refuses while VMs run, backs the database up first, renames it, and repoints every persisted absolute path — runtime files, database columns, and qcow2 backing headers |
 | `kurukuru/host_capacity.py` | psutil probes plus the allocatable arithmetic |
 | `kurukuru/console.py` | VNC↔WebSocket byte pump |
@@ -58,6 +62,7 @@ the per-row `engine` column survive even though only one driver ships today.
 | `kurukuru/image_store.py` | `qemu-img` probing, import copy, image paths |
 | `kurukuru/isos.py` | Boot-media listing and traversal-safe path resolution |
 | `kurukuru/engines/` | `base.py` (ABC), `qemu.py` (driver), `qmp.py`, `seed.py`, `images.py`, `ports.py`, `process.py` |
+| `kurukuru/cli/serve.py` | `kurukuru serve`. The one CLI module allowed to import the backend — it does not call it, it *is* it — with the loopback warning and the port-bind diagnosis |
 | `kurukuru/cli/` | The `kurukuru` command. `main.py` (root app, error boundary), `client.py` (the only route to the system), `naming.py` (re-exports the names from `kurukuru/product.py`), `config.py`, `output.py`, `formats.py`, `support.py`, `commands_*.py` |
 
 ## Instance state machine

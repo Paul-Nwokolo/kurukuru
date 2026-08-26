@@ -1,10 +1,19 @@
 # API reference
 
-Base URL: `http://localhost:8000`. No authentication — see the security note in
-the [README](../README.md#project-status).
+Base URL: `http://localhost:7842/api`.
 
-Interactive docs are served at `/docs`; the machine-readable schema is at
-`/openapi.json`. This document is written against that schema. The declared
+**Everything the API serves lives under `/api`, and nothing else does.** The
+paths in this document moved there in Phase 16: the dashboard is served from the
+same origin now, and its own routes were the same eight URLs — `/images`,
+`/volumes`, `/instances/{id}` and the rest. Configure an *origin* and let the
+client append the prefix; both the CLI and the dashboard do it in exactly one
+place each. See [decision 50](DECISIONS.md).
+
+Every route requires authentication except the three listed in
+`kurukuru/security.py`. See [SECURITY.md](SECURITY.md).
+
+Interactive docs are served at `/api/docs`; the machine-readable schema is at
+`/api/openapi.json`. This document is written against that schema. The declared
 status codes below are the ones FastAPI advertises; the **Errors** tables list
 what the handlers actually raise, which is more specific.
 
@@ -906,24 +915,24 @@ startup.
 ### Launch and poll to Running
 
 ```bash
-ID=$(curl -sX POST http://localhost:8000/instances \
+ID=$(curl -sX POST http://localhost:7842/api/instances \
   -H 'Content-Type: application/json' \
   -d '{"name":"web-one","preset":"small"}' | jq -r .id)
 
-until [ "$(curl -s http://localhost:8000/instances/$ID | jq -r .status)" = "Running" ]; do
+until [ "$(curl -s http://localhost:7842/api/instances/$ID | jq -r .status)" = "Running" ]; do
   sleep 3
 done
-curl -s http://localhost:8000/instances/$ID | jq '{ip_address, ssh_port, ssh_user}'
+curl -s http://localhost:7842/api/instances/$ID | jq '{ip_address, ssh_port, ssh_user}'
 ```
 
 ```powershell
-$i = Invoke-RestMethod -Method Post http://localhost:8000/instances `
+$i = Invoke-RestMethod -Method Post http://localhost:7842/api/instances `
      -ContentType application/json `
      -Body '{"name":"web-one","preset":"small"}'
 
 do {
   Start-Sleep 3
-  $r = Invoke-RestMethod "http://localhost:8000/instances/$($i.id)"
+  $r = Invoke-RestMethod "http://localhost:7842/api/instances/$($i.id)"
 } until ($r.status -in 'Running','Error')
 $r | Select-Object status, ip_address, ssh_port, ssh_user
 ```
@@ -937,7 +946,7 @@ ssh -i "$HOME\.kurukuru\keys\id_ed25519" -p <ssh_port> iaas@127.0.0.1
 ### Launch with custom sizing
 
 ```bash
-curl -sX POST http://localhost:8000/instances -H 'Content-Type: application/json' \
+curl -sX POST http://localhost:7842/api/instances -H 'Content-Type: application/json' \
   -d '{"name":"big-one","cpus":4,"memory_mb":8192,"disk_gb":40}'
 ```
 
@@ -948,10 +957,10 @@ refused with the arithmetic.
 
 ```bash
 # 1. Put the .iso in ~/.kurukuru/isos/, then list what the backend sees:
-curl -s http://localhost:8000/isos | jq -r '.[].name'
+curl -s http://localhost:7842/api/isos | jq -r '.[].name'
 
 # 2. Launch. No cloud-init, no SSH key — the console is the way in.
-curl -sX POST http://localhost:8000/instances -H 'Content-Type: application/json' \
+curl -sX POST http://localhost:7842/api/instances -H 'Content-Type: application/json' \
   -d '{"name":"alpine","iso":"alpine-virt-3.21.7-x86_64.iso","disk_gb":8}'
 ```
 
@@ -960,16 +969,16 @@ Then open the console from the dashboard. `ip_address` stays null by design.
 ### Import an image and launch from it
 
 ```bash
-IMG=$(curl -sX POST http://localhost:8000/images/import \
+IMG=$(curl -sX POST http://localhost:7842/api/images/import \
   -H 'Content-Type: application/json' \
   -d '{"name":"My image","path":"/srv/images/mine.qcow2","has_cloud_init":true}' | jq -r .id)
 
 # Wait for the background copy + probe.
-until [ "$(curl -s http://localhost:8000/images/$IMG | jq -r .status)" = "Available" ]; do
+until [ "$(curl -s http://localhost:7842/api/images/$IMG | jq -r .status)" = "Available" ]; do
   sleep 2
 done
 
-curl -sX POST http://localhost:8000/instances -H 'Content-Type: application/json' \
+curl -sX POST http://localhost:7842/api/instances -H 'Content-Type: application/json' \
   -d "{\"name\":\"from-mine\",\"image_id\":\"$IMG\"}"
 ```
 
@@ -979,7 +988,7 @@ curl -sX POST http://localhost:8000/instances -H 'Content-Type: application/json
 no longer exists:
 
 ```bash
-curl -sX DELETE http://localhost:8000/instances/$ID | jq -r .status   # Terminated
+curl -sX DELETE http://localhost:7842/api/instances/$ID | jq -r .status   # Terminated
 ```
 
 If the hypervisor itself is wedged the call returns 502 and the row is marked
@@ -991,6 +1000,6 @@ Cloud images sit in VGA text mode and show nothing under hardware acceleration.
 Ask for the virtio display:
 
 ```bash
-curl -sX POST http://localhost:8000/instances -H 'Content-Type: application/json' \
+curl -sX POST http://localhost:7842/api/instances -H 'Content-Type: application/json' \
   -d '{"name":"visible","display":"virtio"}'
 ```

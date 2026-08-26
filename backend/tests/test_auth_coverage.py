@@ -20,7 +20,7 @@ import pytest
 from starlette.routing import Route, WebSocketRoute
 
 from kurukuru.main import app
-from kurukuru.security import PUBLIC_ROUTES, TICKET_ROUTES
+from kurukuru.security import PUBLIC_ROUTES, TICKET_ROUTES, table_key
 
 from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
 
@@ -65,13 +65,21 @@ def test_the_application_actually_has_routes():
 
 @pytest.mark.parametrize("path,method", _http_routes(), ids=lambda v: str(v))
 def test_every_route_is_closed_or_deliberately_public(anon_client, path, method):  # noqa: F811
-    if path in PUBLIC_ROUTES:
-        assert PUBLIC_ROUTES[path].strip(), f"{path} is public with no stated reason"
+    # Routes are enumerated as the application registered them, which is with
+    # the API prefix on. The tables are keyed without it, deliberately — a
+    # route's reason for being public is a fact about the route, not about where
+    # the API is mounted — so both sides go through the guard's own normaliser
+    # rather than this test inventing a second one that could drift.
+    key = table_key(path)
+    if key in PUBLIC_ROUTES:
+        assert PUBLIC_ROUTES[key].strip(), f"{path} is public with no stated reason"
         return
-    if path in TICKET_ROUTES:
+    if key in TICKET_ROUTES:
         return
 
-    response = anon_client.request(method, _concrete(path))
+    # The client's base URL already carries the prefix, so the request is made
+    # with the stripped path.
+    response = anon_client.request(method, _concrete(key))
 
     assert response.status_code == 401, (
         f"{method} {path} answered {response.status_code} to an anonymous caller. "
@@ -82,13 +90,15 @@ def test_every_route_is_closed_or_deliberately_public(anon_client, path, method)
 
 def test_public_routes_are_all_real_routes():
     """A stale entry is a hole waiting for a path to be reused."""
-    registered = {path for path, _ in _http_routes()}
+    registered = {table_key(path) for path, _ in _http_routes()}
     for path in PUBLIC_ROUTES:
         assert path in registered, f"PUBLIC_ROUTES names {path}, which no longer exists"
 
 
 def test_ticket_routes_are_all_real_routes():
-    registered = set(_websocket_routes()) | {p for p, _ in _http_routes()}
+    registered = {table_key(p) for p in _websocket_routes()} | {
+        table_key(p) for p, _ in _http_routes()
+    }
     for path in TICKET_ROUTES:
         assert path in registered, f"TICKET_ROUTES names {path}, which no longer exists"
 
@@ -97,7 +107,7 @@ def test_the_console_websocket_is_not_quietly_public():
     """It is exempt from the HTTP guard, so its own mechanism has to be real.
     Rejection behaviour is asserted in test_console_auth.py; this only checks
     the exemption is declared rather than accidental."""
-    for path in _websocket_routes():
+    for path in (table_key(p) for p in _websocket_routes()):
         assert path in TICKET_ROUTES, (
             f"WebSocket {path} is outside the HTTP guard and not declared in "
             f"TICKET_ROUTES — it would be unauthenticated."

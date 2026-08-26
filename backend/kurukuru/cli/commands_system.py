@@ -41,48 +41,10 @@ _CHECK_STYLES = {PASS: "green", WARN: "yellow", FAIL: "red"}
 
 
 def register(app: typer.Typer) -> None:
-    app.command("serve")(serve)
     app.command("capacity")(capacity)
     app.command("doctor")(doctor)
     app.command("version")(version)
     app.command("completion")(completion)
-
-
-# --------------------------------------------------------------------------- #
-# serve
-# --------------------------------------------------------------------------- #
-def serve(
-    host: Annotated[str, typer.Option("--host", help="Interface to bind.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port", help="Port to bind.")] = 8000,
-    reload: Annotated[
-        bool, typer.Option("--reload", help="Restart on source changes (development).")
-    ] = False,
-) -> None:
-    """Run the backend in the foreground.
-
-    A convenience wrapper around uvicorn, not a process manager: no daemonising,
-    no PID file, no restart policy. Stopping it is Ctrl-C. Installing the
-    backend as a service is a later phase.
-
-    Binds loopback by default. The API has no authentication yet, so exposing it
-    on a LAN interface would publish unauthenticated control of every VM on the
-    host — pass --host explicitly if you accept that.
-    """
-    import uvicorn
-
-    import app as app_package
-
-    # The backend resolves its SQLite URL ("sqlite:///./kurukuru.db") and its .env
-    # against the working directory. Started from anywhere else, it would create
-    # a second, empty database and report no instances — so the directory is
-    # pinned to the package's own, exactly as the documented uvicorn invocation
-    # assumes.
-    backend_dir = Path(app_package.__file__).resolve().parent.parent
-    out = Output()
-    out.note(f"Serving {backend_dir} on http://{host}:{port} (Ctrl-C to stop)")
-    os.chdir(backend_dir)
-
-    uvicorn.run("kurukuru.main:app", host=host, port=port, reload=reload)
 
 
 # --------------------------------------------------------------------------- #
