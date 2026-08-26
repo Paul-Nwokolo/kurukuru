@@ -2282,7 +2282,6 @@ for the one where that is the answer.
 
 ## Known limitations
 
-- **No license chosen.** Until one exists, the code is not usable by anyone else.
 - **The guest username is still `iaas`.** See decision 49; it needs a
   per-instance column before it can move.
 - **No authorization.** Authentication exists (decisions 45-48); roles and

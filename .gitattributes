@@ -42,3 +42,11 @@
 *.svg       text
 *.md        text
 *.json      text
+
+# Licence texts are legal documents: byte-for-byte identical to upstream is a
+# property worth keeping, and CRLF conversion would break a checksum comparison
+# against the canonical text.
+LICENSE      -text
+NOTICE       -text
+backend/LICENSE -text
+backend/NOTICE  -text

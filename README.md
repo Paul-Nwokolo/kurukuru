@@ -462,10 +462,17 @@ ergonomics.
 
 ## License
 
-**TODO — not yet chosen.** Until a license is added, no permission to use, copy
-or redistribute is granted.
+**Apache-2.0.** Copyright 2026 Paul Nwokolo. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE).
 
-QEMU is invoked as a separate process via its command line; no QEMU code is
-linked into this project. That keeps QEMU's GPL obligations at the process
-boundary, the same posture UTM and Podman take. This note is a description of
-the technical arrangement, not legal advice.
+Apache rather than MIT for the patent grant: this is virtualisation software,
+and the grant means a contributor who later holds a patent over something they
+contributed cannot turn it against users. MIT is silent on that.
+
+**QEMU is bundled by the installer and is licensed separately.** It is GPLv2,
+and Kurukuru invokes `qemu-system-x86_64` and `qemu-img` as separate processes
+— no linking, no headers, no incorporated code — so the two licences do not
+reach each other. Distributing its binaries does oblige shipping its licence
+text and offering its source, and both are in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). This is a description of the
+technical arrangement, not legal advice.
