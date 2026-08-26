@@ -37,7 +37,7 @@ from app.models import (
 )
 from app.security import current_principal
 
-logger = logging.getLogger("iaas.auth.routes")
+logger = logging.getLogger("kurukuru.auth.routes")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -65,6 +65,12 @@ def _set_session_cookie(response: Response, secret: str) -> None:
         max_age=int(auth.SESSION_TTL.total_seconds()),
         path="/",
     )
+    # The cookie was called something else before Phase 16. A browser that had a
+    # session open across the upgrade is still holding it, and nothing will ever
+    # read it again — so it is cleared here rather than left to expire, where it
+    # would sit in devtools next to the live one looking like a duplicate
+    # session.
+    response.delete_cookie(auth.LEGACY_SESSION_COOKIE, path="/")
 
 
 @router.get("/first-run", summary="Whether an account exists yet")
@@ -150,6 +156,7 @@ def logout(
             db.delete(row)
             db.commit()
     response.delete_cookie(auth.SESSION_COOKIE, path="/")
+    response.delete_cookie(auth.LEGACY_SESSION_COOKIE, path="/")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -204,6 +211,7 @@ def change_password(
     user.password_hash = auth.hash_password(payload.new_password)
     auth.invalidate_credentials(db, user)
     response.delete_cookie(auth.SESSION_COOKIE, path="/")
+    response.delete_cookie(auth.LEGACY_SESSION_COOKIE, path="/")
     logger.info("Password changed for %s; all sessions and tokens invalidated",
                 user.username)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

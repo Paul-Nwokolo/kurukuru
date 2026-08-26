@@ -22,7 +22,7 @@ from app.cli.output import Output
 #: poll: faster only adds load to a host that is busy booting a VM.
 POLL_SECONDS = 2.0
 
-#: Default ``--wait`` budget. Matches ``IAAS_QEMU_BOOT_TIMEOUT_SECONDS``, which
+#: Default ``--wait`` budget. Matches ``KURUKURU_QEMU_BOOT_TIMEOUT_SECONDS``, which
 #: is how long the backend itself is willing to wait for a guest — timing out
 #: sooner would report failure for launches that were still on track.
 DEFAULT_WAIT_TIMEOUT = 600

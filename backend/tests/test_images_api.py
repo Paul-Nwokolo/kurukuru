@@ -41,10 +41,10 @@ from tests.test_instances_api import FakeQemuEngine
 # other platform is not a path that could exist — it turned "qemu-img is
 # somewhere unusual" into a silent skip instead of pointing at the override
 # that fixes it.
-QEMU_IMG = os.environ.get("IAAS_QEMU_IMG_BINARY") or shutil.which("qemu-img")
+QEMU_IMG = os.environ.get("KURUKURU_QEMU_IMG_BINARY") or shutil.which("qemu-img")
 needs_qemu_img = pytest.mark.skipif(
     not (QEMU_IMG and Path(QEMU_IMG).exists()),
-    reason="qemu-img not on PATH (set IAAS_QEMU_IMG_BINARY to point at it)",
+    reason="qemu-img not on PATH (set KURUKURU_QEMU_IMG_BINARY to point at it)",
 )
 
 

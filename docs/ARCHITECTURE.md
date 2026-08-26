@@ -3,7 +3,7 @@
 ## Layering
 
 ```
-React dashboard (Vite, TypeScript)      iaas CLI (Typer)   app/cli/
+React dashboard (Vite, TypeScript)      kurukuru CLI (Typer)   app/cli/
         │  HTTP + one WebSocket                 │  HTTP
         └──────────────────┬────────────────────┘
                            ▼
@@ -25,7 +25,7 @@ Everything above `ComputeEngine` is hypervisor-agnostic. The routers, the
 models, the reconciler and the frontend do not know what a qcow2 file is.
 
 The CLI ships from the backend package (that is how `pip install -e backend`
-puts `iaas` on `PATH`) but is not part of the control plane: it imports no
+puts `kurukuru` on `PATH`) but is not part of the control plane: it imports no
 router, model, session or engine, and reaches the system only over HTTP. See
 [decision 11](DECISIONS.md) and [CLI.md](CLI.md).
 
@@ -47,8 +47,10 @@ the per-row `engine` column survive even though only one driver ships today.
 | `app/routers/instances.py` | Instance lifecycle, sizing resolution and validation, the reconciler, the console WebSocket route |
 | `app/routers/images.py` | Image catalog and async import |
 | `app/models.py` | SQLModel tables and API schemas — one hierarchy serves both, so the DB and the API contract cannot drift |
-| `app/database.py` | Engine, WAL pragma, additive migrations |
-| `app/config.py` | `pydantic-settings`; every knob, `IAAS_`-prefixed |
+| `app/database.py` | Engine, WAL pragma, additive migrations, pre-migration backups |
+| `app/product.py` | The names — product, command, env prefix, state dir, database leaf — plus what each was called before Phase 16 and the `IAAS_*` env shim. No dependencies, so both the backend and the CLI import it downward |
+| `app/config.py` | `pydantic-settings`; every knob, `KURUKURU_`-prefixed |
+| `app/state_migration.py` | Moves a pre-Phase-16 `~/.local-iaas` to `~/.kurukuru` once: refuses while VMs run, backs the database up first, renames it, and repoints every persisted absolute path — runtime files, database columns, and qcow2 backing headers |
 | `app/host_capacity.py` | psutil probes plus the allocatable arithmetic |
 | `app/console.py` | VNC↔WebSocket byte pump |
 | `app/cloud_init.py` | Renders the `#cloud-config` document |
@@ -56,7 +58,7 @@ the per-row `engine` column survive even though only one driver ships today.
 | `app/image_store.py` | `qemu-img` probing, import copy, image paths |
 | `app/isos.py` | Boot-media listing and traversal-safe path resolution |
 | `app/engines/` | `base.py` (ABC), `qemu.py` (driver), `qmp.py`, `seed.py`, `images.py`, `ports.py`, `process.py` |
-| `app/cli/` | The `iaas` command. `main.py` (root app, error boundary), `client.py` (the only route to the system), `naming.py` (the command's name, in one place), `config.py`, `output.py`, `formats.py`, `support.py`, `commands_*.py` |
+| `app/cli/` | The `kurukuru` command. `main.py` (root app, error boundary), `client.py` (the only route to the system), `naming.py` (the command's name, in one place), `config.py`, `output.py`, `formats.py`, `support.py`, `commands_*.py` |
 
 ## Instance state machine
 
@@ -117,7 +119,7 @@ latter would time out on a VM that is working perfectly.
 
 **Degraded** is not a stored status. It is derived in `InstanceRead`: `Running`,
 with `ssh_enabled`, without an address, for longer than
-`IAAS_DEGRADED_AFTER_SECONDS`. Console-only instances are excluded, because
+`KURUKURU_DEGRADED_AFTER_SECONDS`. Console-only instances are excluded, because
 having no address is how they are supposed to work.
 
 ## The reconciler
@@ -125,7 +127,7 @@ having no address is how they are supposed to work.
 The database is the *desired* state. The hypervisor is the truth. The reconciler
 folds the second into the first.
 
-It runs on a timer (`IAAS_RECONCILE_INTERVAL_SECONDS`, default 30s) and on
+It runs on a timer (`KURUKURU_RECONCILE_INTERVAL_SECONDS`, default 30s) and on
 demand via `POST /instances/refresh`. Without a recurring pass, anything missed
 in the single post-launch sample stuck permanently, and changes made outside the
 API never appeared at all.
@@ -218,7 +220,7 @@ client before looking at the VM.
 
 ### Per-instance directory
 
-Everything under `IAAS_QEMU_DIR` (default `~/.local-iaas/qemu/`):
+Everything under `KURUKURU_QEMU_DIR` (default `~/.kurukuru/qemu/`):
 
 ```
 base-images/

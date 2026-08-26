@@ -85,7 +85,7 @@ from app.routers.keypairs import orchestrator_keypair
 from app.routers.projects import project_filter, resolve_project_id
 from app.user_data import UserDataError, parse_user_data
 
-logger = logging.getLogger("iaas.instances")
+logger = logging.getLogger("kurukuru.instances")
 
 router = APIRouter(prefix="/instances", tags=["instances"])
 

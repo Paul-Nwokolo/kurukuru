@@ -1,5 +1,5 @@
 """
-Local IaaS Orchestrator — API entrypoint.
+Kurukuru — API entrypoint.
 
 Run (dev):
     uvicorn app.main:app --reload --port 8000
@@ -30,7 +30,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
-logger = logging.getLogger("iaas")
+logger = logging.getLogger("kurukuru")
 
 settings = get_settings()
 
@@ -92,14 +92,14 @@ def _warn_if_no_account() -> None:
     logger.warning(
         "No account exists yet, so every request except /health and the login "
         "routes will answer 401. Create the owner account on this machine with: "
-        "iaas auth init"
+        "kurukuru auth init"
     )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown hooks."""
-    # The resolved URL, not the configured one: "~/.local-iaas/iaas.db" and the
+    # The resolved URL, not the configured one: "~/.kurukuru/kurukuru.db" and the
     # absolute path it expands to are the same setting, but only one of them is
     # a path you can go and look at.
     logger.info("Initializing database (%s)...", settings.resolved_database_url)
@@ -278,7 +278,7 @@ def diagnostics(
 ) -> dict[str, object]:
     """Host-side facts a client cannot see for itself.
 
-    This exists for ``iaas doctor``. Everything it reports is a property of the
+    This exists for ``kurukuru doctor``. Everything it reports is a property of the
     machine the *backend* runs on — whether the instance store is writable, how
     much room is left on that volume, whether the orchestrator's keypair exists
     — and a client that guessed at them by looking at its own filesystem would
@@ -375,7 +375,7 @@ def effective_settings(
     than unfinished work. Settings are read once and cached (``get_settings``
     is ``lru_cache``d), several are consumed at startup, and the ones naming
     directories are load-bearing for VMs already on disk — moving
-    ``IAAS_QEMU_DIR`` under a running instance would strand its disk. Restart
+    ``KURUKURU_QEMU_DIR`` under a running instance would strand its disk. Restart
     the backend after changing any of them.
 
     Separate from ``/diagnostics`` deliberately. That endpoint is scoped to the
@@ -411,23 +411,23 @@ def effective_settings(
                     "defaults to a subdirectory of the state directory."
                 ),
                 "settings": [
-                    path_entry("state_dir", "State directory", s.state_dir, "IAAS_STATE_DIR"),
+                    path_entry("state_dir", "State directory", s.state_dir, "KURUKURU_STATE_DIR"),
                     # The resolved file, not the URL. This is the one path a
                     # user is most likely to go looking for — it used to be
                     # wherever the backend happened to be started from — so it
                     # is shown as somewhere you can actually navigate to.
                     path_entry(
                         "database", "Database",
-                        str(s.database_path or s.database_url), "IAAS_DATABASE_URL",
+                        str(s.database_path or s.database_url), "KURUKURU_DATABASE_URL",
                     ),
-                    path_entry("qemu_dir", "Instance store", s.qemu_dir, "IAAS_QEMU_DIR"),
-                    path_entry("iso_dir", "ISO directory", s.iso_dir, "IAAS_ISO_DIR"),
+                    path_entry("qemu_dir", "Instance store", s.qemu_dir, "KURUKURU_QEMU_DIR"),
+                    path_entry("iso_dir", "ISO directory", s.iso_dir, "KURUKURU_ISO_DIR"),
                     path_entry(
-                        "ssh_key_dir", "Key directory", s.ssh_key_dir, "IAAS_SSH_KEY_DIR"
+                        "ssh_key_dir", "Key directory", s.ssh_key_dir, "KURUKURU_SSH_KEY_DIR"
                     ),
                     path_entry(
                         "cloud_init_dir", "Cloud-init directory",
-                        s.cloud_init_dir, "IAAS_CLOUD_INIT_DIR",
+                        s.cloud_init_dir, "KURUKURU_CLOUD_INIT_DIR",
                     ),
                 ],
             },
@@ -441,19 +441,19 @@ def effective_settings(
                     entry(
                         "host_reserve_memory_mb", "Host memory reserve (MB)",
                         s.host_reserve_memory_bytes // (1024**2),
-                        "IAAS_HOST_RESERVE_MEMORY_BYTES",
+                        "KURUKURU_HOST_RESERVE_MEMORY_BYTES",
                     ),
                     entry(
                         "cpu_oversubscribe_factor", "vCPU oversubscribe factor",
-                        s.cpu_oversubscribe_factor, "IAAS_CPU_OVERSUBSCRIBE_FACTOR",
+                        s.cpu_oversubscribe_factor, "KURUKURU_CPU_OVERSUBSCRIBE_FACTOR",
                     ),
                     entry(
                         "min_instance_memory_mb", "Minimum instance memory (MB)",
-                        s.min_instance_memory_mb, "IAAS_MIN_INSTANCE_MEMORY_MB",
+                        s.min_instance_memory_mb, "KURUKURU_MIN_INSTANCE_MEMORY_MB",
                     ),
                     entry(
                         "min_instance_disk_gb", "Minimum instance disk (GB)",
-                        s.min_instance_disk_gb, "IAAS_MIN_INSTANCE_DISK_GB",
+                        s.min_instance_disk_gb, "KURUKURU_MIN_INSTANCE_DISK_GB",
                     ),
                     # Windows will not install below these, so they are shown
                     # beside the Linux floors rather than hidden — a user
@@ -461,11 +461,11 @@ def effective_settings(
                     # able to find the number that refused it.
                     entry(
                         "windows_min_memory_mb", "Minimum Windows memory (MB)",
-                        s.windows_min_memory_mb, "IAAS_WINDOWS_MIN_MEMORY_MB",
+                        s.windows_min_memory_mb, "KURUKURU_WINDOWS_MIN_MEMORY_MB",
                     ),
                     entry(
                         "windows_min_disk_gb", "Minimum Windows disk (GB)",
-                        s.windows_min_disk_gb, "IAAS_WINDOWS_MIN_DISK_GB",
+                        s.windows_min_disk_gb, "KURUKURU_WINDOWS_MIN_DISK_GB",
                     ),
                 ],
             },
@@ -475,25 +475,25 @@ def effective_settings(
                 "settings": [
                     entry(
                         "qemu_system_binary", "System binary",
-                        s.qemu_system_binary, "IAAS_QEMU_SYSTEM_BINARY",
+                        s.qemu_system_binary, "KURUKURU_QEMU_SYSTEM_BINARY",
                     ),
-                    entry("qemu_img_binary", "Image tool", s.qemu_img_binary, "IAAS_QEMU_IMG_BINARY"),
+                    entry("qemu_img_binary", "Image tool", s.qemu_img_binary, "KURUKURU_QEMU_IMG_BINARY"),
                     entry(
                         "qemu_cpu_model", "Guest CPU model",
                         s.qemu_cpu_model or "(derived from the accelerator and guest OS)",
-                        "IAAS_QEMU_CPU_MODEL",
+                        "KURUKURU_QEMU_CPU_MODEL",
                     ),
                     entry(
                         "qemu_version_min", "Minimum QEMU version",
-                        s.qemu_version_min, "IAAS_QEMU_VERSION_MIN",
+                        s.qemu_version_min, "KURUKURU_QEMU_VERSION_MIN",
                     ),
                     entry(
                         "qemu_version_max_tested", "Highest tested QEMU version",
-                        s.qemu_version_max_tested, "IAAS_QEMU_VERSION_MAX_TESTED",
+                        s.qemu_version_max_tested, "KURUKURU_QEMU_VERSION_MAX_TESTED",
                     ),
                     path_entry(
                         "base_image", "Base image",
-                        str(base_image_path(s)), "IAAS_QEMU_BASE_IMAGE_NAME",
+                        str(base_image_path(s)), "KURUKURU_QEMU_BASE_IMAGE_NAME",
                     ),
                 ],
             },
@@ -503,23 +503,23 @@ def effective_settings(
                 "settings": [
                     entry(
                         "qemu_boot_timeout_seconds", "Boot timeout (s)",
-                        s.qemu_boot_timeout_seconds, "IAAS_QEMU_BOOT_TIMEOUT_SECONDS",
+                        s.qemu_boot_timeout_seconds, "KURUKURU_QEMU_BOOT_TIMEOUT_SECONDS",
                     ),
                     entry(
                         "qemu_shutdown_timeout_seconds", "Shutdown grace (s)",
-                        s.qemu_shutdown_timeout_seconds, "IAAS_QEMU_SHUTDOWN_TIMEOUT_SECONDS",
+                        s.qemu_shutdown_timeout_seconds, "KURUKURU_QEMU_SHUTDOWN_TIMEOUT_SECONDS",
                     ),
                     entry(
                         "reconcile_interval_seconds", "Reconcile interval (s)",
-                        s.reconcile_interval_seconds, "IAAS_RECONCILE_INTERVAL_SECONDS",
+                        s.reconcile_interval_seconds, "KURUKURU_RECONCILE_INTERVAL_SECONDS",
                     ),
                     entry(
                         "degraded_after_seconds", "Degraded after (s)",
-                        s.degraded_after_seconds, "IAAS_DEGRADED_AFTER_SECONDS",
+                        s.degraded_after_seconds, "KURUKURU_DEGRADED_AFTER_SECONDS",
                     ),
                     entry(
                         "event_retention_days", "Event retention (days)",
-                        s.event_retention_days, "IAAS_EVENT_RETENTION_DAYS",
+                        s.event_retention_days, "KURUKURU_EVENT_RETENTION_DAYS",
                     ),
                 ],
             },
@@ -527,21 +527,21 @@ def effective_settings(
                 "name": "Guests",
                 "description": "Defaults baked into every instance at launch.",
                 "settings": [
-                    entry("default_vm_user", "Default user", s.default_vm_user, "IAAS_DEFAULT_VM_USER"),
+                    entry("default_vm_user", "Default user", s.default_vm_user, "KURUKURU_DEFAULT_VM_USER"),
                     entry(
                         "qemu_guest_nameservers", "Guest nameservers",
                         ", ".join(s.qemu_guest_nameservers) or "(DHCP/SLIRP default)",
-                        "IAAS_QEMU_GUEST_NAMESERVERS",
+                        "KURUKURU_QEMU_GUEST_NAMESERVERS",
                     ),
                     entry(
                         "ssh_port_range", "SSH port pool",
                         f"{s.qemu_ssh_port_min}-{s.qemu_ssh_port_max}",
-                        "IAAS_QEMU_SSH_PORT_MIN / _MAX",
+                        "KURUKURU_QEMU_SSH_PORT_MIN / _MAX",
                     ),
                     entry(
                         "vnc_port_range", "VNC port pool",
                         f"{s.qemu_vnc_port_min}-{s.qemu_vnc_port_max}",
-                        "IAAS_QEMU_VNC_PORT_MIN / _MAX",
+                        "KURUKURU_QEMU_VNC_PORT_MIN / _MAX",
                     ),
                 ],
             },

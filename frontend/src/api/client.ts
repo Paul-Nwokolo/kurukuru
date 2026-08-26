@@ -35,6 +35,19 @@ const http = axios.create({
  * local port POSTing to the API is answered 403 (cookie sent, CSRF refused),
  * not 401. See docs/SECURITY.md.
  */
+/**
+ * The CSRF header, spelled once.
+ *
+ * Sent on every unsafe request and read off the login response, so it appeared
+ * twice — and when the backend renamed it, only one of the two moved and login
+ * started failing its own CSRF check. HTTP header names are case-insensitive,
+ * but axios lower-cases response header keys, so the read below must use the
+ * lower-case form; keeping both derived from one constant is what stops them
+ * drifting again.
+ */
+export const CSRF_HEADER = 'X-Kurukuru-CSRF'
+const CSRF_HEADER_LOWER = CSRF_HEADER.toLowerCase()
+
 let csrfToken: string | null = null
 
 export function setCsrfToken(token: string | null): void {
@@ -49,7 +62,7 @@ const UNSAFE = new Set(['post', 'put', 'patch', 'delete'])
 
 http.interceptors.request.use((config) => {
   if (csrfToken && UNSAFE.has((config.method ?? 'get').toLowerCase())) {
-    config.headers.set('X-IAAS-CSRF', csrfToken)
+    config.headers.set(CSRF_HEADER, csrfToken)
   }
   return config
 })
@@ -160,7 +173,7 @@ export async function login(username: string, password: string): Promise<User> {
   const response = await http.post<User>('/auth/login', { username, password })
   // The CSRF token comes back in a header rather than a cookie, so that the
   // browser cannot replay it on its own.
-  setCsrfToken(response.headers['x-iaas-csrf'] ?? null)
+  setCsrfToken(response.headers[CSRF_HEADER_LOWER] ?? null)
   return response.data
 }
 
@@ -186,7 +199,7 @@ export async function refreshCsrfToken(): Promise<string> {
   return data.csrf_token
 }
 
-/** A command as the user should type it, e.g. `iaas auth login`. Null when the
+/** A command as the user should type it, e.g. `kurukuru auth login`. Null when the
  *  backend has not been asked yet — callers omit the sentence rather than
  *  invent a name. */
 export function cliCommand(rest: string): string | null {
@@ -547,7 +560,7 @@ export async function getSettings(): Promise<SettingGroup[]> {
   return data.groups
 }
 
-/** Host-side facts: what `iaas doctor` reads. */
+/** Host-side facts: what the CLI's `doctor` command reads. */
 /**
  * A named guest port offered as one click instead of two numbers.
  *

@@ -24,7 +24,7 @@ from contextlib import suppress
 
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
-logger = logging.getLogger("iaas.console")
+logger = logging.getLogger("kurukuru.console")
 
 #: Read chunk for the VM->browser direction. Bounded on purpose: a VM redrawing
 #: its whole screen can produce megabytes, and an unbounded read would buffer it

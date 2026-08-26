@@ -20,6 +20,7 @@ from sqlmodel import Session, create_engine, select
 
 import app.database as db_module
 from app.models import BootSource, Instance, InstanceEvent, InstanceStatus, Project
+from app.product import DATABASE_LEAF
 
 # The `instances` table exactly as the pre-Phase-5 build created it: no engine
 # or runtime-port columns, and a UNIQUE index on name.
@@ -355,7 +356,7 @@ def relocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     legacy = tmp_path / "old" / "iaas.db"
     settings = Settings(state_dir=str(state))
     target = settings.database_path
-    assert target == state / "iaas.db"
+    assert target == state / DATABASE_LEAF
 
     monkeypatch.setattr(db_module, "_legacy_database_candidates", lambda: [legacy])
     engine = sa_create_engine(f"sqlite:///{target.as_posix()}")

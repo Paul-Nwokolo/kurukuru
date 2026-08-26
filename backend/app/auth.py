@@ -50,19 +50,30 @@ from sqlmodel import Session as DbSession
 from sqlmodel import select
 
 from app.database import get_session
+#: Re-exported: ``CSRF_HEADER`` is defined in :mod:`app.product` because the
+#: CLI has to send it and may not import this module. Imported here so that
+#: ``auth.CSRF_HEADER`` keeps working for every existing call site.
+from app.product import CSRF_HEADER
 from app.models import ApiToken, ConsoleTicket, Session, User
 
-logger = logging.getLogger("iaas.auth")
+logger = logging.getLogger("kurukuru.auth")
 
 #: The browser's cookie. Named without a leading ``__Host-`` prefix deliberately:
 #: that prefix requires Secure, and this tool is served over plain HTTP on
 #: loopback by default. Revisit if TLS ever becomes the norm here.
-SESSION_COOKIE = "iaas_session"
-#: Header carrying the CSRF token on state-changing cookie-authenticated calls.
-CSRF_HEADER = "X-IAAS-CSRF"
+SESSION_COOKIE = "kurukuru_session"
+#: What the cookie was called before Phase 16. Cleared alongside the new one
+#: on login and logout so an upgraded browser is not left holding a cookie no
+#: route will ever read again. Nothing authenticates against it: renaming the
+#: cookie logs every open browser session out exactly once, which is the whole
+#: cost of not shipping the old name forever.
+LEGACY_SESSION_COOKIE = "iaas_session"
 #: Prefix on every API token, so a leaked string is recognisable as one and can
-#: be grepped for in logs and repositories.
-TOKEN_PREFIX = "iaas_"
+#: be grepped for in logs and repositories. Renamed in Phase 16 without a
+#: compatibility path, and safe because it is written at *issue* time only —
+#: presentation is checked by hash, so a token issued as ``iaas_…`` keeps
+#: working until it is revoked.
+TOKEN_PREFIX = "kurukuru_"
 
 _hasher = PasswordHasher()
 

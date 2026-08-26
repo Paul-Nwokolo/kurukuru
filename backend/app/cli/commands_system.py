@@ -72,7 +72,7 @@ def serve(
 
     import app as app_package
 
-    # The backend resolves its SQLite URL ("sqlite:///./iaas.db") and its .env
+    # The backend resolves its SQLite URL ("sqlite:///./kurukuru.db") and its .env
     # against the working directory. Started from anywhere else, it would create
     # a second, empty database and report no instances — so the directory is
     # pinned to the package's own, exactly as the documented uvicorn invocation
@@ -243,7 +243,7 @@ _VERSION_VERDICTS: dict[str, tuple[str, str]] = {
     "untested": (
         "newer than the highest tested version",
         "Probably fine. Mention it first in any bug report, and bump "
-        "IAAS_QEMU_VERSION_MAX_TESTED once it has been through the suite.",
+        "KURUKURU_QEMU_VERSION_MAX_TESTED once it has been through the suite.",
     ),
     "prerelease": (
         "a development build, not a release",
@@ -252,7 +252,7 @@ _VERSION_VERDICTS: dict[str, tuple[str, str]] = {
     ),
     "unknown": (
         "could not be identified",
-        "Everything below is unverified. Check IAAS_QEMU_SYSTEM_BINARY points "
+        "Everything below is unverified. Check KURUKURU_QEMU_SYSTEM_BINARY points "
         "at a real qemu-system-x86_64.",
     ),
 }
@@ -322,7 +322,7 @@ def _backend_checks(client: ApiClient) -> list[Check]:
                 str(engine.get("error") or "qemu-system-x86_64 could not be run"),
                 "Install QEMU and make sure qemu-system-x86_64 and qemu-img are on "
                 "the backend's PATH, then restart it. On Windows the installer does "
-                "not add them: set IAAS_QEMU_SYSTEM_BINARY and IAAS_QEMU_IMG_BINARY "
+                "not add them: set KURUKURU_QEMU_SYSTEM_BINARY and KURUKURU_QEMU_IMG_BINARY "
                 "to their full paths instead.",
             )
         )
@@ -363,7 +363,7 @@ def _backend_checks(client: ApiClient) -> list[Check]:
                 FAIL,
                 f"{store.get('path')} is not writable by the backend",
                 "Create the directory and give the account running the backend "
-                "write access, or point IAAS_QEMU_DIR somewhere it has.",
+                "write access, or point KURUKURU_QEMU_DIR somewhere it has.",
             )
         )
     elif free_gb < _LOW_DISK_GB:
@@ -373,7 +373,7 @@ def _backend_checks(client: ApiClient) -> list[Check]:
                 WARN,
                 f"{store.get('path')} — only {format_bytes(store.get('free_bytes'))} free",
                 "Each instance is a sparse overlay that grows towards its disk "
-                "size. Free some space or move IAAS_QEMU_DIR to a larger volume.",
+                "size. Free some space or move KURUKURU_QEMU_DIR to a larger volume.",
             )
         )
     else:

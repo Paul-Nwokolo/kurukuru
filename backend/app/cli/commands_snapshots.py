@@ -1,5 +1,5 @@
 """
-Snapshot commands: ``iaas snapshot create|ls|restore|rm``.
+Snapshot commands: ``kurukuru snapshot create|ls|restore|rm``.
 
 Same conventions as everything else: ``--json`` on the read, ``--wait`` on the
 asynchronous operations, exit codes from the table, and no prompt when stdout is

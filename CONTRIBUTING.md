@@ -50,7 +50,7 @@ system instead is `check:colour` (no hard-coded colours outside
 `src/styles/tokens.css`) and `check:contrast` (WCAG AA over every token pair the
 UI actually renders).
 
-`check:name` guards a different kind of drift. The CLI is called `iaas` today
+`check:name` guards a different kind of drift. The CLI is called `kurukuru` today
 and will not be forever, so the name has one definition — `CLI_NAME` in
 `backend/app/product.py` — and reaches the dashboard as `cli_name` on
 `GET /auth/first-run`. Copy renders it through `cliCommand()`; nothing spells
@@ -93,10 +93,10 @@ designs do:
 
 - **Phase 10** — `POST /keypairs/generate` runs real `ssh-keygen`. One fixture
   pinned the ISO directory and not the key directory, so ten orphaned keypairs
-  accumulated in a developer's `~/.local-iaas/keys` before anyone looked.
+  accumulated in a developer's `~/.kurukuru/keys` before anyone looked.
 - **Phase 11** — the new event writer held its own engine reference. Three of
   four test modules were updated; the fourth was not, and 130 rows landed in
-  the real `iaas.db`. It surfaced as test instances named `web-one` and
+  the real `kurukuru.db`. It surfaced as test instances named `web-one` and
   `doomed` appearing in the live dashboard's activity feed.
 
 Neither was a bug in the code under test. Both passed CI.
@@ -104,11 +104,11 @@ Neither was a bug in the code under test. Both passed CI.
 Two guards back the isolation up, because isolation that silently stops working
 is worse than none:
 
-- **The database is prevented.** Opening the real `iaas.db` raises immediately,
+- **The database is prevented.** Opening the real `kurukuru.db` raises immediately,
   from a patch on `sqlite3.connect` *and* `sqlite3.dbapi2.connect` — they are
   separate module objects and SQLAlchemy imports the second one. You get a
   traceback at the offending line.
-- **The state directories are detected.** `~/.local-iaas` and its `keys` and
+- **The state directories are detected.** `~/.kurukuru` and its `keys` and
   `cloud-init` subdirectories are fingerprinted before and after every test; a
   change fails that test by name. Detection rather than prevention here, so the
   stray file does get written — the run tells you which test to blame and you
@@ -159,7 +159,7 @@ were found by accident, weeks after they started lying.
 | What was reported | What was actually happening |
 |---|---|
 | `npx tsc --noEmit` → exit 0, quoted as "typecheck clean" for several phases | The root `tsconfig.json` is solution-style (`"files": []` plus references), so the command type-checked **zero files** and could not fail |
-| `npx tsc \| head && echo CLEAN`, and later `iaas launch x \| tail; echo $?` | `$?` is the *last* command in a pipeline — `head`'s status, `tail`'s status. A failing command with a successful pager reads as success |
+| `npx tsc \| head && echo CLEAN`, and later `kurukuru launch x \| tail; echo $?` | `$?` is the *last* command in a pipeline — `head`'s status, `tail`'s status. A failing command with a successful pager reads as success |
 | `npm run verify` → exit 0 across typecheck, lint, colour, contrast and build | The dev server was serving a stale module graph. The app rendered a blank page. The build output was accurate and irrelevant |
 
 Three rules follow, and they are cheap:
@@ -177,10 +177,10 @@ bogus prop, watch it pass, and you know.
 ```bash
 npm run typecheck; echo "TSC=$?"                      # right
 npm run build 2>&1 | tail -3; echo "${PIPESTATUS[0]}" # right, if you must pipe
-iaas launch x >/dev/null 2>&1; echo "exit: $?"        # right
+kurukuru launch x >/dev/null 2>&1; echo "exit: $?"        # right
 
 npm run typecheck | head && echo CLEAN                # WRONG: head's status
-iaas launch x --wait | tail; echo $?                  # WRONG: tail's status
+kurukuru launch x --wait | tail; echo $?                  # WRONG: tail's status
 ```
 
 `set -o pipefail` is not on in `sh`, so it will not save you. The same trap
@@ -263,14 +263,17 @@ ordering that prevents a race — say so, so it survives the next refactor.
 
 ## Restoring the database from a backup
 
-The backend takes a backup of `iaas.db` **automatically, immediately before an
+The backend takes a backup of `kurukuru.db` **automatically, immediately before an
 additive migration changes the schema** — and at no other time. An ordinary
 startup against an up-to-date database writes nothing, because a copy on every
 restart would fill the retention window with identical files and age the one
 useful restore point out of it.
 
-Backups live in `~/.local-iaas/backups/` (`IAAS_DB_BACKUP_DIR`), named
-`iaas-<timestamp>-pre-migration.db`. The newest `IAAS_DB_BACKUP_RETENTION`
+Backups live in `~/.kurukuru/backups/` (`KURUKURU_DB_BACKUP_DIR`), named
+`kurukuru-<timestamp>-pre-migration.db` (and `iaas-…` for backups taken
+before the Phase 16 rename — retention still counts them as its own, and
+orders both by the timestamp inside the name rather than by the prefix). The
+newest `KURUKURU_DB_BACKUP_RETENTION`
 (default 5) are kept and older ones pruned; anything in that directory *not*
 matching that pattern — a hand-made copy, a notes file — is never touched.
 
@@ -289,7 +292,7 @@ human reading the filenames.
    normally the newest whose timestamp is *before* the upgrade that went wrong.
 
    ```
-   ls ~/.local-iaas/backups/
+   ls ~/.kurukuru/backups/
    ```
 
 3. **Move the current database aside rather than deleting it** — including its
@@ -297,22 +300,22 @@ human reading the filenames.
    you have looked at the other one.
 
    ```
-   cd ~/.local-iaas
-   mv iaas.db iaas.db.broken
-   mv iaas.db-wal iaas.db-wal.broken 2>/dev/null
-   mv iaas.db-shm iaas.db-shm.broken 2>/dev/null
+   cd ~/.kurukuru
+   mv kurukuru.db kurukuru.db.broken
+   mv kurukuru.db-wal kurukuru.db-wal.broken 2>/dev/null
+   mv kurukuru.db-shm kurukuru.db-shm.broken 2>/dev/null
    ```
 
 4. **Copy the backup into place.** One file, and only one:
 
    ```
-   cp backups/iaas-20260821-132229-pre-migration.db iaas.db
+   cp backups/kurukuru-20260821-132229-pre-migration.db kurukuru.db
    ```
 
    There is no `-wal` or `-shm` to bring with it, and that is the point. The
    backup is taken through SQLite's **online backup API**, not by copying
-   files: with WAL journalling the committed state is spread across `iaas.db`
-   and `iaas.db-wal`, so copying them one at a time captures two different
+   files: with WAL journalling the committed state is spread across `kurukuru.db`
+   and `kurukuru.db-wal`, so copying them one at a time captures two different
    moments and can produce a pair that do not agree. The online backup reads a
    consistent snapshot through SQLite itself — safe against a backend that is
    mid-write — and folds the WAL contents into a single self-contained file.
@@ -322,7 +325,7 @@ human reading the filenames.
    your mind. Compare row counts against the database you set aside:
 
    ```
-   for db in iaas.db iaas.db.broken; do
+   for db in kurukuru.db kurukuru.db.broken; do
      echo "== $db"
      sqlite3 "$db" "SELECT 'instances', COUNT(*) FROM instances
                     UNION ALL SELECT 'volumes', COUNT(*) FROM volumes
@@ -344,7 +347,7 @@ human reading the filenames.
 7. **Reconcile.** The database is desired state, not truth. Instances created
    after the backup was taken exist on the hypervisor but not in the restored
    rows; the reconciler will report them as out-of-band. Read
-   `~/.local-iaas/qemu/instances/` to see what is actually there before
+   `~/.kurukuru/qemu/instances/` to see what is actually there before
    deciding what to do about the difference.
 
 Once you are satisfied, delete the `.broken` files. Not before.
@@ -383,7 +386,7 @@ rules are not the interesting part — the reasoning is:
   a tracked `.env` publishes it, and a secret that has been committed stays in
   the history after you delete it. `.env.example` is the tracked half: it
   documents every variable and holds no values.
-- **`iaas.db` is state, not source.** It is the desired state of one machine's
+- **`kurukuru.db` is state, not source.** It is the desired state of one machine's
   VMs — meaningless on any other machine, conflicting on every pull, and a
   record of what you have been running. Its `-wal` and `-shm` sidecars are
   ignored by name for a separate reason: a `-wal` holds committed transactions

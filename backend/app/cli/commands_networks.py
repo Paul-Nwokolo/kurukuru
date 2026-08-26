@@ -1,12 +1,12 @@
 """
-``iaas net`` — networking, and what this build can actually do.
+``kurukuru net`` — networking, and what this build can actually do.
 
 One mode ships: QEMU's user-mode NAT. A guest on it has no address of its own,
 so a **port forward is the only way in** — and unlike almost everything else
 here, a forward can be added to a *running* instance and starts working
 immediately.
 
-``iaas net modes`` prints what the deferred modes would require of the
+``kurukuru net modes`` prints what the deferred modes would require of the
 operator. That is a genuinely useful answer to "why can't I bridge?", not an
 apology, so it names the driver and the privilege per platform.
 """

@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pycdlib
 
-logger = logging.getLogger("iaas.qemu.seed")
+logger = logging.getLogger("kurukuru.qemu.seed")
 
 # cloud-init matches the label case-insensitively; ISO-9660 itself only allows
 # uppercase in a volume identifier, so CIDATA is the canonical spelling.

@@ -1,5 +1,5 @@
 """
-The Local IaaS command-line interface.
+The Kurukuru command-line interface.
 
 A client of the HTTP API, shipped from the backend package so that
 ``pip install -e backend`` puts the command on PATH. See

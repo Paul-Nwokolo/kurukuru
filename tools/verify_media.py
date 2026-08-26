@@ -47,7 +47,7 @@ import tempfile
 
 import pycdlib
 
-ISO_DIR = pathlib.Path.home() / ".local-iaas" / "isos"
+ISO_DIR = pathlib.Path.home() / ".kurukuru" / "isos"
 
 #: Volume identifiers Microsoft's own media uses. Note that a label outside
 #: this shape is weak evidence at best: `ESD_ISO` was once read here as proof

@@ -186,7 +186,7 @@ def test_generate_writes_into_the_configured_key_directory(client, tmp_path):
     """Not the real one.
 
     ``/keypairs/generate`` runs ssh-keygen and writes two files, and for ten
-    runs it wrote them into the developer's own ``~/.local-iaas/keys`` — the
+    runs it wrote them into the developer's own ``~/.kurukuru/keys`` — the
     test settings pinned the ISO directory but left the key directory at its
     default. Nothing failed; the orphans just accumulated. This asserts the
     thing that was silently untrue.

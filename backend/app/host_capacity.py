@@ -30,7 +30,7 @@ from sqlmodel import Session, select
 from app.config import Settings, get_settings
 from app.models import Instance, InstanceStatus
 
-logger = logging.getLogger("iaas.capacity")
+logger = logging.getLogger("kurukuru.capacity")
 
 try:  # psutil is optional at runtime; see the module docstring.
     import psutil

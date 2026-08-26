@@ -79,7 +79,7 @@ def test_a_filesystem_without_acls_is_reported_as_unprotected(secret, monkeypatc
     assert "FAT32" in result.detail
     assert "cannot be restricted" in result.detail
     # And it names the way out rather than only the problem.
-    assert "IAAS_STATE_DIR" in result.detail
+    assert "KURUKURU_STATE_DIR" in result.detail
 
 
 @windows_only

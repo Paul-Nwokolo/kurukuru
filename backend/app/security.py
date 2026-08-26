@@ -23,7 +23,7 @@ from sqlmodel import Session as DbSession
 from app import auth
 from app.database import get_session
 
-logger = logging.getLogger("iaas.security")
+logger = logging.getLogger("kurukuru.security")
 
 #: Paths reachable without a credential, each with the reason it has to be.
 #:

@@ -61,9 +61,9 @@ from app.engines.qmp import (
 from app.engines.seed import SeedIsoError, build_meta_data, build_seed_iso
 from app.models import InstanceStatus
 
-logger = logging.getLogger("iaas.qemu")
+logger = logging.getLogger("kurukuru.qemu")
 
-#: Everything QEMU forwards is bound to loopback — this is a local IaaS, and a
+#: Everything QEMU forwards is bound to loopback — this is local infrastructure, and a
 #: VM's SSH port has no business being reachable from the LAN.
 HOST_IP = "127.0.0.1"
 

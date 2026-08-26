@@ -20,8 +20,13 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.config import Settings, get_settings
+from app.product import CLI_NAME, DATABASE_LEAF, LEGACY_CLI_NAME
 
-logger = logging.getLogger("iaas.db")
+#: The stem automatic backups are named with. The command name rather than
+#: the distribution name: it is what the user types and what the docs spell.
+PRODUCT_SLUG = CLI_NAME
+
+logger = logging.getLogger("kurukuru.db")
 
 settings = get_settings()
 
@@ -30,7 +35,7 @@ settings = get_settings()
 # Session-per-request (below) keeps this safe.
 #
 # `resolved_database_url`, not `database_url`: the default now lives under
-# `~/.local-iaas`, and SQLAlchemy would open a directory literally named `~`.
+# `~/.kurukuru`, and SQLAlchemy would open a directory literally named `~`.
 engine = create_engine(
     settings.resolved_database_url,
     echo=settings.debug,
@@ -51,7 +56,7 @@ def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # noqa: AN
 
 
 # Columns added after the first release. ``create_all`` only creates *missing
-# tables*, so an existing iaas.db would keep its old shape and every query
+# tables*, so an existing database would keep its old shape and every query
 # naming a new column would fail.
 _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "instances": [
@@ -238,9 +243,26 @@ def _seed_default_network(connection) -> None:
 #: this module wrote. The directory is shared with hand-made backups (Phase 13
 #: left one there), and deleting somebody's manual copy because it happened to
 #: sit in the same folder would be a poor trade for tidiness.
-_BACKUP_PREFIX = "iaas-"
+#:
+#: Two prefixes, because Phase 16 renamed the product and the backups this
+#: module wrote under the old one are still *ours*. Leaving them unmatched would
+#: reclassify them as hand-made and exempt them from retention forever, so the
+#: pruning glob covers both — and sorts on the timestamp rather than the whole
+#: filename, which would otherwise order every "iaas-" backup before every
+#: "kurukuru-" one regardless of when they were taken.
+_BACKUP_PREFIXES = (f"{PRODUCT_SLUG}-", f"{LEGACY_CLI_NAME}-")
+_BACKUP_PREFIX = _BACKUP_PREFIXES[0]
 _BACKUP_SUFFIX = "-pre-migration.db"
-_BACKUP_GLOB = f"{_BACKUP_PREFIX}*{_BACKUP_SUFFIX}"
+_BACKUP_GLOBS = tuple(f"{prefix}*{_BACKUP_SUFFIX}" for prefix in _BACKUP_PREFIXES)
+
+
+def _backup_stamp(path: Path) -> str:
+    """The timestamp inside a backup filename, for ordering across prefixes."""
+    name = path.name
+    for prefix in _BACKUP_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
 
 
 @dataclass(frozen=True)
@@ -314,15 +336,22 @@ def _unique_backup_path(directory: Path, stamp: str) -> Path:
 def _prune_backups(directory: Path, keep: int) -> list[Path]:
     """Delete all but the newest ``keep`` automatic backups. Never anything else.
 
-    Only files matching this module's own naming pattern are considered, and
+    Only files matching this module's own naming patterns are considered, and
     only files -- the directory also holds hand-made backups, which are somebody
-    else's decision to keep.
+    else's decision to keep. Ordering is by the timestamp *inside* the name, not
+    by the name itself, so a backup written before the Phase 16 rename sorts
+    among the ones written after it rather than ahead of all of them.
     """
     if keep <= 0:
         return []
     ours = sorted(
-        (path for path in directory.glob(_BACKUP_GLOB) if path.is_file()),
-        key=lambda path: path.name,          # the name is a timestamp
+        {
+            path
+            for pattern in _BACKUP_GLOBS
+            for path in directory.glob(pattern)
+            if path.is_file()
+        },
+        key=_backup_stamp,
     )
     removed: list[Path] = []
     for path in ours[:-keep] if len(ours) > keep else []:
@@ -335,36 +364,35 @@ def _prune_backups(directory: Path, keep: int) -> list[Path]:
     return removed
 
 
-def backup_database(settings_in_use: Settings, engine_in_use: Engine) -> Path | None:
-    """Snapshot the database with SQLite's online backup API. Returns the path.
+def backup_database_file(
+    source: Path, directory: Path, *, retention: int = 5
+) -> Path | None:
+    """Snapshot one SQLite file into ``directory``. Returns the path, or None.
+
+    The mechanism, without the settings. Split out from :func:`backup_database`
+    so :mod:`app.state_migration` can use it: the state-dir migration has to
+    back up a database that is **not** the one settings describe -- it is still
+    at the old path, under the old name, which is the entire reason a backup is
+    being taken -- and the guards on the settings-aware wrapper exist precisely
+    to stop it copying a database that is not the configured one.
 
     **Why not copy the file.** A live backend may be mid-write, and with WAL
-    journalling the committed state is spread across ``iaas.db`` and
-    ``iaas.db-wal``. Copying them one at a time gives a pair from two different
-    moments -- exactly the failure a backup exists to prevent. The online backup
-    API instead reads a consistent snapshot through SQLite itself, over a
-    separate connection so an in-flight writer is not blocked, and folds the WAL
-    contents in. The result is one self-contained ``.db`` file with **no
-    sidecars to keep with it**, which is also what makes the documented restore
-    a single copy.
+    journalling the committed state is spread across the ``.db`` and its
+    ``-wal``. Copying them one at a time gives a pair from two different moments
+    -- exactly the failure a backup exists to prevent. The online backup API
+    instead reads a consistent snapshot through SQLite itself, over a separate
+    connection so an in-flight writer is not blocked, and folds the WAL contents
+    in. The result is one self-contained ``.db`` file with **no sidecars to keep
+    with it**, which is also what makes the documented restore a single copy.
 
     Returns None, loudly, when it could not run. A backup failure does not stop
-    the backend: the migrations it guards are additive, and refusing to start
-    because a backup directory is unwritable would turn a precaution into an
-    outage. The error names the path so the operator can fix it.
+    the caller: the migrations it guards are additive or are directory moves
+    that lose nothing, and refusing to proceed because a backup directory is
+    unwritable would turn a precaution into an outage. The error names the path.
     """
-    source = _engine_file(engine_in_use)
-    if source is None or not _has_rows(source):
-        return None  # in-memory, a server URL, or nothing worth copying yet
+    if not _has_rows(source):
+        return None  # nothing worth copying yet
 
-    # The same guard ``relocate_legacy_database`` uses, for the same reason: the
-    # test suite runs against engines of its own, and a backup routine that
-    # trusted settings alone would write copies of a tmp_path database into the
-    # developer's real state directory.
-    if source != settings_in_use.database_path:
-        return None
-
-    directory = Path(settings_in_use.db_backup_dir).expanduser()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -380,17 +408,41 @@ def backup_database(settings_in_use: Settings, engine_in_use: Engine) -> Path | 
             origin.close()
     except (OSError, sqlite3.Error) as exc:
         logger.error(
-            "Could not back up the database to %s: %s. Continuing with the "
-            "migration -- it is additive -- but there is no restore point for it.",
-            directory, exc,
+            "Could not back up %s to %s: %s. Continuing -- there is no restore "
+            "point for this change.", source, directory, exc,
         )
         return None
 
     logger.info("Backed up the database to %s (%d bytes)",
                 destination, destination.stat().st_size)
-    for pruned in _prune_backups(directory, settings_in_use.db_backup_retention):
+    for pruned in _prune_backups(directory, retention):
         logger.info("Pruned old backup %s", pruned.name)
     return destination
+
+
+def backup_database(settings_in_use: Settings, engine_in_use: Engine) -> Path | None:
+    """Snapshot the configured database before a schema change. Returns the path.
+
+    A thin, heavily guarded wrapper over :func:`backup_database_file`. The
+    guards are the point:
+
+    * the source is derived from the **engine**, not from settings, because the
+      engine is what will actually be opened -- and in the test suite it is
+      routinely not the one settings describe;
+    * and it must *also* be the file settings names, or nothing happens. A
+      backup routine that trusted settings alone would write copies of a
+      ``tmp_path`` database into the developer's real state directory on every
+      test run.
+    """
+    source = _engine_file(engine_in_use)
+    if source is None or source != settings_in_use.database_path:
+        return None  # in-memory, a server URL, or an engine of the suite's own
+
+    return backup_database_file(
+        source,
+        Path(settings_in_use.db_backup_dir).expanduser(),
+        retention=settings_in_use.db_backup_retention,
+    )
 
 
 def _apply_additive_migrations() -> None:
@@ -588,10 +640,27 @@ def init_db() -> None:
     """Create all tables and apply additive migrations. Safe on every startup."""
     # Import models so SQLModel.metadata is populated before create_all.
     from app import models  # noqa: F401
+    from app.state_migration import migrate_state_dir
 
-    # Both before the first connection. Opening the target would create an
-    # empty file there, which is precisely what the relocation refuses to
-    # write over — so the order matters.
+    # All three before the first connection, and in this order.
+    #
+    # The state-dir migration goes first because it is the one that moves the
+    # *whole tree*, database included, and it refuses to write onto a target
+    # that already has contents. ``ensure_database_directory`` would create that
+    # target — an empty ``~/.kurukuru`` holding nothing but a directory — and the
+    # migration would then decline to move a real install into it. Then the
+    # backend would come up on a fresh empty database beside twenty gigabytes of
+    # the user's VMs, reporting an install that had lost everything.
+    #
+    # It raises rather than returning on the one case it cannot handle (running
+    # VMs), and that exception is allowed to reach the lifespan. See
+    # app.state_migration.StateMigrationBlocked for why not starting is right.
+    migrate_state_dir(get_settings(), engine)
+
+    # Then the directory, then the older CWD-relative relocation — which still
+    # looks for a file named `iaas.db`, deliberately: that is the name the old
+    # default actually wrote, and renaming the thing being searched for would
+    # simply stop finding it.
     ensure_database_directory(engine)
     relocate_legacy_database(get_settings(), engine)
 

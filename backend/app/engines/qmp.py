@@ -18,7 +18,7 @@ import json
 import logging
 import socket
 
-logger = logging.getLogger("iaas.qemu.qmp")
+logger = logging.getLogger("kurukuru.qemu.qmp")
 
 _DEFAULT_TIMEOUT = 10.0
 

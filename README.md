@@ -1,4 +1,4 @@
-# Local IaaS
+# Kurukuru
 
 A local cloud platform for a single machine. It gives you an HTTP API and a web
 dashboard for the whole VM lifecycle — provision, start, stop, terminate — on
@@ -48,7 +48,7 @@ is in [docs/PORTABILITY.md](docs/PORTABILITY.md).
   not gigabytes.
 - **Reconciliation** — the database holds desired state; a background pass folds
   actual hypervisor state back in, so out-of-band changes show up.
-- **A command-line client** — `iaas launch`, `ls`, `ssh`, `rm`, `doctor`, with
+- **A command-line client** — `kurukuru launch`, `ls`, `ssh`, `rm`, `doctor`, with
   `--json` on every read command and a documented exit-code table. See below.
 - **SSH key pairs** — import your own or generate one, and choose which go on an
   instance. The orchestrator's key remains the default.
@@ -84,10 +84,10 @@ flow, and a test enumerates the application's routes and fails if any other one
 answers something other than 401 to an anonymous caller.
 
 ```
-iaas auth init          # once, on the host: creates the owner account
-iaas auth login         # stores an API token for this machine
-iaas auth whoami
-iaas auth token ls|create|rm
+kurukuru auth init          # once, on the host: creates the owner account
+kurukuru auth login         # stores an API token for this machine
+kurukuru auth whoami
+kurukuru auth token ls|create|rm
 ```
 
 The browser signs in with a password and gets an httpOnly session cookie plus a
@@ -125,7 +125,7 @@ sudo apt install python3.12-venv qemu-system-x86 qemu-utils
 
 On Fedora/RHEL that is `qemu-kvm` and `qemu-img`; on Arch, `qemu-full`. To use
 KVM, the account running the backend must be able to read `/dev/kvm` — add it
-to the `kvm` group and log back in. `iaas doctor` reports which accelerator was
+to the `kvm` group and log back in. `kurukuru doctor` reports which accelerator was
 selected and why.
 
 **Disk:** the Ubuntu base image is ~600 MB, downloaded once on first QEMU
@@ -145,20 +145,20 @@ Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -All
 ## Command line
 
 If you live in a terminal, the CLI is the primary interface — the dashboard is
-the optional part. Installing the backend as an editable package puts `iaas` on
+the optional part. Installing the backend as an editable package puts `kurukuru` on
 `PATH`:
 
 ```bash
 pip install -e backend
-iaas doctor          # checks QEMU, the accelerator, disk, keys — with remedies
-iaas serve           # run the backend in the foreground
+kurukuru doctor          # checks QEMU, the accelerator, disk, keys — with remedies
+kurukuru serve           # run the backend in the foreground
 ```
 
 ```bash
-iaas launch web-01 --preset small --wait
-iaas ls
-iaas ssh web-01 -- uname -a
-iaas rm web-01 --yes
+kurukuru launch web-01 --preset small --wait
+kurukuru ls
+kurukuru ssh web-01 -- uname -a
+kurukuru rm web-01 --yes
 ```
 
 ```
@@ -213,7 +213,7 @@ The dashboard is on <http://localhost:5173>.
 
 ### Configuration
 
-Every setting is overridable by environment variable with an `IAAS_` prefix, or
+Every setting is overridable by environment variable with an `KURUKURU_` prefix, or
 by a `.env` file in `backend/`. Copy the annotated template:
 
 ```powershell
@@ -222,7 +222,7 @@ cp backend/.env.example backend/.env
 
 Three things worth knowing about how `.env` is read:
 
-- The prefix is `IAAS_`, uppercased — `qemu_dir` becomes `IAAS_QEMU_DIR`.
+- The prefix is `KURUKURU_`, uppercased — `qemu_dir` becomes `KURUKURU_QEMU_DIR`.
 - The file is decoded as `utf-8-sig`, so a UTF-8 BOM (which Windows editors like
   to add) is tolerated.
 - Unknown keys are **ignored**, not rejected. Leaving a stale setting behind is
@@ -243,7 +243,7 @@ Three things worth knowing about how `.env` is read:
    a complete command including `-i` and the orchestrator's private key:
 
    ```
-   ssh -i "C:\Users\you\.local-iaas\keys\id_ed25519" -p 2200 iaas@127.0.0.1
+   ssh -i "C:\Users\you\.kurukuru\keys\id_ed25519" -p 2200 iaas@127.0.0.1
    ```
 
    Paste it into any terminal. QEMU guests are reached through a loopback port
@@ -253,7 +253,7 @@ Three things worth knowing about how `.env` is read:
    only way into ISO instances and images without cloud-init, which get no SSH
    key.
 
-To install an OS from an ISO: drop a `.iso` into `~/.local-iaas/isos/`, then
+To install an OS from an ISO: drop a `.iso` into `~/.kurukuru/isos/`, then
 choose **Install from ISO** in the launch dialog and pick it from the list.
 
 ## Troubleshooting
@@ -265,8 +265,8 @@ Each of these is a failure that actually happened during development.
 `qemu-system-x86_64` is not on `PATH`. Either add it, or point at it directly:
 
 ```powershell
-$env:IAAS_QEMU_SYSTEM_BINARY = "C:\Program Files\qemu\qemu-system-x86_64.exe"
-$env:IAAS_QEMU_IMG_BINARY    = "C:\Program Files\qemu\qemu-img.exe"
+$env:KURUKURU_QEMU_SYSTEM_BINARY = "C:\Program Files\qemu\qemu-system-x86_64.exe"
+$env:KURUKURU_QEMU_IMG_BINARY    = "C:\Program Files\qemu\qemu-img.exe"
 ```
 
 `GET /health` reports the engine's own view, including the detected version —
@@ -283,7 +283,7 @@ use `python3`.)
 
 **On Windows**, the checkout is too deep. The 260-character path limit bites
 during venv creation, and the error names `ensurepip` rather than the real
-cause. Clone somewhere shorter (`C:\src\local-iaas`), or enable long paths:
+cause. Clone somewhere shorter (`C:\src\kurukuru`), or enable long paths:
 
 ```powershell
 # Elevated PowerShell.
@@ -294,7 +294,7 @@ Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' `
 ### VMs are extremely slow to boot
 
 Hardware acceleration is not active, so QEMU is emulating in software. Run
-`iaas doctor`, or check `GET /health`: `accel` will read `tcg` rather than
+`kurukuru doctor`, or check `GET /health`: `accel` will read `tcg` rather than
 `whpx`/`kvm`/`hvf`.
 
 - **Windows:** enable Windows Hypervisor Platform (above) and reboot.
@@ -305,7 +305,7 @@ Hardware acceleration is not active, so QEMU is emulating in software. Run
 
 For scale: a cloud image boots in ~23 s accelerated, and 4–5 minutes emulated on
 a 2-core host. If you are stuck on software emulation, raise
-`IAAS_QEMU_SHUTDOWN_TIMEOUT_SECONDS` too — a graceful stop was measured at 89 s
+`KURUKURU_QEMU_SHUTDOWN_TIMEOUT_SECONDS` too — a graceful stop was measured at 89 s
 against the 90 s default, and exceeding it force-kills a guest mid-shutdown.
 
 ### The console is black on a cloud image
@@ -333,7 +333,7 @@ Requested 60000 MB but only 13780 MB allocatable
 ```
 
 Stop or terminate an instance to free the commitment, ask for less, or lower
-`IAAS_HOST_RESERVE_MEMORY_BYTES` if you genuinely want to cut into the host's
+`KURUKURU_HOST_RESERVE_MEMORY_BYTES` if you genuinely want to cut into the host's
 share. `GET /host/capacity` shows the same numbers.
 
 ### An instance is Running but shows no address, marked Degraded
@@ -343,16 +343,16 @@ failed or the guest's network did not come up. Open the console to look, or read
 the guest's serial log at:
 
 ```
-~/.local-iaas/qemu/instances/<name>/qemu.log
+~/.kurukuru/qemu/instances/<name>/qemu.log
 ```
 
 ### Where logs live
 
 - **Backend:** stdout of the `uvicorn` process.
-- **Guest serial console:** `~/.local-iaas/qemu/instances/<name>/qemu.log`
-- **QEMU's own stderr:** `~/.local-iaas/qemu/instances/<name>/qemu-process.log` —
+- **Guest serial console:** `~/.kurukuru/qemu/instances/<name>/qemu.log`
+- **QEMU's own stderr:** `~/.kurukuru/qemu/instances/<name>/qemu-process.log` —
   this is where a VM that dies instantly explains itself.
-- **Instance runtime state:** `~/.local-iaas/qemu/instances/<name>/runtime.json`
+- **Instance runtime state:** `~/.kurukuru/qemu/instances/<name>/runtime.json`
   (pinned ports, pid, accelerator, display).
 
 ## Project status

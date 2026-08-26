@@ -32,7 +32,14 @@ from app.cli import (
 )
 from app.cli.config import RESOLUTION_HELP, load_config
 from app.cli.errors import CliError, ExitCode
-from app.cli.naming import CLI_NAME, CONFIG_PATH, DEFAULT_API_URL, env_var
+from app.cli.naming import (
+    CLI_NAME,
+    CONFIG_PATH,
+    DEFAULT_API_URL,
+    PRODUCT_NAME,
+    apply_legacy_env,
+    env_var,
+)
 from app.cli.output import Output
 
 #: Set this to get the full traceback out of an unexpected failure.
@@ -69,7 +76,7 @@ class _ErrorHandlingGroup(TyperGroup):
 app = typer.Typer(
     cls=_ErrorHandlingGroup,
     name=CLI_NAME,
-    help="Launch and manage local VMs through the Local IaaS API.",
+    help=f"Launch and manage local VMs through the {PRODUCT_NAME} API.",
     epilog=_EPILOG,
     no_args_is_help=True,
     add_completion=False,  # replaced by the `completion` command
@@ -130,7 +137,7 @@ def root(
 
 
 def main() -> None:
-    """Entry point for the ``iaas`` console script.
+    """Entry point for the ``kurukuru`` console script.
 
     Owns the failure boundary. A command signals failure by raising
     :class:`CliError`, which carries the exit code the scripting contract
@@ -138,9 +145,22 @@ def main() -> None:
     and nothing lets an httpx traceback reach the user — a stack of transport
     internals tells them nothing about the fact that the backend isn't running.
     """
+    # Before anything reads the environment. The CLI resolves its token file and
+    # its state root from environment variables directly — it is forbidden from
+    # importing the backend's Settings — so the backend's shim never runs for it
+    # and an operator's IAAS_STATE_DIR would be invisible here while working
+    # perfectly well for the server. Two halves of one product disagreeing about
+    # where the install lives is worse than either one being wrong.
+    for legacy, current in apply_legacy_env():
+        print(
+            f"warning: {legacy} is deprecated and will stop being read in a "
+            f"future release. Rename it to {current}.",
+            file=sys.stderr,
+        )
+
     # Registers the shell-completion classes, so a completion request arriving
-    # in $_IAAS_COMPLETE is answered by the same implementation whose script
-    # `iaas completion` prints.
+    # in $_KURUKURU_COMPLETE is answered by the same implementation whose script
+    # `kurukuru completion` prints.
     from typer._completion_classes import completion_init
 
     completion_init()

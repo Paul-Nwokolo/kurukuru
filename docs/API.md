@@ -24,7 +24,7 @@ answers "ok" while its engine is broken sends people debugging the wrong layer.
 ```json
 {
   "status": "ok",
-  "service": "Local IaaS Orchestrator",
+  "service": "Kurukuru",
   "engine": {
     "name": "qemu",
     "available": true,
@@ -52,7 +52,7 @@ acceleration mode here.
 ### `GET /diagnostics`
 
 Facts about the machine the **backend** runs on, for clients that cannot see it
-— `iaas doctor` is the one that exists. Every field here is a property of the
+— `kurukuru doctor` is the one that exists. Every field here is a property of the
 backend's host: whether its instance store is writable, how much room is left on
 that volume, whether the orchestrator's keypair exists. A client that answered
 these from its own filesystem would be describing the wrong machine the moment
@@ -66,11 +66,11 @@ the two are not the same.
     "available": true,
     "version": "QEMU emulator version 11.1.0 (v11.1.0-12130-ge470268ff4)",
     "accel": "whpx", "accel_available": true,
-    "base_image": "C:\\Users\\you\\.local-iaas\\qemu\\base-images\\noble-server-cloudimg-amd64.img",
+    "base_image": "C:\\Users\\you\\.kurukuru\\qemu\\base-images\\noble-server-cloudimg-amd64.img",
     "base_image_present": true
   },
   "instance_store": {
-    "path": "C:\\Users\\you\\.local-iaas\\qemu\\instances",
+    "path": "C:\\Users\\you\\.kurukuru\\qemu\\instances",
     "exists": true, "writable": true, "free_bytes": 39504084992
   },
   "ssh_key": {"present": true, "private_key_path": "...", "error": null}
@@ -99,7 +99,7 @@ generates the keypair on first access, as `GET /ssh-key` does.
 
 What the host can still give a new instance. Totals, what is already committed,
 and what remains allocatable — the launch form needs all three to explain a
-limit rather than merely enforce one. Cached for `IAAS_CAPACITY_CACHE_SECONDS`.
+limit rather than merely enforce one. Cached for `KURUKURU_CAPACITY_CACHE_SECONDS`.
 
 ```json
 {
@@ -115,7 +115,7 @@ limit rather than merely enforce one. Cached for `IAAS_CAPACITY_CACHE_SECONDS`.
 ```
 
 - CPU `allocatable` exceeds `total` because vCPUs timeshare
-  (`IAAS_CPU_OVERSUBSCRIBE_FACTOR`), but `max_per_instance` never exceeds the
+  (`KURUKURU_CPU_OVERSUBSCRIBE_FACTOR`), but `max_per_instance` never exceeds the
   real core count.
 - Memory `allocatable` = total − host reserve − committed.
 - Disk `allocatable` is *free space*, not total minus committed: qcow2 overlays
@@ -139,7 +139,7 @@ sizes themselves, which the dashboard already did everywhere else.
 
 ### `GET /isos`
 
-Boot media in `IAAS_ISO_DIR`, newest first. Files are placed there by hand;
+Boot media in `KURUKURU_ISO_DIR`, newest first. Files are placed there by hand;
 there is no upload endpoint.
 
 ```json
@@ -153,8 +153,8 @@ The orchestrator's keypair. Only the *public* key contents are returned;
 `private_key_path` is a path for `ssh -i`.
 
 ```json
-{"public_key": "ssh-ed25519 AAAA... local-iaas-orchestrator",
- "private_key_path": "C:\\Users\\you\\.local-iaas\\keys\\id_ed25519",
+{"public_key": "ssh-ed25519 AAAA... kurukuru-orchestrator",
+ "private_key_path": "C:\\Users\\you\\.kurukuru\\keys\\id_ed25519",
  "key_path": "...", "ssh_user": "iaas"}
 ```
 
@@ -258,7 +258,7 @@ Derived fields worth understanding:
   up blank (standard graphics under hardware acceleration). Advisory, because
   whether a guest leaves VGA text mode is a property of the guest.
 - **`degraded`** / **`degraded_reason`** — `Running`, expected an address, still
-  has none after `IAAS_DEGRADED_AFTER_SECONDS`. Never set for console-only
+  has none after `KURUKURU_DEGRADED_AFTER_SECONDS`. Never set for console-only
   instances.
 - **`ssh_enabled`** — whether the orchestrator's key reached this guest. False
   for ISO installs and images without cloud-init.
@@ -296,7 +296,7 @@ emulation), then returns the reconciled record.
 ### `POST /instances/{id}/stop` → 200
 
 Only from `Running`. Sends an ACPI powerdown, waits, then force-kills after
-`IAAS_QEMU_SHUTDOWN_TIMEOUT_SECONDS`. Ports stay pinned; the pid clears.
+`KURUKURU_QEMU_SHUTDOWN_TIMEOUT_SECONDS`. Ports stay pinned; the pid clears.
 
 Same error codes as `start`, with the 409 requiring `Running`.
 
@@ -362,10 +362,10 @@ instance launched before this existed trusts it.
 ### `GET /keypairs` · `GET /keypairs/{id}`
 
 ```json
-{"id": "…", "name": "orchestrator", "public_key": "ssh-ed25519 AAAA… local-iaas-orchestrator",
+{"id": "…", "name": "orchestrator", "public_key": "ssh-ed25519 AAAA… kurukuru-orchestrator",
  "fingerprint": "SHA256:O7RU0qL/HgPheAh6AwKPMPMyCBzx0p2W2duNePzv57c",
  "key_type": "ed25519", "source": "orchestrator", "has_private_key": true,
- "private_key_path": "C:\Users\you\.local-iaas\keys\id_ed25519", "created_at": "…"}
+ "private_key_path": "C:\Users\you\.kurukuru\keys\id_ed25519", "created_at": "…"}
 ```
 
 `source` is `orchestrator`, `imported` or `generated`. `private_key_path` is a
@@ -707,7 +707,7 @@ volume's data moves on. The snapshot dialog says so, naming the volumes.
 ```json
 {
   "id": "94f3…", "name": "data-one", "size_gb": 1, "format": "qcow2",
-  "path": "C:\Users\you\.local-iaas\qemu\volumes\94f3….qcow2",
+  "path": "C:\Users\you\.kurukuru\qemu\volumes\94f3….qcow2",
   "status": "Attached", "error_message": null,
   "attached_instance_id": "8d7f…", "attached_instance_name": "dbhost",
   "attached_instance_guest_os": "linux",
@@ -841,7 +841,7 @@ is retained, and their history with it.
 
 ### Retention
 
-Events are pruned once at startup, by age alone: `IAAS_EVENT_RETENTION_DAYS`,
+Events are pruned once at startup, by age alone: `KURUKURU_EVENT_RETENTION_DAYS`,
 default 90, `0` to keep everything. A **terminated instance keeps every one of
 its events until they age out** — the moment an instance is destroyed is the
 moment its history is most likely to be wanted, so tying retention to the
@@ -931,7 +931,7 @@ $r | Select-Object status, ip_address, ssh_port, ssh_user
 Then SSH in — note the key and the port:
 
 ```
-ssh -i "$HOME\.local-iaas\keys\id_ed25519" -p <ssh_port> iaas@127.0.0.1
+ssh -i "$HOME\.kurukuru\keys\id_ed25519" -p <ssh_port> iaas@127.0.0.1
 ```
 
 ### Launch with custom sizing
@@ -947,7 +947,7 @@ refused with the arithmetic.
 ### Launch from an ISO
 
 ```bash
-# 1. Put the .iso in ~/.local-iaas/isos/, then list what the backend sees:
+# 1. Put the .iso in ~/.kurukuru/isos/, then list what the backend sees:
 curl -s http://localhost:8000/isos | jq -r '.[].name'
 
 # 2. Launch. No cloud-init, no SSH key — the console is the way in.

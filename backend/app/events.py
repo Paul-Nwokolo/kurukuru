@@ -38,7 +38,7 @@ from sqlmodel import Session, delete, select
 from app.database import engine as db_engine
 from app.models import EventActor, EventKind, Instance, InstanceEvent, _utcnow
 
-logger = logging.getLogger("iaas.events")
+logger = logging.getLogger("kurukuru.events")
 
 #: Detail is stored whole, but a runaway value (a driver that returns a
 #: megabyte of stderr) would bloat every listing that reads it. Truncated with

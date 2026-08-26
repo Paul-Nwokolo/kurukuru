@@ -7,7 +7,7 @@ the mistakes that cost an hour of live debugging actually live. The live
 end-to-end run is the separate, manual proof that these pieces compose.
 
 ``qemu_dir`` is redirected to a tmp_path in every test, so no test can touch the
-real ``~/.local-iaas/qemu`` tree.
+real ``~/.kurukuru/qemu`` tree.
 """
 
 from __future__ import annotations

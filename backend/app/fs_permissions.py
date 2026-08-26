@@ -36,7 +36,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger("iaas.fs")
+logger = logging.getLogger("kurukuru.fs")
 
 #: Owner read/write, nothing for group or other. POSIX only.
 _FILE_MODE = 0o600
@@ -125,7 +125,7 @@ def _harden_windows(path: Path) -> HardenResult:
             path, False,
             f"{filesystem} has no access control lists, so {path.name} cannot be "
             f"restricted to your account. Move the state directory to an NTFS "
-            f"volume (IAAS_STATE_DIR), or treat this file as readable by anyone "
+            f"volume (KURUKURU_STATE_DIR), or treat this file as readable by anyone "
             f"with access to the disk.",
         )
 

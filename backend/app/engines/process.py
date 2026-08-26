@@ -36,7 +36,7 @@ import sys
 import time
 from pathlib import Path
 
-logger = logging.getLogger("iaas.qemu.process")
+logger = logging.getLogger("kurukuru.qemu.process")
 
 _IS_WINDOWS = sys.platform == "win32"
 

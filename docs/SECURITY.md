@@ -18,7 +18,7 @@ network if you have bound it beyond loopback.
 
 ### The clearest statement of the boundary
 
-The first account is created by `iaas auth init`, on the host, writing directly
+The first account is created by `kurukuru auth init`, on the host, writing directly
 to the database — not through the API. That choice is the threat model in
 miniature, so it is worth stating plainly:
 
@@ -29,7 +29,7 @@ miniature, so it is worth stating plainly:
 > holds the orchestrator's SSH private key and every VM disk. Anyone who can
 > read it has already won; anyone who cannot is not helped by an HTTP route.
 
-The same reasoning governs `iaas auth reset-password`, which additionally cannot
+The same reasoning governs `kurukuru auth reset-password`, which additionally cannot
 require a credential because it is the recovery path for someone who has lost
 one.
 
@@ -92,7 +92,7 @@ in, a page on another submitted a form POST, and the API answered **403, not
 the CSRF token refused it.
 
 So every state-changing request authenticated by **cookie** must carry the
-`X-IAAS-CSRF` header. Requests authenticated by **Bearer token** are exempt, and
+`X-Kurukuru-CSRF` header. Requests authenticated by **Bearer token** are exempt, and
 that is not a gap: a browser cannot be induced to attach an `Authorization`
 header to a cross-origin request, so the header's presence is itself evidence of
 intent.
@@ -131,8 +131,8 @@ no SSO.
 
 ### The CLI token file
 
-`iaas auth login` stores an API token at `~/.local-iaas/cli-token`
-(`IAAS_AUTH_TOKEN_FILE`), locked to your OS user. What that is worth, measured
+`kurukuru auth login` stores an API token at `~/.kurukuru/cli-token`
+(`KURUKURU_AUTH_TOKEN_FILE`), locked to your OS user. What that is worth, measured
 rather than assumed:
 
 | | |
@@ -145,13 +145,13 @@ That is exactly the POSIX `0600` boundary. Note that `os.chmod` does **not**
 provide it on Windows — on NTFS it leaves the file's access control list
 byte-identical — so the file is locked with an explicit ACL instead.
 
-**Access control lists are an NTFS/ReFS feature.** If you point `IAAS_STATE_DIR`
+**Access control lists are an NTFS/ReFS feature.** If you point `KURUKURU_STATE_DIR`
 at FAT32 or exFAT — a USB stick, an SD card — there is no ACL to set and the
 token is readable by anyone with the disk. The CLI checks the filesystem before
 believing the operation worked and warns loudly rather than reporting success.
 
 The token in that file is an ordinary API token. If it leaks, revoke it:
-`iaas auth token ls`, then `iaas auth token rm <name>`.
+`kurukuru auth token ls`, then `kurukuru auth token rm <name>`.
 
 ---
 
@@ -182,11 +182,11 @@ to loopback is a better answer than binding wider.
 On the machine hosting the API:
 
 ```
-iaas auth reset-password
+kurukuru auth reset-password
 ```
 
 It prompts for a new password, and invalidates every session, API token and
-console ticket — including this machine's stored token. Run `iaas auth login`
+console ticket — including this machine's stored token. Run `kurukuru auth login`
 afterwards.
 
 This requires filesystem access to the state directory, which is the point: see
@@ -195,8 +195,8 @@ the threat model above.
 ### A leaked API token
 
 ```
-iaas auth token ls
-iaas auth token rm <name-or-prefix>
+kurukuru auth token ls
+kurukuru auth token rm <name-or-prefix>
 ```
 
 Revocation takes effect on the next request. If you do not know which token
@@ -204,7 +204,7 @@ leaked, change the password — that invalidates all of them at once.
 
 ### A leaked password
 
-Change it: Settings → Account in the dashboard, or `iaas auth reset-password` on
+Change it: Settings → Account in the dashboard, or `kurukuru auth reset-password` on
 the host. Everything issued under the old password stops working immediately.
 
 ### Locked out because no account exists
@@ -213,7 +213,7 @@ A backend with no account answers 401 to everything except `/health` and the
 login routes, and logs the command to run at startup. Create the owner account:
 
 ```
-iaas auth init
+kurukuru auth init
 ```
 
 The password is prompted for, never taken as a flag — a flag lands in shell

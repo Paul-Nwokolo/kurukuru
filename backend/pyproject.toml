@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "local-iaas"
+name = "kurukuru"
 version = "0.1.0"
-description = "Local IaaS Orchestrator — a single-host cloud platform over QEMU"
+description = "Kurukuru — local cloud infrastructure: a single-host cloud platform over QEMU"
 readme = "README.md"
 requires-python = ">=3.11"
 
@@ -32,9 +32,10 @@ dependencies = [
 dev = ["pytest==8.3.5"]
 
 # The command name lives in exactly two places: here, and CLI_NAME in
-# app/cli/naming.py. Renaming the product is those two lines.
+# app/product.py. Renaming the product is those two lines — and, from Phase 16
+# on, the state-dir migration that carries an existing install across it.
 [project.scripts]
-iaas = "app.cli.main:main"
+kurukuru = "app.cli.main:main"
 
 [tool.setuptools.packages.find]
 include = ["app*"]

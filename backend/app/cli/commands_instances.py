@@ -295,7 +295,7 @@ def ls(
         _watch_instances(client, out, all_instances, interval)
         return
 
-    # Scoped by --project / $IAAS_PROJECT when one is set; unset means every
+    # Scoped by --project / $KURUKURU_PROJECT when one is set; unset means every
     # project, which is what `ls` did before projects existed.
     rows = client.instances(
         include_terminated=all_instances, project_id=scoped_project_id(ctx, client)
@@ -605,7 +605,7 @@ def ssh(
     Builds the same command the dashboard's Copy SSH button produces — the
     orchestrator's key, the forwarded port, the cloud-init user — and hands the
     terminal over to ssh itself. Everything after ``--`` goes to ssh unchanged,
-    so `iaas ssh web-01 -- uname -a` runs one remote command and exits with its
+    so `kurukuru ssh web-01 -- uname -a` runs one remote command and exits with its
     status.
 
     Host-key checking is bypassed by default, and that is not laziness. Every

@@ -9,8 +9,8 @@ object and a database rooted in its own ``tmp_path``, applied by an autouse
 fixture that *discovers* which modules to redirect rather than naming them. The
 previous design was opt-in per module, and it failed twice in the way opt-in
 designs fail: Phase 10 wrote generated SSH keypairs into the developer's
-``~/.local-iaas/keys`` (ten orphans before anyone looked), and Phase 11 wrote
-130 event rows into the real ``iaas.db``, which surfaced as test instances named
+``~/.kurukuru/keys`` (ten orphans before anyone looked), and Phase 11 wrote
+130 event rows into the real database, which surfaced as test instances named
 ``web-one`` and ``doomed`` appearing in the live dashboard's activity feed.
 Neither was a bug in the code under test. Both were a new module that nobody
 remembered to add to a list.
@@ -20,7 +20,7 @@ none.** It is the backstop for what this file cannot prevent — a module
 imported after the fixture ran, a subprocess, an absolute path written by hand
 — and it works differently for the two things being protected:
 
-* The **database is prevented**. Opening the real ``iaas.db`` raises on the
+* The **database is prevented**. Opening the real database raises on the
   spot, with a traceback pointing at the line that did it.
 * The **state directories are detected**, fingerprinted before and after every
   test. There is no single call to intercept for "wrote a file somewhere", so
@@ -47,6 +47,7 @@ from sqlmodel import SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
 from app.config import DEFAULT_STATE_DIR, Settings, get_settings
+from app.product import LEGACY_STATE_DIR
 from app.host_capacity import invalidate_cache
 
 # --------------------------------------------------------------------------- #
@@ -54,6 +55,14 @@ from app.host_capacity import invalidate_cache
 # --------------------------------------------------------------------------- #
 #: The state tree a developer's own install uses.
 REAL_STATE_DIR = Path(DEFAULT_STATE_DIR).expanduser()
+
+#: And the one Phase 16 renamed it from, which is still sitting there on any
+#: machine that has not been upgraded yet — including, until it runs, this one.
+#: Watched because the state-dir migration *moves whole directories*: a test
+#: that reached it would not leave a stray file behind, it would relocate the
+#: developer's entire install. The guards in ``migrate_state_dir`` are what
+#: prevent that; this is how we would find out if they stopped working.
+LEGACY_REAL_STATE_DIR = Path(LEGACY_STATE_DIR).expanduser()
 
 #: The live database. ``_REAL_DB`` is the path connections are refused to;
 #: the WAL sidecars are named alongside it because a write lands there first,
@@ -64,7 +73,7 @@ REAL_STATE_DIR = Path(DEFAULT_STATE_DIR).expanduser()
 #: default now lives under ``~``, and ``Path("~/...").resolve()`` produces a
 #: directory named ``~`` inside the CWD — a path nothing will ever open, which
 #: would have left the guard below matching nothing and reporting green.
-_REAL_DB = (Settings().database_path or Path("iaas.db")).resolve()
+_REAL_DB = (Settings().database_path or Path("kurukuru.db")).resolve()
 REAL_DB_FILES = (_REAL_DB, Path(f"{_REAL_DB}-wal"), Path(f"{_REAL_DB}-shm"))
 
 #: Names inside the state root that belong to the database and must be excluded
@@ -128,7 +137,12 @@ def _real_state_fingerprint() -> dict[str, object]:
     """
     return _fingerprint(
         (),
-        (REAL_STATE_DIR, REAL_STATE_DIR / "keys", REAL_STATE_DIR / "cloud-init"),
+        (
+            REAL_STATE_DIR,
+            REAL_STATE_DIR / "keys",
+            REAL_STATE_DIR / "cloud-init",
+            LEGACY_REAL_STATE_DIR,
+        ),
         ignore=_DB_SIDECAR_NAMES,
     )
 
@@ -184,7 +198,7 @@ def _describe_drift(before: dict, after: dict) -> str:
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "real_state: test may read or write the real ~/.local-iaas state and "
+        "real_state: test may read or write the real ~/.kurukuru state and "
         "database. Opts out of the isolation every other test gets by default.",
     )
 
@@ -244,7 +258,7 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
         return
 
     state = tmp_path / "state"
-    database = tmp_path / "iaas.db"
+    database = tmp_path / "kurukuru.db"
 
     # The CLI reads its API token from a file resolved through the environment,
     # so without this a test run on a machine where somebody has signed in picks
@@ -252,7 +266,7 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
     # the test database has never heard of it. Same rule as the rest of this
     # fixture: a test must not be able to reach the state of the machine
     # running it, in either direction.
-    monkeypatch.setenv("IAAS_AUTH_TOKEN_FILE", str(tmp_path / "cli-token"))
+    monkeypatch.setenv("KURUKURU_AUTH_TOKEN_FILE", str(tmp_path / "cli-token"))
     settings = Settings(
         state_dir=str(state),
         database_url=f"sqlite:///{database.as_posix()}",

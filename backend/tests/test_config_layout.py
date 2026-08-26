@@ -1,7 +1,7 @@
 """
 On-disk layout: one root, overridable, with existing installs left alone.
 
-``IAAS_STATE_DIR`` exists so a host can put this tool's state where its
+``KURUKURU_STATE_DIR`` exists so a host can put this tool's state where its
 conventions say it belongs — an XDG layout on Linux, a different volume
 anywhere — without setting four variables that must agree.
 
@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 
 from app.config import DEFAULT_STATE_DIR, Settings
+from app.product import DATABASE_LEAF
 
 
 def test_defaults_are_unchanged_by_the_new_root():
@@ -28,12 +29,12 @@ def test_defaults_are_unchanged_by_the_new_root():
     settings = Settings()
 
     assert settings.state_dir == DEFAULT_STATE_DIR
-    assert settings.qemu_dir == "~/.local-iaas/qemu"
-    assert settings.ssh_key_dir == "~/.local-iaas/keys"
-    assert settings.cloud_init_dir == "~/.local-iaas/cloud-init"
-    assert settings.iso_dir == "~/.local-iaas/isos"
-    assert settings.db_backup_dir == "~/.local-iaas/backups"
-    assert settings.database_url == "sqlite:///~/.local-iaas/iaas.db"
+    assert settings.qemu_dir == "~/.kurukuru/qemu"
+    assert settings.ssh_key_dir == "~/.kurukuru/keys"
+    assert settings.cloud_init_dir == "~/.kurukuru/cloud-init"
+    assert settings.iso_dir == "~/.kurukuru/isos"
+    assert settings.db_backup_dir == "~/.kurukuru/backups"
+    assert settings.database_url == "sqlite:///~/.kurukuru/kurukuru.db"
 
 
 def test_state_dir_moves_every_directory_that_follows_it():
@@ -44,7 +45,7 @@ def test_state_dir_moves_every_directory_that_follows_it():
     assert settings.cloud_init_dir == "/var/lib/local-iaas/cloud-init"
     assert settings.iso_dir == "/var/lib/local-iaas/isos"
     assert settings.db_backup_dir == "/var/lib/local-iaas/backups"
-    assert settings.database_url == "sqlite:////var/lib/local-iaas/iaas.db"
+    assert settings.database_url == "sqlite:////var/lib/local-iaas/kurukuru.db"
 
 
 def test_every_rooted_directory_actually_follows_the_root():
@@ -93,7 +94,7 @@ def test_a_trailing_separator_does_not_double_up():
 
 def test_env_vars_drive_it(monkeypatch):
     """The documented interface is the environment, not the constructor."""
-    monkeypatch.setenv("IAAS_STATE_DIR", "/opt/iaas")
+    monkeypatch.setenv("KURUKURU_STATE_DIR", "/opt/iaas")
     settings = Settings()
 
     assert settings.qemu_dir == "/opt/iaas/qemu"
@@ -120,7 +121,7 @@ def test_the_database_is_the_same_file_from_any_working_directory(tmp_path, monk
     it is only the resolution against the process's directory — the one SQLite
     performs, and this test therefore has to perform as well — that differs.
     """
-    monkeypatch.setenv("IAAS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("KURUKURU_STATE_DIR", str(tmp_path / "state"))
     elsewhere = tmp_path / "a" / "deeper" / "place"
     elsewhere.mkdir(parents=True)
 
@@ -132,16 +133,16 @@ def test_the_database_is_the_same_file_from_any_working_directory(tmp_path, monk
         opened.add(Path(os.path.abspath(path)))
 
     assert len(opened) == 1, f"the database moved with the working directory: {opened}"
-    assert opened.pop() == Path(os.path.abspath(tmp_path / "state" / "iaas.db"))
+    assert opened.pop() == Path(os.path.abspath(tmp_path / "state" / DATABASE_LEAF))
 
 
 def test_the_database_setting_is_still_overridable(monkeypatch):
     """Including back to a relative path, which is now an explicit decision
     rather than something you get by accident."""
-    monkeypatch.setenv("IAAS_DATABASE_URL", "sqlite:///./mine.db")
+    monkeypatch.setenv("KURUKURU_DATABASE_URL", "sqlite:///./mine.db")
     assert Settings().database_path == Path("mine.db")
 
-    monkeypatch.setenv("IAAS_DATABASE_URL", "sqlite:////srv/db/iaas.db")
+    monkeypatch.setenv("KURUKURU_DATABASE_URL", "sqlite:////srv/db/iaas.db")
     assert Settings().database_path == Path("/srv/db/iaas.db")
 
 
@@ -185,7 +186,7 @@ def test_the_default_database_path_tracks_the_state_dir():
     """What the one-time relocation compares against to tell "default layout"
     from "someone named a path"."""
     assert Settings(state_dir="/var/lib/iaas").default_database_path == Path(
-        "/var/lib/iaas/iaas.db"
+        f"/var/lib/iaas/{DATABASE_LEAF}"
     )
     assert (
         Settings(state_dir="/var/lib/iaas", database_url="sqlite:////elsewhere.db")
@@ -198,8 +199,8 @@ def test_the_default_database_path_tracks_the_state_dir():
 def test_the_state_dir_is_where_the_database_lands(monkeypatch):
     """The whole point of the change, in one line: one variable moves the lot,
     database included."""
-    monkeypatch.setenv("IAAS_STATE_DIR", os.path.join(os.sep, "opt", "iaas"))
+    monkeypatch.setenv("KURUKURU_STATE_DIR", os.path.join(os.sep, "opt", "iaas"))
     settings = Settings()
 
-    assert settings.database_path == Path(os.sep) / "opt" / "iaas" / "iaas.db"
+    assert settings.database_path == Path(os.sep) / "opt" / "iaas" / DATABASE_LEAF
     assert settings.database_path.parent == Path(settings.state_dir).expanduser()

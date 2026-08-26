@@ -228,7 +228,7 @@ def client(monkeypatch, tmp_path, iso_dir, small_host):
     # are exercised in milliseconds.
     # `state_dir` re-roots every directory the settings own, which is the point:
     # `POST /keypairs/generate` writes a real keypair with real ssh-keygen, and
-    # without this it wrote it into the developer's `~/.local-iaas/keys`. Ten
+    # without this it wrote it into the developer's `~/.kurukuru/keys`. Ten
     # test runs left ten orphaned keypairs there before anyone noticed. A test
     # must not be able to touch the state directory of the machine running it.
     test_settings = Settings(
@@ -1282,7 +1282,7 @@ def test_an_imported_image_still_has_to_be_available(client):
 # Diagnostics and force-terminate (Phase 8 — what the CLI needs from the API)
 # --------------------------------------------------------------------------- #
 def test_diagnostics_reports_the_host_facts_a_client_cannot_see(client):
-    """`iaas doctor` is only honest if these come from the backend's own host.
+    """`kurukuru doctor` is only honest if these come from the backend's own host.
 
     A CLI that probed its own filesystem for the instance store would describe
     the wrong machine the moment the two are not the same.
@@ -1301,7 +1301,7 @@ def test_diagnostics_reports_the_host_facts_a_client_cannot_see(client):
 def test_diagnostics_exposes_no_key_material(client):
     """Nothing here is authenticated, so the payload stays to the minimum.
 
-    `iaas doctor` needs to know a keypair *exists* and where it lives; it never
+    `kurukuru doctor` needs to know a keypair *exists* and where it lives; it never
     needs the key itself. Callers who want the public half ask /ssh-key, which
     is the endpoint that exists for it. Guarded because the natural way to
     write this endpoint is to paste the /ssh-key body in.

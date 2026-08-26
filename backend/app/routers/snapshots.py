@@ -42,7 +42,7 @@ from app.models import (
     SnapshotStatus,
 )
 
-logger = logging.getLogger("iaas.snapshots")
+logger = logging.getLogger("kurukuru.snapshots")
 
 router = APIRouter(prefix="/instances/{instance_id}/snapshots", tags=["snapshots"])
 

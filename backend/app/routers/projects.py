@@ -40,7 +40,7 @@ from app.models import (
 from app.database import engine as db_engine
 from app.database import get_session
 
-logger = logging.getLogger("iaas.projects")
+logger = logging.getLogger("kurukuru.projects")
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 

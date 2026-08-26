@@ -21,10 +21,20 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 # the backend can import them without depending on its own client package. They
 # are re-exported here because every CLI module already asks this module for
 # them, and the indirection is not worth a hundred-line diff.
-from app.product import CLI_NAME, DISTRIBUTION_NAME, ENV_PREFIX
+from app.product import (
+    CLI_NAME,
+    CSRF_HEADER,
+    DISTRIBUTION_NAME,
+    ENV_PREFIX,
+    PRODUCT_NAME,
+    apply_legacy_env,
+)
 
 __all__ = [
     "CLI_NAME",
+    "CSRF_HEADER",
+    "PRODUCT_NAME",
+    "apply_legacy_env",
     "CONFIG_PATH",
     "DEFAULT_API_URL",
     "DEFAULT_DASHBOARD_URL",
@@ -37,7 +47,7 @@ __all__ = [
 
 #: Where a user's persistent CLI settings live. Under the same directory the
 #: backend already owns (keys, images, instances), so there is one place to look.
-CONFIG_PATH = "~/.local-iaas/cli.toml"
+CONFIG_PATH = "~/.kurukuru/cli.toml"
 
 #: Last resort when nothing else says where the API is.
 DEFAULT_API_URL = "http://127.0.0.1:8000"
@@ -47,7 +57,7 @@ DEFAULT_DASHBOARD_URL = "http://127.0.0.1:5173"
 
 
 def env_var(suffix: str) -> str:
-    """Full name of one of our environment variables, e.g. ``IAAS_API_URL``."""
+    """Full name of one of our environment variables, e.g. ``KURUKURU_API_URL``."""
     return f"{ENV_PREFIX}{suffix.upper()}"
 
 

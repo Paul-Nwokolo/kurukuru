@@ -342,7 +342,7 @@ def test_a_shadowing_qemu_img_is_caught(monkeypatch, tmp_path):
     # where leaves the user with nothing to fix.
     assert "Multipass" in capability.detail
     assert "8.0.0" in capability.detail and "11.1.0" in capability.detail
-    assert "IAAS_QEMU_IMG_BINARY" in (capability.consequence or "")
+    assert "KURUKURU_QEMU_IMG_BINARY" in (capability.consequence or "")
 
 
 def test_same_version_from_two_directories_is_still_reported(monkeypatch, tmp_path):

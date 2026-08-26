@@ -48,7 +48,7 @@ from app.models import (
     InstanceStatus,
 )
 
-logger = logging.getLogger("iaas.images")
+logger = logging.getLogger("kurukuru.images")
 
 router = APIRouter(prefix="/images", tags=["images"])
 
@@ -260,7 +260,7 @@ def fetch_image(
     is running: every distribution publishes cloud images at a stable URL with
     a checksum beside them, and nothing here touches the caller's filesystem.
 
-    Bounded by ``IAAS_IMAGE_FETCH_MAX_BYTES`` and, when a checksum is supplied,
+    Bounded by ``KURUKURU_IMAGE_FETCH_MAX_BYTES`` and, when a checksum is supplied,
     verified over the stream — see :func:`app.image_store.fetch_into_store`.
     """
     existing = session.exec(select(Image).where(Image.name == payload.name)).first()

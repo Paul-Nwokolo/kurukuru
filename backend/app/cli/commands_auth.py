@@ -1,5 +1,5 @@
 """
-``iaas auth init|login|logout|whoami|reset-password`` and ``iaas auth token …``.
+``kurukuru auth init|login|logout|whoami|reset-password`` and ``kurukuru auth token …``.
 
 **Two of these deliberately do not use the API.** ``init`` and ``reset-password``
 open the database directly, and that is the design rather than a shortcut.

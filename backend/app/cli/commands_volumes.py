@@ -1,5 +1,5 @@
 """
-``iaas volumes ls|create|attach|detach|rm`` — additional disks.
+``kurukuru volumes ls|create|attach|detach|rm`` — additional disks.
 
 Attach and detach need a stopped instance. That is not tidiness: this
 hypervisor's hot-unplug removes a disk without waiting for the guest, which
@@ -32,8 +32,8 @@ volumes_app = typer.Typer(
     no_args_is_help=True,
 )
 
-# `iaas volumes snapshot ...` lives under volumes rather than beside
-# `iaas snapshot`, which already means an instance's disk. Mounted here, and
+# `kurukuru volumes snapshot ...` lives under volumes rather than beside
+# `kurukuru snapshot`, which already means an instance's disk. Mounted here, and
 # imported at the bottom of this module, because that sub-app resolves volumes
 # through resolve_volume above.
 

@@ -33,7 +33,7 @@ from app.engines.base import (
 from app.engines.qemu import QemuEngine
 from app.models import DEFAULT_ENGINE, KNOWN_ENGINES
 
-logger = logging.getLogger("iaas.engines")
+logger = logging.getLogger("kurukuru.engines")
 
 __all__ = [
     "ComputeEngine",

@@ -37,7 +37,7 @@ components that cannot be signed (`etfsboot.com` is raw real-mode code with no P
 header) instead of skipping them, and verifies `boot.wim`'s integrity table.
 
 ```
-python tools/verify_media.py                              # every ISO in ~/.local-iaas/isos
+python tools/verify_media.py                              # every ISO in ~/.kurukuru/isos
 python tools/verify_media.py <iso> --no-hash              # one, skip the slow whole-ISO SHA256
 python tools/verify_media.py <iso> --firmware uefi        # judge the UEFI path instead
 ```
@@ -69,7 +69,7 @@ arm. It never emits a verdict — a human reads the distribution.
 
 ```
 python tools/ab_measure.py --runs 3 --cap 240 \
-    --iso ~/.local-iaas/isos/Windows10.iso \
+    --iso ~/.kurukuru/isos/Windows10.iso \
     --arm "novnc:" --arm "vnc:-vnc,127.0.0.1:30"
 ```
 

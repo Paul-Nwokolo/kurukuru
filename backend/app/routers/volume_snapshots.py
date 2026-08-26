@@ -59,7 +59,7 @@ from app.models import (
 )
 from app.routers.volumes import volume_path
 
-logger = logging.getLogger("iaas.volume_snapshots")
+logger = logging.getLogger("kurukuru.volume_snapshots")
 
 router = APIRouter(prefix="/volumes/{volume_id}/snapshots", tags=["volume snapshots"])
 

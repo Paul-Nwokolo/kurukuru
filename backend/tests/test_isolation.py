@@ -2,7 +2,7 @@
 Tests for the test harness itself.
 
 Two incidents motivated this file. Phase 10's ``POST /keypairs/generate`` ran
-real ``ssh-keygen`` into the developer's ``~/.local-iaas/keys`` because one
+real ``ssh-keygen`` into the developer's ``~/.kurukuru/keys`` because one
 fixture pinned the ISO directory and not the key directory. Phase 11's event
 writer put 130 rows into the real ``iaas.db`` because one of four test modules
 was never added to a hand-maintained list of modules to redirect. Both were

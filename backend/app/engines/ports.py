@@ -19,7 +19,7 @@ import logging
 import socket
 from collections.abc import Iterable
 
-logger = logging.getLogger("iaas.qemu.ports")
+logger = logging.getLogger("kurukuru.qemu.ports")
 
 _BIND_HOST = "127.0.0.1"
 

@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 
 from app.cli.errors import CliError, ExitCode
-from app.cli.naming import CLI_NAME, env_var
+from app.cli.naming import CLI_NAME, CSRF_HEADER, env_var
 
 #: Reads and quick mutations. Generous enough for a loaded host, short enough
 #: that a wedged backend doesn't look like a hang.
@@ -222,16 +222,16 @@ class ApiClient:
                            hint="Too many attempts; wait and try again.")
         if response.status_code >= 400:
             raise CliError(_detail(response), ExitCode.FAILURE)
-        return {"user": response.json(), "csrf": response.headers.get("X-IAAS-CSRF", "")}
+        return {"user": response.json(), "csrf": response.headers.get(CSRF_HEADER, "")}
 
     def create_token_with_csrf(self, csrf: str, name: str) -> dict:
         return self.request(
-            "POST", "/auth/tokens", json={"name": name}, headers={"X-IAAS-CSRF": csrf}
+            "POST", "/auth/tokens", json={"name": name}, headers={CSRF_HEADER: csrf}
         )
 
     def logout_with_csrf(self, csrf: str) -> None:
         try:
-            self.request("POST", "/auth/logout", headers={"X-IAAS-CSRF": csrf})
+            self.request("POST", "/auth/logout", headers={CSRF_HEADER: csrf})
         except CliError:
             # The token is already minted and stored; a session left to expire
             # is not worth failing the command over.

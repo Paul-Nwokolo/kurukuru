@@ -54,7 +54,7 @@ from app.models import (
 )
 from app.routers.projects import project_filter, resolve_project_id
 
-logger = logging.getLogger("iaas.volumes")
+logger = logging.getLogger("kurukuru.volumes")
 
 router = APIRouter(prefix="/volumes", tags=["volumes"])
 

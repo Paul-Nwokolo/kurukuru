@@ -58,7 +58,7 @@ code had never been *exercised* — and those turned out to be the more serious.
 
 ### 1. `UserKnownHostsFile=os.devnull` writes a real file — **breaks** — *fixed*
 
-`iaas ssh` points ssh's `known_hosts` at the null device, because every VM is
+`kurukuru ssh` points ssh's `known_hosts` at the null device, because every VM is
 `127.0.0.1:<recycled port>` and real host-key tracking there produces a
 guaranteed false alarm. It used `os.devnull`, which is the portable-looking
 choice and is wrong.
@@ -225,7 +225,7 @@ faster — the guest gets the physical CPU's AES-NI, AVX and the rest instead of
 emulated substitutes. Carrying a Windows workaround onto Linux would have
 hobbled every guest there for a bug that does not exist on the platform.
 
-Now: WHPX → `qemu64`, KVM/HVF → `host`, TCG → `max`. `IAAS_QEMU_CPU_MODEL`
+Now: WHPX → `qemu64`, KVM/HVF → `host`, TCG → `max`. `KURUKURU_QEMU_CPU_MODEL`
 still overrides all of it.
 
 ### 8. "Accelerated" was defined as "is WHPX" — **degrades** — *fixed*
@@ -234,7 +234,7 @@ Three places asked `accel == "whpx"` to answer "is this hardware-accelerated?":
 `QemuEngine.describe()`, `/host/capacity` in `main.py`, and
 `resolve_accel`'s fallback logic. The two questions were indistinguishable
 while Windows was the only host; on Linux they diverge, and a working KVM host
-would have reported `accel_available: false` — the dashboard and `iaas doctor`
+would have reported `accel_available: false` — the dashboard and `kurukuru doctor`
 telling the user to go and fix a problem they do not have.
 
 All three now test membership of `HARDWARE_ACCELS`. `resolve_accel` also
@@ -273,7 +273,7 @@ should be platform-dependent.
 
 `qemu-system-x86_64` and `qemu-img` are correct on both platforms; only the
 packaging differs. Documented in `.env.example`, along with the reminder that
-`IAAS_QEMU_SYSTEM_BINARY` / `IAAS_QEMU_IMG_BINARY` exist for installs that are
+`KURUKURU_QEMU_SYSTEM_BINARY` / `KURUKURU_QEMU_IMG_BINARY` exist for installs that are
 not on `PATH`:
 
 | Distro | Packages |
@@ -363,17 +363,17 @@ Now written with `newline="\n"`, with a test asserting the bytes contain no CR.
 
 ### 11. State lives in a dotfile directory, not XDG — *mechanism added, policy deferred*
 
-`~/.local-iaas/` is conventional on Windows and macOS and *a* convention on
+`~/.kurukuru/` is conventional on Windows and macOS and *a* convention on
 Linux, where the XDG Base Directory spec would put state under
-`$XDG_DATA_HOME` (`~/.local/share/local-iaas`).
+`$XDG_DATA_HOME` (`~/.local/share/kurukuru`).
 
 Changing the default would move every existing install's VMs and keys out from
 under it, which presents as "all my instances disappeared". So the default is
-untouched and `IAAS_STATE_DIR` is the supported way to relocate everything at
+untouched and `KURUKURU_STATE_DIR` is the supported way to relocate everything at
 once:
 
 ```bash
-IAAS_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/local-iaas"
+KURUKURU_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kurukuru"
 ```
 
 The four directories that follow it (`qemu_dir`, `ssh_key_dir`,
@@ -385,7 +385,7 @@ byte-for-byte what they were.
 
 Whether Linux should *default* to XDG is a policy question for Part B, when
 there is a Linux user to have an opinion. The CLI's own config file
-(`~/.local-iaas/cli.toml`) is deliberately not covered: the CLI does not read
+(`~/.kurukuru/cli.toml`) is deliberately not covered: the CLI does not read
 backend settings, by design.
 
 ---
@@ -431,7 +431,7 @@ Two problems, one theme.
 `C:\Program Files\qemu\qemu-img.exe` when `qemu-img` was not on `PATH` — on
 Linux, a path that cannot exist, turning "qemu-img is installed somewhere
 unusual" into a silent skip of the entire image-probing suite. It now consults
-`IAAS_QEMU_IMG_BINARY` (the same override the backend honours) and says so in
+`KURUKURU_QEMU_IMG_BINARY` (the same override the backend honours) and says so in
 the skip reason.
 
 Platform markers are now registered and applied, with `--strict-markers` so a
@@ -478,7 +478,7 @@ this correctly and said so in the terms the user needs, which is itself a
 Part A fix working:
 
 ```
-WARNING iaas.qemu: Acceleration probe: /dev/kvm does not exist — this host has
+WARNING kurukuru.qemu: Acceleration probe: /dev/kvm does not exist — this host has
 no KVM support, or virtualization is disabled in its BIOS/UEFI (or it is itself
 a VM without nested virtualization) — falling back to TCG
 ```
@@ -506,9 +506,9 @@ The most serious finding of the phase, and not a portability defect at all —
 Linux is simply where a genuinely fresh install existed for the first time.
 
 ```
-$ iaas launch first-boot --disk 4
+$ kurukuru launch first-boot --disk 4
 first-boot  a66bef5c-…  Pending
-$ iaas show first-boot
+$ kurukuru show first-boot
 status: Error | Image 'Ubuntu 24.04 LTS (cloud)' is Importing, not Available
 ```
 
@@ -549,7 +549,7 @@ Also not Linux-specific in cause. A slow host is just what makes it visible.
 
 Measured on the first boot: the row said `Running` at **~30 s**, while the
 guest did not answer SSH until **254 s**. For 224 seconds the API, the
-dashboard and `iaas ls` all reported a healthy, addressed instance that refused
+dashboard and `kurukuru ls` all reported a healthy, addressed instance that refused
 every connection.
 
 The cause is in the reconciler's guard. A background pass may promote a row out
@@ -563,8 +563,8 @@ race is usually missed; under TCG it is won every time.
 
 Two further consequences, both invisible until now:
 
-- `iaas launch --wait` returned on an unusable instance. The Phase 8 SSH
-  banner pre-flight in `iaas ssh` was the only thing keeping the headline
+- `kurukuru launch --wait` returned on an unusable instance. The Phase 8 SSH
+  banner pre-flight in `kurukuru ssh` was the only thing keeping the headline
   one-liner working.
 - `degraded` — "Running, expected an address, still has none" — was **dead code
   for the only shipping engine**, because QEMU always supplied an address.
@@ -641,7 +641,7 @@ now covers the `/dev/kvm` short-circuit, which is this host's real situation.
 ### 21. Shutdown grace is marginal under software emulation — degrades — *documented*
 
 Two graceful stops were measured: **89 s** and **46 s**, against a 90 s
-`IAAS_QEMU_SHUTDOWN_TIMEOUT_SECONDS`. The first came within one second of being
+`KURUKURU_QEMU_SHUTDOWN_TIMEOUT_SECONDS`. The first came within one second of being
 force-killed — and a force-kill of a guest that is mid-shutdown is how a qcow2
 ends up needing repair.
 
@@ -700,7 +700,7 @@ The directory is repaired to 0700 alongside it.
 | 4. ISO boot | Alpine 3.21 to an interactive `boot:` prompt. Framebuffer via QMP `screendump`: 720×400, **5 distinct colours** — renders, not blank |
 | 5. Image import | 128 MB qcow2 imported → `Available`; instance overlay's backing file is the **copy in the store**, `backing file format: qcow2` |
 | 6. Capacity | psutil figures correct (2 vCPU / 3.8 G / 9 G); arithmetic holds; oversubscription note renders. **cgroups: not applicable** — this is a VM, not a container, so `virtual_memory()` reports the real limit. In a container it would report host totals and overcommit; still open for containerised deployment |
-| 7. CLI | Every command exercised; `--json` parses; `ssh` execs with `/dev/null` and leaves no stray file. One-liner `iaas launch web-01 --wait && iaas ssh web-01 whoami` → `iaas`, **exit 0**, 309 s (TCG) |
+| 7. CLI | Every command exercised; `--json` parses; `ssh` execs with `/dev/null` and leaves no stray file. One-liner `kurukuru launch web-01 --wait && kurukuru ssh web-01 whoami` → `kurukuru`, **exit 0**, 309 s (TCG) |
 | 8. Suite | **359 passed, 2 skipped** on Linux; identical on Windows |
 
 Loopback binding confirmed with a live VM, which is the invariant worth

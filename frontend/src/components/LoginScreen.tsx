@@ -5,6 +5,7 @@ import type { FirstRunStatus } from '../api/client'
 import { Button } from '../ui/Button'
 import { Field, Input } from '../ui/Field'
 import { Alert } from '../ui/Feedback'
+import { PRODUCT_NAME, PRODUCT_TAGLINE } from '../ui/product'
 
 /**
  * The sign-in screen, and the only thing rendered when there is no session.
@@ -72,8 +73,11 @@ export function LoginScreen({
             <ShieldCheck className="h-5 w-5 text-text-muted" aria-hidden />
           </div>
           <h1 className="text-lg font-semibold tracking-tight text-text">
-            Local IaaS
+            {PRODUCT_NAME}
           </h1>
+          <p className="text-2xs uppercase tracking-wide text-text-subtle">
+            {PRODUCT_TAGLINE}
+          </p>
           <p className="text-sm text-text-muted">
             {configured === false
               ? 'This install has no account yet.'

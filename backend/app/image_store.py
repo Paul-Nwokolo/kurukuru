@@ -28,7 +28,7 @@ from app.config import Settings, get_settings
 from app.engines.images import base_images_dir
 from app.models import Image, ImageFormat
 
-logger = logging.getLogger("iaas.images")
+logger = logging.getLogger("kurukuru.images")
 
 #: Streaming chunk size, matching the base-image downloader.
 _CHUNK_BYTES = 1024 * 256
@@ -208,7 +208,7 @@ def fetch_into_store(
                 raise ImageError(
                     f"That image is {declared / 1024**3:.1f} GB, over the "
                     f"{limit / 1024**3:.0f} GB import limit "
-                    f"(IAAS_IMAGE_FETCH_MAX_BYTES)."
+                    f"(KURUKURU_IMAGE_FETCH_MAX_BYTES)."
                 )
 
             with partial.open("wb") as fh:
@@ -219,7 +219,7 @@ def fetch_into_store(
                         # for someone else's mistake mid-stream.
                         raise ImageError(
                             f"Download exceeded the {limit / 1024**3:.0f} GB import "
-                            f"limit (IAAS_IMAGE_FETCH_MAX_BYTES)."
+                            f"limit (KURUKURU_IMAGE_FETCH_MAX_BYTES)."
                         )
                     digest.update(chunk)
                     fh.write(chunk)

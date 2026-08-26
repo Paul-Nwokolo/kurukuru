@@ -4,8 +4,8 @@ Where the CLI thinks the API is.
 Resolution order, highest first:
 
 1. ``--api-url``
-2. ``IAAS_API_URL``
-3. ``~/.local-iaas/cli.toml``
+2. ``KURUKURU_API_URL``
+3. ``~/.kurukuru/cli.toml``
 4. ``http://127.0.0.1:8000``
 
 The order is the usual one for a reason: the flag is this invocation, the

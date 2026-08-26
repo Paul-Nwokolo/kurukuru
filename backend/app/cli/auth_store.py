@@ -2,7 +2,7 @@
 
 The auth model this phase chose is "always require authentication, and make the
 local case frictionless": the token lives in a file the owning OS user can read
-and nobody else can, so ``iaas`` on your own machine simply already has the
+and nobody else can, so ``kurukuru`` on your own machine simply already has the
 credential. Authentication is always on; there is no trust-by-topology anywhere.
 
 **What the file protection is actually worth**, measured rather than assumed
@@ -13,7 +13,7 @@ This is exactly the POSIX ``0600`` boundary, not a weaker one.
 
 So the file is a convenience, not a trust boundary. What is in it is an ordinary
 API token: listable, revocable, and dead the moment the password changes. If it
-leaks, ``iaas auth token rm`` ends it.
+leaks, ``kurukuru auth token rm`` ends it.
 """
 
 from __future__ import annotations
@@ -30,10 +30,10 @@ from app.fs_permissions import describe_protection, harden_file
 #: ``test_the_cli_and_the_backend_agree_on_the_token_path``. Duplicated rather
 #: than imported because the CLI must not import the backend's settings — see
 #: ``test_the_cli_never_reaches_past_the_api`` for why that boundary exists.
-DEFAULT_STATE_DIR = "~/.local-iaas"
+DEFAULT_STATE_DIR = "~/.kurukuru"
 TOKEN_LEAF = "cli-token"
 
-logger = logging.getLogger("iaas.cli.auth")
+logger = logging.getLogger("kurukuru.cli.auth")
 
 
 @dataclass(frozen=True)
@@ -49,13 +49,13 @@ class StoredToken:
 def token_path(settings=None) -> Path:  # noqa: ANN001 - kept for call-site symmetry
     """Where the token lives, resolved the same way the backend resolves it.
 
-    Honours ``IAAS_AUTH_TOKEN_FILE`` first, then ``IAAS_STATE_DIR``, then the
+    Honours ``KURUKURU_AUTH_TOKEN_FILE`` first, then ``KURUKURU_STATE_DIR``, then the
     default — the same precedence ``Settings`` applies.
     """
-    explicit = os.environ.get("IAAS_AUTH_TOKEN_FILE")
+    explicit = os.environ.get("KURUKURU_AUTH_TOKEN_FILE")
     if explicit:
         return Path(explicit).expanduser()
-    root = os.environ.get("IAAS_STATE_DIR", DEFAULT_STATE_DIR).rstrip("/\\")
+    root = os.environ.get("KURUKURU_STATE_DIR", DEFAULT_STATE_DIR).rstrip("/\\")
     return Path(f"{root}/{TOKEN_LEAF}").expanduser()
 
 
@@ -63,7 +63,7 @@ def load(settings=None) -> StoredToken | None:
     """The stored token, or None. Never raises for an unreadable file.
 
     A corrupt or unreadable token file must degrade to "you are not signed in",
-    not to a traceback: the fix is ``iaas auth login`` either way, and a stack
+    not to a traceback: the fix is ``kurukuru auth login`` either way, and a stack
     trace tells the user nothing they can act on.
     """
     path = token_path(settings)

@@ -169,7 +169,7 @@ conclude; a human reads the distribution.
 
 ```
 python tools/ab_measure.py --runs 3 --cap 240 \
-    --iso ~/.local-iaas/isos/Windows10.iso \
+    --iso ~/.kurukuru/isos/Windows10.iso \
     --arm "novnc:" --arm "vnc:-vnc,127.0.0.1:30"
 ```
 

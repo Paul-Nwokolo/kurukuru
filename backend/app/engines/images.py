@@ -19,7 +19,7 @@ import httpx
 
 from app.config import Settings, get_settings
 
-logger = logging.getLogger("iaas.qemu.images")
+logger = logging.getLogger("kurukuru.qemu.images")
 
 # Log at most this often while streaming, so a 600 MB download produces a
 # handful of lines rather than thousands.

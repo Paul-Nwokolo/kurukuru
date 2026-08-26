@@ -92,7 +92,19 @@ def legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict]:
 
 
 def _backups(directory: Path) -> list[Path]:
-    return sorted(directory.glob(db_module._BACKUP_GLOB)) if directory.exists() else []
+    """Every automatic backup in a directory, under either naming.
+
+    Both prefixes, because Phase 16 renamed the product and a real backups
+    directory now holds files from both sides of that rename — the pre-Phase-16
+    ones are still this module's own, and a retention policy that stopped seeing
+    them would keep them forever while pruning around them.
+    """
+    if not directory.exists():
+        return []
+    return sorted(
+        {path for glob in db_module._BACKUP_GLOBS for path in directory.glob(glob)},
+        key=db_module._backup_stamp,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -199,7 +211,7 @@ def test_retention_never_touches_anything_it_did_not_write(tmp_path):
 
     assert manual_dir.is_dir() and (manual_dir / "iaas-20260814-170650.db").exists()
     assert stray.exists()
-    assert len(list(directory.glob(db_module._BACKUP_GLOB))) == 2
+    assert len(_backups(directory)) == 2
 
 
 def test_retention_of_zero_disables_pruning(tmp_path):
@@ -209,7 +221,7 @@ def test_retention_of_zero_disables_pruning(tmp_path):
         (directory / f"iaas-2026080{day}-120000-pre-migration.db").write_bytes(b"x")
 
     assert db_module._prune_backups(directory, keep=0) == []
-    assert len(list(directory.glob(db_module._BACKUP_GLOB))) == 4
+    assert len(_backups(directory)) == 4
 
 
 def test_retention_is_applied_end_to_end(legacy, monkeypatch):

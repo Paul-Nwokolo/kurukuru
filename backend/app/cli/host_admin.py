@@ -43,13 +43,13 @@ def _session():
     package is first imported, so a `from app.database import engine` here would
     capture the developer's real database and keep using it even after a test
     redirected the module attribute — which is how a test suite ends up writing
-    an account into ~/.local-iaas/iaas.db.
+    an account into ~/.kurukuru/kurukuru.db.
     """
     from sqlmodel import Session
 
     import app.database as database
 
-    # A fresh install has no tables yet: `iaas auth init` may genuinely be the
+    # A fresh install has no tables yet: `kurukuru auth init` may genuinely be the
     # first thing that ever touches this database.
     database.init_db()
     return Session(database.engine)

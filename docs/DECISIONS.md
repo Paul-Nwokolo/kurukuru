@@ -2067,9 +2067,111 @@ authentication is a different mechanism from every other route's, silently
 depends on `SameSite` behaviour on a WebSocket upgrade, and gives a leaked URL
 nothing to expire. A ticket costs one request and is auditable.
 
+## 49. The rename is a data migration, and the guest username is not part of it
+
+**Context.** Phase 16 renamed the product to **Kurukuru** — Yoruba for
+fog/cloud. That moved the command (`iaas` → `kurukuru`), the environment prefix
+(`IAAS_` → `KURUKURU_`), the state directory (`~/.local-iaas` → `~/.kurukuru`)
+and the database filename (`iaas.db` → `kurukuru.db`). Every one of those has an
+existing install sitting on the old value.
+
+**The tree is not self-contained**, which is what makes this more than a
+directory rename. Three kinds of absolute path point *into* it:
+
+| Where | What |
+|---|---|
+| `qemu/instances/<name>/runtime.json` | `iso_path`, and each attached volume, replayed verbatim on every start |
+| database rows | `keypairs.private_key_path`, `volumes.path` |
+| **qcow2 headers** | an overlay's backing file, written *inside the image* as the absolute path it was created with |
+
+The third is the dangerous one. Nothing in the database or the runtime file
+mentions it, so a migration that rewrote only the first two would move the tree,
+present a completely healthy dashboard, and fail every VM built on a shared base
+image at launch with "Could not open backing file". It is repaired with
+`qemu-img rebase -u` — the *unsafe* form, which is the correct one here: the
+content did not change, only its path, so writing the header and touching
+nothing else is the whole job. The safe form would be hours of I/O to produce an
+identical file.
+
+**Decision.** `app/state_migration.py` runs before the first database
+connection, and is timid in the same shape as decision 26:
+
+- only on the default layout, and only when the engine about to be used is the
+  one pointing there — two conditions, because a *tree*-moving migration
+  guarded by one is a fixture away from relocating a developer's real install;
+- never onto a target that has contents;
+- a database backup first, through Phase 14's machinery;
+- the move is a `rename`, which either happens or does not — there is no
+  half-moved state to recover from;
+- a marker records what happened, and a second run is a no-op.
+
+**Running VMs refuse the whole thing, and the backend does not start.** Windows
+will not rename a directory containing an open file and a running QEMU holds its
+disk open (Phase 13). Starting anyway would open a fresh empty database at the
+new path while twenty gigabytes of the user's VMs sat untouched at the old one —
+decision 26's "indistinguishable from data loss", reintroduced by a rename. The
+error names each instance and its pid, and gives the one-variable escape hatch
+for stopping them cleanly.
+
+Liveness uses **both** the pid and its QMP port, the same tie-breaker
+`QemuEngine._liveness` uses. A live pid alone can be a recycled number, and
+refusing an upgrade because some unrelated program inherited an old pid is a
+failure the user can neither diagnose nor work around.
+
+**`IAAS_*` variables are honoured for one release, with a warning.** The three
+options were refuse, ignore and honour. Ignoring is the actively dangerous one:
+an operator who set `IAAS_STATE_DIR=D:ms` would find the backend pointed at
+`~/.kurukuru` reporting an install with no instances in it. Refusing is safe but
+turns an upgrade into an outage for the users who configured the tool most
+carefully. And `IAAS_STATE_DIR` in particular has to be read *before* the
+migration, because it is what says where this install actually lives. The shim
+runs in the CLI too — it resolves its token file from the environment directly
+and never touches `Settings`, so without it the two halves of one product would
+disagree about where the install is.
+
+**The wire identifiers moved too**, coherently on both sides: the cookie
+(`iaas_session` → `kurukuru_session`), the CSRF header (`X-IAAS-CSRF` →
+`X-Kurukuru-CSRF`), the API token prefix and the two `localStorage` keys. Each
+had a different cost and each was paid rather than deferred:
+
+- the cookie costs **one forced sign-in** on upgrade, and the old one is
+  actively cleared rather than left to expire beside the live one;
+- the token prefix is written at *issue* time only — presentation is checked by
+  hash — so a token issued as `iaas_…` keeps working until it is revoked;
+- the `localStorage` keys would have silently discarded a saved project
+  selection and theme, so their values are carried across once;
+- the CSRF header was spelled **twice**, in `app/auth.py` and in
+  `app/cli/client.py`, and renaming one of them broke the CLI's own login. It now
+  has one definition in `app/product.py`, which is the only module both the
+  control plane and its client are allowed to import.
+
+**The guest username stays `iaas`, deliberately.** `default_vm_user` is not a
+product string: it is an identity written into a guest's `/etc/passwd` at
+provision time, and the instance row does not record which name it got —
+`Instance.ssh_user` returns the *live setting*. Renaming it would rewrite the
+"Copy SSH" command of every existing instance into a username its guest has
+never heard of, failing as "Permission denied (publickey)" and looking like a
+broken key rather than a wrong user. Changing it is a two-step job: persist the
+user on the row, backfill existing rows with `iaas` (correct for all of them),
+and only then move the default. Until that is done, the rename stops at the
+host.
+
+**The mark appears with its descriptor.** There is a live Nintendo registration
+for "KURUKURU KURURIN" in Class 009, video game programs. A single-host
+hypervisor control plane is not in that category, but resembling one has a cost
+and no upside — so "Kurukuru — local cloud infrastructure" rather than the bare
+word, and the visual language stays plain: no pixel art, no retro-game styling,
+no spinning characters. `src/ui/product.ts` is the one file allowed to spell the
+brand, and `check-product-name.mjs` now enforces that as well as the command
+name. Extending the guard found `Local IaaS` living in *two* files while the
+script's own comment claimed it had exactly one home — the check only knew about
+the lower-case command name, so the display name had never been guarded at all.
+
 ## Known limitations
 
 - **No license chosen.** Until one exists, the code is not usable by anyone else.
+- **The guest username is still `iaas`.** See decision 49; it needs a
+  per-instance column before it can move.
 - **No authorization.** Authentication exists (decisions 45-48); roles and
   project isolation do not. Every account is a full administrator.
 - **No transport encryption.** Plain HTTP, so anything beyond loopback needs

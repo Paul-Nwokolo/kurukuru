@@ -28,7 +28,7 @@ USAGE
     python ab_measure.py --runs 3 \\
         --arm "novnc:" \\
         --arm "vnc:-vnc,127.0.0.1:30" \\
-        --iso ~/.local-iaas/isos/Windows10.iso
+        --iso ~/.kurukuru/isos/Windows10.iso
 
 Arm syntax is ``name:arg,arg,arg`` — a comma-separated argv fragment appended to
 the base command, empty for the control arm. Commas rather than spaces so a

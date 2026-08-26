@@ -1,5 +1,5 @@
 """
-``iaas projects ls|create|rm`` — grouping, not tenancy.
+``kurukuru projects ls|create|rm`` — grouping, not tenancy.
 
 The `--project` flag on the root command scopes the other commands to one
 project. It filters what you see; it grants and withholds nothing, because
@@ -115,7 +115,7 @@ def create(
         out.human(f"{project['name']}  {project['id']}")
         out.note(
             f"File things under it with --project {project['name']}, or "
-            f"${'IAAS_PROJECT'}."
+            f"${'KURUKURU_PROJECT'}."
         )
 
 

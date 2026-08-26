@@ -33,7 +33,7 @@ from app.models import (
     KeyPairSource,
 )
 
-logger = logging.getLogger("iaas.keypairs")
+logger = logging.getLogger("kurukuru.keypairs")
 
 router = APIRouter(prefix="/keypairs", tags=["keypairs"])
 

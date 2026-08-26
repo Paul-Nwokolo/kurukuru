@@ -26,6 +26,7 @@ from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 from typer.testing import CliRunner
 
+import app.auth as auth
 import app.engines as engines_module
 from tests.conftest import authenticate_test_client, redirect_db_engines
 import app.events as events_module
@@ -128,7 +129,7 @@ def make_cli(monkeypatch, tmp_path, small_host):
         http = TestClient(api_app)
         http.app_engine = test_engine  # type: ignore[attr-defined]
         # The CLI talks to the API over this transport, so the credential
-        # goes on the transport. `iaas auth ...` has its own tests.
+        # goes on the transport. `kurukuru auth ...` has its own tests.
         authenticate_test_client(http, test_engine)
         return http, fake
 
@@ -171,7 +172,7 @@ def test_launch_without_wait_reports_the_accepted_record(cli):
 def test_launch_with_wait_reaches_running(cli):
     result = launch(cli)
     assert "Running" in result.stdout
-    assert "iaas ssh web-one" in result.stdout
+    assert "kurukuru ssh web-one" in result.stdout
 
 
 def test_ls_lists_the_instance(cli):
@@ -236,7 +237,7 @@ def test_isos_ls_on_an_empty_directory_explains_itself(cli):
     assert result.exit_code == 0
     assert "no boot media" in result.stdout
     # The remedy is placing files by hand; there is no upload endpoint.
-    assert "IAAS_ISO_DIR" in result.stderr
+    assert "KURUKURU_ISO_DIR" in result.stderr
 
 
 def test_images_ls_shows_the_builtin_catalog_entry(cli):
@@ -288,7 +289,7 @@ def test_version_reports_all_three(cli):
 def test_completion_prints_a_script_for_a_known_shell(cli):
     result = cli("completion", "bash")
     assert result.exit_code == 0
-    assert "_IAAS_COMPLETE" in result.stdout
+    assert "_KURUKURU_COMPLETE" in result.stdout
 
 
 def test_completion_rejects_an_unknown_shell(cli):
@@ -329,7 +330,7 @@ def test_unreachable_api_exits_three_without_a_traceback():
         )
     assert result.exit_code == ExitCode.UNREACHABLE
     assert "Cannot reach the API at http://127.0.0.1:9" in result.stderr
-    assert "iaas serve" in result.stderr
+    assert "kurukuru serve" in result.stderr
     assert "Traceback" not in result.output
     assert "httpx" not in result.output
 
@@ -516,7 +517,7 @@ def test_ssh_refuses_console_only_instances_and_points_at_console(make_cli, tmp_
             _ssh_command(api, instance)
 
     assert caught.value.code is ExitCode.CONFLICT
-    assert "iaas console installer" in (caught.value.hint or "")
+    assert "kurukuru console installer" in (caught.value.hint or "")
 
 
 def test_ssh_preflight_accepts_a_guest_that_sends_a_banner():
@@ -696,7 +697,7 @@ def test_doctor_exits_three_when_the_api_is_unreachable():
         result = runner.invoke(cli_app, ["--api-url", "http://127.0.0.1:9", "doctor"])
     assert result.exit_code == ExitCode.UNREACHABLE
     assert "FAIL API" in result.stdout
-    assert "iaas serve" in result.stdout
+    assert "kurukuru serve" in result.stdout
 
 
 def test_doctor_json_is_a_list_of_checks(cli, monkeypatch):
@@ -918,7 +919,7 @@ def test_the_env_var_scopes_the_same_way(cli, monkeypatch):
     assert cli("--project", "client-a", "launch", "web-two", "--wait").exit_code == 0
     launch(cli, "web-one")
 
-    monkeypatch.setenv("IAAS_PROJECT", "client-a")
+    monkeypatch.setenv("KURUKURU_PROJECT", "client-a")
     scoped = json.loads(cli("ls", "--json").stdout)
 
     assert {i["name"] for i in scoped} == {"web-two"}
@@ -1117,7 +1118,7 @@ def test_a_colliding_forward_exits_invalid_with_the_reason(cli):
 
 
 # --------------------------------------------------------------------------- #
-# Volume snapshots — a separate command tree from `iaas snapshot`
+# Volume snapshots — a separate command tree from `kurukuru snapshot`
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
 def vol_snap_cli(vol_cli):
@@ -1199,7 +1200,7 @@ def test_an_unknown_volume_snapshot_exits_not_found(vol_snap_cli):
 
 
 # --------------------------------------------------------------------------- #
-# iaas auth — first run, sign in, tokens
+# kurukuru auth — first run, sign in, tokens
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
 def auth_cli(cli, tmp_path, monkeypatch):
@@ -1215,7 +1216,7 @@ def auth_cli(cli, tmp_path, monkeypatch):
     monkeypatch.setattr(auth_store, "token_path", lambda settings=None: token_file)
     # host_admin talks to the database directly (it is the one CLI module allowed
     # to). Point it at this test's engine, or `auth init` would read the real
-    # one — the developer's ~/.local-iaas/iaas.db — and answer from it.
+    # one — the developer's ~/.kurukuru/kurukuru.db — and answer from it.
     import app.database as database_module
 
     monkeypatch.setattr(database_module, "engine", cli.http.app_engine)  # type: ignore[attr-defined]
@@ -1269,7 +1270,7 @@ def test_the_stored_token_is_not_the_password(auth_cli):
 
     contents = auth_cli.token_file.read_text()
     assert "test-password-1234" not in contents
-    assert "iaas_" in contents
+    assert auth.TOKEN_PREFIX in contents
 
 
 def test_a_wrong_password_is_refused_generically(auth_cli):
@@ -1317,10 +1318,10 @@ def test_token_create_prints_the_secret_once(auth_cli):
     result = auth_cli("auth", "token", "create", "ci-runner")
 
     assert result.exit_code == 0
-    assert "iaas_" in result.output
+    assert auth.TOKEN_PREFIX in result.output
     # A second look never shows it again.
     listed = auth_cli("auth", "token", "ls")
-    assert "iaas_" in listed.output          # the prefix is shown
+    assert auth.TOKEN_PREFIX in listed.output   # the prefix is shown
     assert result.output.strip().splitlines()[0] not in listed.output
 
 
@@ -1359,8 +1360,8 @@ def test_the_cli_and_the_backend_agree_on_the_token_path(monkeypatch):
 
     # The suite isolates this via the environment; the comparison is about the
     # built-in defaults, so the override has to come off first.
-    monkeypatch.delenv("IAAS_AUTH_TOKEN_FILE", raising=False)
-    monkeypatch.delenv("IAAS_STATE_DIR", raising=False)
+    monkeypatch.delenv("KURUKURU_AUTH_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("KURUKURU_STATE_DIR", raising=False)
 
     assert Settings().auth_token_file == (
         f"{auth_store.DEFAULT_STATE_DIR}/{auth_store.TOKEN_LEAF}"

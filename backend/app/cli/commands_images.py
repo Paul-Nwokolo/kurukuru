@@ -206,7 +206,7 @@ def isos_ls(
         out.human("[dim]no boot media[/dim]")
         out.note(
             "Drop .iso files into the backend's ISO directory "
-            "(IAAS_ISO_DIR, default ~/.local-iaas/isos)."
+            "(KURUKURU_ISO_DIR, default ~/.kurukuru/isos)."
         )
         return
 

@@ -22,11 +22,11 @@ from pathlib import Path
 
 from app.config import Settings, get_settings
 
-logger = logging.getLogger("iaas.ssh")
+logger = logging.getLogger("kurukuru.ssh")
 
 # Base filename for the keypair; ``.pub`` is appended for the public half.
 _KEY_BASENAME = "id_ed25519"
-_KEY_COMMENT = "local-iaas-orchestrator"
+_KEY_COMMENT = "kurukuru-orchestrator"
 _KEYGEN_TIMEOUT_SECONDS = 30
 
 

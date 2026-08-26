@@ -1,9 +1,9 @@
 """
-``iaas volumes snapshot create|ls|restore|rm`` — point-in-time volume state.
+``kurukuru volumes snapshot create|ls|restore|rm`` — point-in-time volume state.
 
 A sub-app under ``volumes`` rather than a second top-level ``snapshot`` command,
 because the resource being snapshotted is what the user is already thinking
-about, and ``iaas snapshot`` already means "an instance's disk".
+about, and ``kurukuru snapshot`` already means "an instance's disk".
 
 **These are two independent things and the copy says so every time.** An
 instance snapshot does not include attached volumes; a volume snapshot does not

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from app.config import Settings, get_settings
 
-logger = logging.getLogger("iaas.isos")
+logger = logging.getLogger("kurukuru.isos")
 
 _SUFFIX = ".iso"
 

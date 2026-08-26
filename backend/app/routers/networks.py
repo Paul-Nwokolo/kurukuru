@@ -51,7 +51,7 @@ from app.models import (
 )
 from app.routers.projects import project_filter
 
-logger = logging.getLogger("iaas.networks")
+logger = logging.getLogger("kurukuru.networks")
 
 router = APIRouter(tags=["networks"])
 
@@ -396,7 +396,7 @@ def delete_forward(
             status_code=409,
             detail=(
                 "The SSH forward cannot be removed. It is created with the "
-                "instance, pinned for its lifetime, and is how 'iaas ssh' and "
+                "instance, pinned for its lifetime, and is how 'kurukuru ssh' and "
                 "the copied SSH command reach the guest. Terminate the instance "
                 "to release the port."
             ),

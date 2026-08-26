@@ -10,13 +10,13 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Or, with the package installed (`pip install -e .` from this directory, which is
-also what puts the `iaas` command on `PATH`):
+also what puts the `kurukuru` command on `PATH`):
 
 ```bash
-iaas serve --reload
+kurukuru serve --reload
 ```
 
-`iaas serve` changes to this directory first, so the SQLite URL and `.env`
+`kurukuru serve` changes to this directory first, so the SQLite URL and `.env`
 resolve the same way wherever it is launched from.
 
 `--reload` is safe with running VMs: they are spawned detached, so they survive
@@ -39,7 +39,7 @@ verification expectation.
 ```
 app/
   main.py            app wiring, lifespan, system endpoints, reconcile loop
-  config.py          pydantic-settings; every IAAS_ knob
+  config.py          pydantic-settings; every KURUKURU_ knob
   database.py        engine, WAL pragma, additive migrations
   models.py          SQLModel tables + API schemas
   host_capacity.py   psutil probes and the allocatable arithmetic
@@ -59,11 +59,11 @@ app/
   routers/
     instances.py     lifecycle, sizing, reconciler, console route
     images.py        image catalog
-  cli/               the `iaas` command — an API client, nothing more
+  cli/               the `kurukuru` command — an API client, nothing more
     main.py          root Typer app, global options, error boundary
     client.py        the only route to the system (injectable transport)
     naming.py        CLI_NAME and friends: the command's name, in one place
-    config.py        --api-url / IAAS_API_URL / cli.toml / default
+    config.py        --api-url / KURUKURU_API_URL / cli.toml / default
     output.py        stdout vs stderr, --json purity, TTY and NO_COLOR rules
     formats.py       size parsing (2G/2048M), table formatting
     support.py       name resolution and the --wait loop
@@ -80,16 +80,16 @@ the ABC, the value objects and the registry.
 
 ## Runtime state on disk
 
-Under `IAAS_QEMU_DIR` (default `~/.local-iaas/qemu/`). The per-instance
+Under `KURUKURU_QEMU_DIR` (default `~/.kurukuru/qemu/`). The per-instance
 directory is the engine's real state — see
 [ARCHITECTURE.md](../docs/ARCHITECTURE.md#per-instance-directory).
 
-The SQLite database is `IAAS_STATE_DIR/iaas.db` (default
-`~/.local-iaas/iaas.db`), created on first run and migrated in place on every
+The SQLite database is `KURUKURU_STATE_DIR/kurukuru.db` (default
+`~/.kurukuru/kurukuru.db`), created on first run and migrated in place on every
 startup. Deleting it loses the instance records but not the VMs; the reconciler
 will not re-adopt them, so terminate anything you care about first.
 
-It used to live at `./iaas.db`, relative to wherever the backend was started
+It used to live at `./kurukuru.db`, relative to wherever the backend was started
 from. If you have a database from that era in `backend/`, the first start after
 this change moves it — with its `-wal` and `-shm` sidecars — into the state
 directory, and says so in the log. It never writes over a database that is

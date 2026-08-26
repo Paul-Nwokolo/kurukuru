@@ -1,5 +1,5 @@
 """
-``iaas events`` — read the event log.
+``kurukuru events`` — read the event log.
 
 A single command rather than a sub-app: there is nothing to do to an event but
 read it. With an instance named it shows that instance's history; without one,

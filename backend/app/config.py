@@ -1,34 +1,52 @@
 """
 Application configuration.
 
-All values can be overridden via environment variables (prefix: IAAS_)
+All values can be overridden via environment variables (prefix: KURUKURU_)
 or a local `.env` file, e.g.:
 
-    IAAS_DATABASE_URL=sqlite:////var/lib/local-iaas/iaas.db
-    IAAS_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
+    KURUKURU_DATABASE_URL=sqlite:////var/lib/kurukuru/kurukuru.db
+    KURUKURU_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173"]
+
+The prefix was ``IAAS_`` before Phase 16. Those names still work for one
+release — see :func:`apply_legacy_env`, which is where the deprecation lives.
 """
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.product import (
+    DATABASE_LEAF,
+    ENV_PREFIX,
+    PRODUCT_NAME,
+    STATE_DIR,
+    apply_legacy_env,
+)
+
+logger = logging.getLogger("kurukuru.config")
+
 #: Root of everything this tool keeps on disk. One dotfile directory in $HOME,
 #: which is the convention on Windows and macOS and *a* convention on Linux —
 #: where the XDG Base Directory spec would instead put state under
-#: ``$XDG_DATA_HOME`` (``~/.local/share/local-iaas``) and configuration under
+#: ``$XDG_DATA_HOME`` (``~/.local/share/kurukuru``) and configuration under
 #: ``$XDG_CONFIG_HOME``. Changing the default would move every existing
 #: install's VMs and keys out from under it, so the default stays and
-#: ``IAAS_STATE_DIR`` is the supported way to relocate the lot:
+#: ``KURUKURU_STATE_DIR`` is the supported way to relocate the lot:
 #:
-#:     IAAS_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/local-iaas"
+#:     KURUKURU_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kurukuru"
 #:
 #: Whether Linux should *default* to that is a policy question for the Linux
 #: validation phase; the mechanism is here either way.
-DEFAULT_STATE_DIR = "~/.local-iaas"
+#:
+#: This moved from ``~/.local-iaas`` in Phase 16. It is the one default whose
+#: change *cannot* be made invisible, so it is not made invisible: an existing
+#: tree is detected and moved once, loudly, by :mod:`app.state_migration`.
+DEFAULT_STATE_DIR = STATE_DIR
 
 
 class FlavorSpec(BaseModel):
@@ -48,20 +66,20 @@ class FlavorSpec(BaseModel):
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="IAAS_",
+        env_prefix=ENV_PREFIX,
         env_file=".env",
         env_file_encoding="utf-8-sig",  # tolerates BOM; plain UTF-8 still works
         extra="ignore",                 # unknown .env keys warn-by-omission, never crash the server
     )
 
     # --- General ---
-    app_name: str = "Local IaaS Orchestrator"
+    app_name: str = PRODUCT_NAME
     app_version: str = "0.1.0"
     debug: bool = False
 
     # --- Database ---
     # Rooted in the state directory like every other path, and for the same
-    # reason. This used to be ``sqlite:///./iaas.db`` — relative to the
+    # reason. This used to be ``sqlite:///./kurukuru.db`` — relative to the
     # *current working directory*, so the backend opened a different database
     # depending on where it was started from. Started from `backend/` you got
     # your VMs; started from the repo root you got an empty dashboard and a
@@ -71,9 +89,9 @@ class Settings(BaseSettings):
     # happening.
     #
     # Left at this default it follows ``state_dir`` (see ``_apply_state_dir``).
-    # Set IAAS_DATABASE_URL to put it anywhere, including a CWD-relative path
+    # Set KURUKURU_DATABASE_URL to put it anywhere, including a CWD-relative path
     # if that is genuinely what you want.
-    database_url: str = f"sqlite:///{DEFAULT_STATE_DIR}/iaas.db"
+    database_url: str = f"sqlite:///{DEFAULT_STATE_DIR}/{DATABASE_LEAF}"
 
     # --- CORS (Vite dev server defaults) ---
     cors_origins: list[str] = [
@@ -124,7 +142,7 @@ class Settings(BaseSettings):
     event_retention_days: int = 90
 
     # --- On-disk layout ---
-    # Everything below defaults to a subdirectory of this. Set IAAS_STATE_DIR to
+    # Everything below defaults to a subdirectory of this. Set KURUKURU_STATE_DIR to
     # move all of it at once (an XDG layout on Linux, or a different volume);
     # set any individual directory to place just that one. An explicit
     # directory always wins over the root — see _root_unset_dirs.
@@ -147,7 +165,7 @@ class Settings(BaseSettings):
     # leave an identical copy behind.
     #
     # Under state_dir rather than beside the database, so that "the database and
-    # everything that protects it" is not one `rm iaas.db*` away from being
+    # everything that protects it" is not one `rm kurukuru.db*` away from being
     # gone, and so a backup is never mistaken for a live sidecar.
     db_backup_dir: str = f"{DEFAULT_STATE_DIR}/backups"
     # How many automatic backups to keep. Older ones are pruned oldest-first
@@ -155,7 +173,20 @@ class Settings(BaseSettings):
     db_backup_retention: int = 5
 
     # --- Cloud-init & SSH access (Phase 4) ---
-    default_vm_user: str = "iaas"       # non-root sudo user created on every VM
+    # The non-root sudo user created inside every cloud-init guest.
+    #
+    # **Deliberately not renamed in Phase 16.** This is not a product string:
+    # it is an identity written into a guest's ``/etc/passwd`` at provision
+    # time, and the row does not record which name it got — ``Instance.ssh_user``
+    # returns *this setting*, live. Changing it would therefore rewrite the
+    # "Copy SSH" command of every instance that already exists into a username
+    # its guest has never heard of, which fails as "Permission denied
+    # (publickey)" and looks like a broken key rather than a wrong user.
+    #
+    # Renaming it is a two-step change: persist the user on the instance row,
+    # backfill existing rows with "iaas" (which is correct for all of them),
+    # and only then move the default. See docs/DECISIONS.md.
+    default_vm_user: str = "iaas"
     # Orchestrator keypair location. "~" is expanded at use-time in ssh_keys.py.
     ssh_key_dir: str = f"{DEFAULT_STATE_DIR}/keys"
     # Per-instance cloud-init YAML is rendered here, then deleted after launch.
@@ -285,7 +316,7 @@ class Settings(BaseSettings):
     #: The database's leaf under ``state_dir``. Separate from ``_ROOTED_DIRS``
     #: because it is a URL rather than a bare path, so it needs its own
     #: spelling on both sides of the comparison.
-    _DATABASE_LEAF = "iaas.db"
+    _DATABASE_LEAF = DATABASE_LEAF
 
     #: Same treatment for the CLI's token file: a path, not a directory, so it
     #: needs its own line in the re-rooting below.
@@ -342,7 +373,7 @@ class Settings(BaseSettings):
         """``database_url`` with ``~`` expanded — what actually opens the file.
 
         A relative path is left relative. Anyone who sets
-        ``IAAS_DATABASE_URL=sqlite:///./iaas.db`` has asked for the
+        ``KURUKURU_DATABASE_URL=sqlite:///./kurukuru.db`` has asked for the
         CWD-relative behaviour explicitly, and honouring that is the difference
         between a default that was wrong and a setting that is not overridable.
         """
@@ -364,5 +395,16 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Cached settings accessor — safe to use as a FastAPI dependency."""
+    """Cached settings accessor — safe to use as a FastAPI dependency.
+
+    The legacy-prefix shim runs here rather than at import time so that it runs
+    exactly once, on the same cache boundary as the settings it feeds, and so a
+    test that manipulates the environment and clears this cache gets the shim
+    applied to what it just set.
+    """
+    for old, new in apply_legacy_env():
+        logger.warning(
+            "%s is deprecated and will stop being read in a future release. "
+            "Rename it to %s.", old, new,
+        )
     return Settings()

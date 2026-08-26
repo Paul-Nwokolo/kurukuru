@@ -51,8 +51,11 @@ dist-ssr/
 # --------------------------------------------------------------------------- #
 # State directory
 # --------------------------------------------------------------------------- #
-# ~/.local-iaas by default, so normally nowhere near the repo — but IAAS_STATE_DIR
-# can point anywhere, including here, and disk images are gigabytes.
+# ~/.kurukuru by default, so normally nowhere near the repo — but
+# KURUKURU_STATE_DIR can point anywhere, including here, and disk images are
+# gigabytes. Both names are listed: an install that predates the Phase 16
+# rename still has the old directory until it starts once.
+.kurukuru/
 .local-iaas/
 state/
 *.qcow2

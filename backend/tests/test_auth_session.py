@@ -226,7 +226,7 @@ def test_a_revoked_token_is_still_listed(client):  # noqa: F811
 
 
 def test_a_made_up_token_is_rejected(anon_client):  # noqa: F811
-    anon_client.headers["Authorization"] = "Bearer iaas_not-a-real-token"
+    anon_client.headers["Authorization"] = "Bearer kurukuru_not-a-real-token"
 
     assert anon_client.get("/instances").status_code == 401
 

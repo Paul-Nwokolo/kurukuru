@@ -22,7 +22,7 @@ from app.config import Settings, get_settings
 from app.ssh_keys import SSHKeyError, get_public_key
 from app.user_data import UserDataError, render_merged
 
-logger = logging.getLogger("iaas.cloudinit")
+logger = logging.getLogger("kurukuru.cloudinit")
 
 # Baseline packages installed on first boot.
 _BASELINE_PACKAGES = ["curl", "htop"]

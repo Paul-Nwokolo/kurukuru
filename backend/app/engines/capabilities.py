@@ -44,7 +44,7 @@ from pathlib import Path
 
 from app.config import Settings
 
-logger = logging.getLogger("iaas.qemu.capabilities")
+logger = logging.getLogger("kurukuru.qemu.capabilities")
 
 #: `QEMU emulator version 10.0.94 (v10.1.0-rc4-12093-gbd0a254583)`
 #: The bare triple is what compares; the parenthetical is what tells you the
@@ -286,8 +286,8 @@ def _toolchain_capability(settings: Settings, timeout: int) -> Capability:
             detail=f"could not locate on PATH: {', '.join(missing)}",
             consequence=(
                 "Disk images cannot be created or probed. Put QEMU on the "
-                "backend's PATH, or set IAAS_QEMU_SYSTEM_BINARY and "
-                "IAAS_QEMU_IMG_BINARY to full paths in the same install."
+                "backend's PATH, or set KURUKURU_QEMU_SYSTEM_BINARY and "
+                "KURUKURU_QEMU_IMG_BINARY to full paths in the same install."
             ),
         )
 
@@ -334,8 +334,8 @@ def _toolchain_capability(settings: Settings, timeout: int) -> Capability:
             "between them can corrupt overlays or produce snapshot output this "
             "build cannot parse — and it does so silently, long after the "
             "mismatch. A stray qemu-img earlier on PATH (Multipass ships one) "
-            "is the usual cause. Set IAAS_QEMU_SYSTEM_BINARY and "
-            "IAAS_QEMU_IMG_BINARY to full paths in the same install."
+            "is the usual cause. Set KURUKURU_QEMU_SYSTEM_BINARY and "
+            "KURUKURU_QEMU_IMG_BINARY to full paths in the same install."
         ),
     )
 
@@ -534,7 +534,7 @@ def cached_support(settings: Settings, accel: str | None = None) -> QemuSupport:
     key = (
         settings.qemu_system_binary,
         # Part of the key because the toolchain check reads it. Left out, a test
-        # pointing IAAS_QEMU_IMG_BINARY somewhere new would get a cached answer
+        # pointing KURUKURU_QEMU_IMG_BINARY somewhere new would get a cached answer
         # computed for the previous one.
         settings.qemu_img_binary,
         settings.qemu_version_min,
