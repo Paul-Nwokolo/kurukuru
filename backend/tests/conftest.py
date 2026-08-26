@@ -46,9 +46,9 @@ import pytest
 from sqlmodel import SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from app.config import DEFAULT_STATE_DIR, Settings, get_settings
-from app.product import LEGACY_STATE_DIR
-from app.host_capacity import invalidate_cache
+from kurukuru.config import DEFAULT_STATE_DIR, Settings, get_settings
+from kurukuru.product import LEGACY_STATE_DIR
+from kurukuru.host_capacity import invalidate_cache
 
 # --------------------------------------------------------------------------- #
 # What "the real machine" means, resolved once
@@ -207,10 +207,10 @@ def pytest_configure(config: pytest.Config) -> None:
 # Isolation
 # --------------------------------------------------------------------------- #
 def _app_modules_with(attribute: str):
-    """Every imported ``app.*`` module holding its own reference to something.
+    """Every imported ``kurukuru.*`` module holding its own reference to something.
 
-    ``from app.database import engine as db_engine`` binds a *copy* of the
-    name, so patching ``app.database.engine`` alone leaves every importer still
+    ``from kurukuru.database import engine as db_engine`` binds a *copy* of the
+    name, so patching ``kurukuru.database.engine`` alone leaves every importer still
     pointing at the real database. The same is true of ``get_settings``.
 
     Discovered rather than listed, which is the entire point of this file: a
@@ -222,7 +222,7 @@ def _app_modules_with(attribute: str):
     return [
         module
         for name, module in list(sys.modules.items())
-        if name == "app" or name.startswith("app.")
+        if name == "kurukuru" or name.startswith("kurukuru.")
         if module is not None and hasattr(module, attribute)
     ]
 
@@ -286,8 +286,8 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
     SQLModel.metadata.create_all(engine)
 
     get_settings.cache_clear()
-    monkeypatch.setattr("app.config.get_settings", lambda: settings)
-    monkeypatch.setattr("app.database.engine", engine)
+    monkeypatch.setattr("kurukuru.config.get_settings", lambda: settings)
+    monkeypatch.setattr("kurukuru.database.engine", engine)
     for module in _app_modules_with("get_settings"):
         monkeypatch.setattr(module, "get_settings", lambda: settings, raising=False)
     for module in _app_modules_with("db_engine"):
@@ -295,8 +295,8 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
 
     # The FastAPI dependency, for any test that drives TestClient without
     # overriding it — otherwise requests would still resolve the real session.
-    from app.database import get_session
-    from app.main import app as api_app
+    from kurukuru.database import get_session
+    from kurukuru.main import app as api_app
 
     def _session_override():
         from sqlmodel import Session
@@ -380,9 +380,9 @@ def small_host():
     vm = type("VM", (), {"total": 16384 * 1024**2, "available": 8192 * 1024**2})()
     invalidate_cache()
     with (
-        patch("app.host_capacity.psutil.cpu_count", return_value=8),
-        patch("app.host_capacity.psutil.virtual_memory", return_value=vm),
-        patch("app.host_capacity._disk_free_bytes",
+        patch("kurukuru.host_capacity.psutil.cpu_count", return_value=8),
+        patch("kurukuru.host_capacity.psutil.virtual_memory", return_value=vm),
+        patch("kurukuru.host_capacity._disk_free_bytes",
               return_value=(1000 * 1024**3, 500 * 1024**3)),
     ):
         yield
@@ -407,8 +407,8 @@ def authenticate_test_client(client, engine) -> str:
     """
     from sqlmodel import Session as _Session
 
-    from app import auth as _auth
-    from app.models import User as _User
+    from kurukuru import auth as _auth
+    from kurukuru.models import User as _User
 
     with _Session(engine) as session:
         user = _User(

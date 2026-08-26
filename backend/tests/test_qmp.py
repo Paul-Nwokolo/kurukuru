@@ -19,7 +19,7 @@ from collections.abc import Callable
 
 import pytest
 
-from app.engines.qmp import QmpClient, QmpError, is_responsive, query_status, system_powerdown
+from kurukuru.engines.qmp import QmpClient, QmpError, is_responsive, query_status, system_powerdown
 
 _GREETING = {"QMP": {"version": {"qemu": {"major": 10, "minor": 0}}, "capabilities": []}}
 

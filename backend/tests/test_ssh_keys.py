@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 import pytest
 
-from app.config import Settings
-from app.ssh_keys import (
+from kurukuru.config import Settings
+from kurukuru.ssh_keys import (
     SSHKeyError,
     ensure_keypair,
     get_public_key,
@@ -43,7 +43,7 @@ def _fake_keygen_factory(pub_contents: str = "ssh-ed25519 AAAAFAKE test"):
 
 
 def test_generates_keypair_when_absent(settings):
-    with patch("app.ssh_keys.subprocess.run", side_effect=_fake_keygen_factory()) as run:
+    with patch("kurukuru.ssh_keys.subprocess.run", side_effect=_fake_keygen_factory()) as run:
         paths = ensure_keypair(settings)
 
     assert paths.private.exists()
@@ -55,7 +55,7 @@ def test_generates_keypair_when_absent(settings):
 
 
 def test_idempotent_reuse_does_not_regenerate(settings):
-    with patch("app.ssh_keys.subprocess.run", side_effect=_fake_keygen_factory()) as run:
+    with patch("kurukuru.ssh_keys.subprocess.run", side_effect=_fake_keygen_factory()) as run:
         first = ensure_keypair(settings)
         second = ensure_keypair(settings)
 
@@ -66,12 +66,12 @@ def test_idempotent_reuse_does_not_regenerate(settings):
 
 def test_get_public_key_returns_contents(settings):
     key = "ssh-ed25519 AAAAC3TestKey local-iaas-orchestrator"
-    with patch("app.ssh_keys.subprocess.run", side_effect=_fake_keygen_factory(key)):
+    with patch("kurukuru.ssh_keys.subprocess.run", side_effect=_fake_keygen_factory(key)):
         assert get_public_key(settings) == key
 
 
 def test_missing_binary_raises(settings):
-    with patch("app.ssh_keys.subprocess.run", side_effect=FileNotFoundError()):
+    with patch("kurukuru.ssh_keys.subprocess.run", side_effect=FileNotFoundError()):
         with pytest.raises(SSHKeyError):
             ensure_keypair(settings)
 
@@ -80,7 +80,7 @@ def test_nonzero_exit_raises(settings):
     def _fail(cmd, **_kwargs):
         return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="boom")
 
-    with patch("app.ssh_keys.subprocess.run", side_effect=_fail):
+    with patch("kurukuru.ssh_keys.subprocess.run", side_effect=_fail):
         with pytest.raises(SSHKeyError):
             ensure_keypair(settings)
 
@@ -91,6 +91,6 @@ def test_inconsistent_pair_raises(settings):
     keydir.mkdir(parents=True, exist_ok=True)
     (keydir / "id_ed25519").write_text("orphan private", encoding="utf-8")
 
-    with patch("app.ssh_keys.subprocess.run", side_effect=_fake_keygen_factory()):
+    with patch("kurukuru.ssh_keys.subprocess.run", side_effect=_fake_keygen_factory()):
         with pytest.raises(SSHKeyError):
             ensure_keypair(settings)

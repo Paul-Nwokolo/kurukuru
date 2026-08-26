@@ -12,8 +12,8 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from app.cloud_init import build_config, render_user_data
-from app.user_data import (
+from kurukuru.cloud_init import build_config, render_user_data
+from kurukuru.user_data import (
     UserDataError,
     merge_cloud_config,
     parse_user_data,

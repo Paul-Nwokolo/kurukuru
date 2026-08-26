@@ -6,7 +6,7 @@ Setup, requirements and the first-launch walkthrough live in the
 ## Run
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+uvicorn kurukuru.main:app --reload --port 8000
 ```
 
 Or, with the package installed (`pip install -e .` from this directory, which is
@@ -37,10 +37,13 @@ verification expectation.
 ## Layout
 
 ```
-app/
+kurukuru/
+  product.py         the names: product, command, env prefix, state dir, database
+                     leaf, and what each was before Phase 16
   main.py            app wiring, lifespan, system endpoints, reconcile loop
   config.py          pydantic-settings; every KURUKURU_ knob
-  database.py        engine, WAL pragma, additive migrations
+  database.py        engine, WAL pragma, additive migrations, pre-migration backups
+  state_migration.py one-time move of a pre-Phase-16 ~/.local-iaas
   models.py          SQLModel tables + API schemas
   host_capacity.py   psutil probes and the allocatable arithmetic
   console.py         VNC <-> WebSocket byte pump
@@ -71,7 +74,7 @@ app/
 tests/
 ```
 
-`app/cli/` imports nothing from the layers above — no router, model, session or
+`kurukuru/cli/` imports nothing from the layers above — no router, model, session or
 engine. It is a second client of the HTTP API, and a capability it needs that
 the API lacks is a missing endpoint. See [docs/CLI.md](../docs/CLI.md).
 

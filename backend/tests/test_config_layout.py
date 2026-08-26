@@ -15,8 +15,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from app.config import DEFAULT_STATE_DIR, Settings
-from app.product import DATABASE_LEAF
+from kurukuru.config import DEFAULT_STATE_DIR, Settings
+from kurukuru.product import DATABASE_LEAF
 
 
 def test_defaults_are_unchanged_by_the_new_root():

@@ -28,9 +28,9 @@ from pathlib import Path
 
 import pytest
 
-from app.config import Settings
-from app.product import DATABASE_LEAF, LEGACY_DATABASE_LEAF, apply_legacy_env
-from app.state_migration import (
+from kurukuru.config import Settings
+from kurukuru.product import DATABASE_LEAF, LEGACY_DATABASE_LEAF, apply_legacy_env
+from kurukuru.state_migration import (
     MARKER_NAME,
     StateMigrationBlocked,
     migrate_state_dir,

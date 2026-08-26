@@ -21,18 +21,18 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-import app.engines as engines_module
+import kurukuru.engines as engines_module
 from tests.conftest import authenticate_test_client, redirect_db_engines
-import app.events as events_module
-import app.routers.images as images_module
-import app.routers.instances as instances_module
-import app.routers.keypairs as keypairs_module
-from app.config import Settings, get_settings
-from app.database import get_session
-from app.engines import EngineRegistry, get_engine_registry
-from app.image_store import ImageError, probe_image
-from app.main import app
-from app.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
+import kurukuru.events as events_module
+import kurukuru.routers.images as images_module
+import kurukuru.routers.instances as instances_module
+import kurukuru.routers.keypairs as keypairs_module
+from kurukuru.config import Settings, get_settings
+from kurukuru.database import get_session
+from kurukuru.engines import EngineRegistry, get_engine_registry
+from kurukuru.image_store import ImageError, probe_image
+from kurukuru.main import app
+from kurukuru.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
 
 from tests.test_instances_api import FakeQemuEngine
 

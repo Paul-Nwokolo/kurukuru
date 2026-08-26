@@ -23,15 +23,15 @@ from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 from starlette.websockets import WebSocketDisconnect
 
-import app.engines as engines_module
+import kurukuru.engines as engines_module
 from tests.conftest import authenticate_test_client, redirect_db_engines
-import app.events as events_module
-import app.routers.instances as instances_module
-from app.console import CLOSE_CONFLICT, CLOSE_NOT_FOUND, CLOSE_VNC_UNAVAILABLE
-from app.database import get_session
-from app.engines import EngineRegistry, get_engine_registry
-from app.main import app
-from app.models import Instance, InstanceStatus
+import kurukuru.events as events_module
+import kurukuru.routers.instances as instances_module
+from kurukuru.console import CLOSE_CONFLICT, CLOSE_NOT_FOUND, CLOSE_VNC_UNAVAILABLE
+from kurukuru.database import get_session
+from kurukuru.engines import EngineRegistry, get_engine_registry
+from kurukuru.main import app
+from kurukuru.models import Instance, InstanceStatus
 
 from tests.test_instances_api import FakeQemuEngine
 
@@ -226,7 +226,7 @@ def test_an_unknown_instance_does_not_reveal_that_it_is_unknown(client):
     real by watching "not found" turn into something else. It gets the same
     refusal as every other bad ticket.
     """
-    from app.console import CLOSE_UNAUTHENTICATED
+    from kurukuru.console import CLOSE_UNAUTHENTICATED
 
     with pytest.raises(WebSocketDisconnect) as exc:
         with client.websocket_connect("/instances/nope/console") as ws:
@@ -252,7 +252,7 @@ def test_not_found_is_still_reachable_with_a_valid_ticket(client):
     only happens if something removed it out of band."""
     from sqlmodel import Session
 
-    from app.models import Instance
+    from kurukuru.models import Instance
 
     row_id = _add_row(client, vnc_port=5999)
     url = _console_url(client, row_id)

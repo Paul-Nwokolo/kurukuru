@@ -23,24 +23,24 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
-import app.engines as engines_module
-import app.events as events_module
-import app.routers.images as images_module
-import app.routers.instances as instances_module
-import app.routers.keypairs as keypairs_module
-import app.routers.snapshots as snapshots_module
-from app.config import Settings, get_settings
-from app.database import get_session
-from app.engines import (
+import kurukuru.engines as engines_module
+import kurukuru.events as events_module
+import kurukuru.routers.images as images_module
+import kurukuru.routers.instances as instances_module
+import kurukuru.routers.keypairs as keypairs_module
+import kurukuru.routers.snapshots as snapshots_module
+from kurukuru.config import Settings, get_settings
+from kurukuru.database import get_session
+from kurukuru.engines import (
     ComputeEngine,
     ComputeEngineError,
     EngineRegistry,
     InstanceInfo,
     get_engine_registry,
 )
-from app.main import app
-from app.host_capacity import invalidate_cache
-from app.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
+from kurukuru.main import app
+from kurukuru.host_capacity import invalidate_cache
+from kurukuru.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
 from tests.conftest import authenticate_test_client, redirect_db_engines
 
 #: Address the fake hands out, matching QEMU's loopback port-forward model.
@@ -158,13 +158,13 @@ class FakeQemuEngine(ComputeEngine):
         self.forwards[name] = [s for s in self.forwards.get(name, []) if s != spec]
 
     def create_volume_snapshot(self, volume_path, tag):
-        from app.engines.base import SnapshotInfo
+        from kurukuru.engines.base import SnapshotInfo
 
         self._volume_snaps.setdefault(str(volume_path), []).append(tag)
         return SnapshotInfo(tag=tag, size_bytes=0)
 
     def list_volume_snapshots(self, volume_path):
-        from app.engines.base import SnapshotInfo
+        from kurukuru.engines.base import SnapshotInfo
 
         return [SnapshotInfo(tag=t) for t in self._volume_snaps.get(str(volume_path), [])]
 
@@ -1037,7 +1037,7 @@ def test_capacity_endpoint_reports_totals_committed_and_allocatable(client, smal
 def test_a_degraded_capacity_probe_does_not_block_launches(client):
     """Refusing every launch because the *capacity check* broke would be a
     worse failure than the one it prevents."""
-    with patch("app.host_capacity.psutil", None):
+    with patch("kurukuru.host_capacity.psutil", None):
         invalidate_cache()
         r = client.post("/instances", json={"name": "permissive", "memory_mb": 4096})
     invalidate_cache()
@@ -1075,7 +1075,7 @@ def _aged_row(client, name, *, minutes, **kwargs):
     """A row whose last update was `minutes` ago, to age past the threshold."""
     from datetime import timedelta
 
-    from app.models import _utcnow
+    from kurukuru.models import _utcnow
 
     defaults = {
         "engine": "qemu",

@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from app.config import Settings
-from app.isos import IsoError, list_isos, resolve_iso
+from kurukuru.config import Settings
+from kurukuru.isos import IsoError, list_isos, resolve_iso
 
 
 @pytest.fixture()

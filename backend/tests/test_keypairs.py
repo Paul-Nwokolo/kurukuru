@@ -16,8 +16,8 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, select
 
-from app.keypairs import KeyPairError, generate_keypair, parse_public_key
-from app.models import (
+from kurukuru.keypairs import KeyPairError, generate_keypair, parse_public_key
+from kurukuru.models import (
     Instance,
     InstanceKeyPair,
     InstanceStatus,
@@ -98,7 +98,7 @@ def test_malformed_keys_are_refused_with_the_actual_reason(text, match):
 # Generation
 # --------------------------------------------------------------------------- #
 def test_generate_writes_a_usable_pair(tmp_path: Path):
-    from app.config import Settings
+    from kurukuru.config import Settings
 
     settings = Settings(ssh_key_dir=str(tmp_path / "keys"))
     private, public = generate_keypair("My Laptop Key", settings)
@@ -114,7 +114,7 @@ def test_generate_writes_a_usable_pair(tmp_path: Path):
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
 def test_generated_private_keys_are_0600(tmp_path: Path):
     """OpenSSH refuses a private key others can read, so this is load-bearing."""
-    from app.config import Settings
+    from kurukuru.config import Settings
 
     private, _ = generate_keypair("perm-check", Settings(ssh_key_dir=str(tmp_path / "k")))
     assert oct(private.stat().st_mode & 0o777) == "0o600"
@@ -135,7 +135,7 @@ def test_orchestrator_key_is_adopted_not_recreated(client):
 
 def test_seeding_is_idempotent(client):
     """Startup runs on every boot; it must not accumulate rows."""
-    from app.routers.keypairs import ensure_orchestrator_keypair
+    from kurukuru.routers.keypairs import ensure_orchestrator_keypair
 
     ensure_orchestrator_keypair()
     ensure_orchestrator_keypair()
@@ -219,8 +219,8 @@ def test_other_keys_can_be_deleted(client):
 # --------------------------------------------------------------------------- #
 def _seeded_keys(client, name: str) -> list[str]:
     """The ssh_authorized_keys the provisioning job rendered for an instance."""
-    from app.cloud_init import build_config
-    from app.routers.instances import instance_public_keys
+    from kurukuru.cloud_init import build_config
+    from kurukuru.routers.instances import instance_public_keys
 
     with Session(client.db_engine) as session:  # type: ignore[attr-defined]
         instance = session.exec(select(Instance).where(Instance.name == name)).one()
@@ -299,7 +299,7 @@ def test_losing_some_keys_before_provisioning_still_installs_the_rest(client):
 
     client.delete(f"/keypairs/{doomed['id']}")
 
-    from app.routers.instances import instance_public_keys
+    from kurukuru.routers.instances import instance_public_keys
 
     with Session(client.db_engine) as session:  # type: ignore[attr-defined]
         keys = instance_public_keys(session, session.get(Instance, instance_id))
@@ -330,7 +330,7 @@ def test_losing_every_key_before_provisioning_is_an_error_not_a_silent_launch(cl
     # drive the race directly: delete the key, then re-provision the row.
     client.delete(f"/keypairs/{imported['id']}")
 
-    from app.routers.instances import _provision_job
+    from kurukuru.routers.instances import _provision_job
 
     with Session(client.db_engine) as session:  # type: ignore[attr-defined]
         row = session.get(Instance, instance["id"])

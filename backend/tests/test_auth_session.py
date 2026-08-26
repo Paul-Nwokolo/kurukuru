@@ -21,8 +21,8 @@ import pathlib
 
 import pytest
 
-from app import auth
-from app.models import ApiToken, Session as SessionRow, User
+from kurukuru import auth
+from kurukuru.models import ApiToken, Session as SessionRow, User
 from sqlmodel import Session, select
 
 from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
@@ -301,21 +301,21 @@ def test_first_run_tells_the_dashboard_what_the_command_is_called(anon_client): 
     naming the old command would break the one path that has no other way
     through. This is the field that stops the name being duplicated in TSX.
     """
-    from app.product import CLI_NAME
+    from kurukuru.product import CLI_NAME
 
     assert anon_client.get("/auth/first-run").json()["cli_name"] == CLI_NAME
 
 
 def test_the_cli_name_has_exactly_one_definition():
-    """``app.cli.naming`` re-exports it rather than holding a second copy.
+    """``kurukuru.cli.naming`` re-exports it rather than holding a second copy.
 
     The re-export exists so the hundred CLI modules that already import from
     ``naming`` keep working. If someone later "tidies" it back into a literal,
     the backend and the CLI can drift to different names without any test
     noticing — this is the one that notices.
     """
-    from app import product
-    from app.cli import naming
+    from kurukuru import product
+    from kurukuru.cli import naming
 
     assert naming.CLI_NAME is product.CLI_NAME
 

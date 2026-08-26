@@ -184,7 +184,7 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn kurukuru.main:app --reload --port 8000
 ```
 
 ```bash
@@ -193,7 +193,7 @@ cd backend
 python3 -m venv .venv           # Ubuntu ships no bare `python`; see prerequisites
 source .venv/bin/activate       # Windows Git Bash: source .venv/Scripts/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn kurukuru.main:app --reload --port 8000
 ```
 
 The API is then on <http://localhost:8000>, with interactive docs at

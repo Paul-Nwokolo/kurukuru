@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.fs_permissions import (
+from kurukuru.fs_permissions import (
     HardenResult,
     PermissionHardeningError,
     describe_protection,
@@ -71,7 +71,7 @@ def test_hardening_removes_the_inherited_entries(secret):
 def test_a_filesystem_without_acls_is_reported_as_unprotected(secret, monkeypatch):
     """The case the brief asked for. icacls reports success on some of these,
     so the filesystem is checked *before* believing the command."""
-    monkeypatch.setattr("app.fs_permissions._windows_filesystem", lambda p: "FAT32")
+    monkeypatch.setattr("kurukuru.fs_permissions._windows_filesystem", lambda p: "FAT32")
 
     result = harden_file(secret)
 
@@ -84,7 +84,7 @@ def test_a_filesystem_without_acls_is_reported_as_unprotected(secret, monkeypatc
 
 @windows_only
 def test_strict_mode_raises_rather_than_writing_a_secret_in_the_open(secret, monkeypatch):
-    monkeypatch.setattr("app.fs_permissions._windows_filesystem", lambda p: "exFAT")
+    monkeypatch.setattr("kurukuru.fs_permissions._windows_filesystem", lambda p: "exFAT")
 
     with pytest.raises(PermissionHardeningError) as excinfo:
         harden_file(secret, strict=True)
@@ -97,7 +97,7 @@ def test_a_failed_grant_is_not_reported_as_success(secret, monkeypatch):
     def failing(*args, **kwargs):
         return subprocess.CompletedProcess(args, 5, "", "Access is denied.")
 
-    monkeypatch.setattr("app.fs_permissions._icacls", failing)
+    monkeypatch.setattr("kurukuru.fs_permissions._icacls", failing)
 
     result = harden_file(secret)
 

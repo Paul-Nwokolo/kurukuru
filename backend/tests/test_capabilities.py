@@ -13,8 +13,8 @@ import pathlib
 
 import pytest
 
-from app.config import Settings
-from app.engines import capabilities as caps
+from kurukuru.config import Settings
+from kurukuru.engines import capabilities as caps
 
 
 # --------------------------------------------------------------------------- #

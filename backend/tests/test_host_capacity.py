@@ -16,9 +16,9 @@ import pytest
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from app.config import Settings
-from app.host_capacity import compute_capacity, get_capacity, invalidate_cache
-from app.models import Instance, InstanceStatus
+from kurukuru.config import Settings
+from kurukuru.host_capacity import compute_capacity, get_capacity, invalidate_cache
+from kurukuru.models import Instance, InstanceStatus
 
 _MB = 1024**2
 _GB = 1024**3
@@ -47,9 +47,9 @@ def fake_host(cpus=8, total_mb=16384, available_mb=8192, free_gb=500):
     """Patch the host probes so the arithmetic is tested, not this machine."""
     vm = type("VM", (), {"total": total_mb * _MB, "available": available_mb * _MB})()
     return (
-        patch("app.host_capacity.psutil.cpu_count", return_value=cpus),
-        patch("app.host_capacity.psutil.virtual_memory", return_value=vm),
-        patch("app.host_capacity._disk_free_bytes", return_value=(1000 * _GB, free_gb * _GB)),
+        patch("kurukuru.host_capacity.psutil.cpu_count", return_value=cpus),
+        patch("kurukuru.host_capacity.psutil.virtual_memory", return_value=vm),
+        patch("kurukuru.host_capacity._disk_free_bytes", return_value=(1000 * _GB, free_gb * _GB)),
     )
 
 
@@ -157,7 +157,7 @@ def test_disk_is_bounded_by_free_space_not_committed_size(session, settings):
 # Degradation: a broken probe must never block launches
 # --------------------------------------------------------------------------- #
 def test_missing_psutil_degrades_permissively(session, settings):
-    with patch("app.host_capacity.psutil", None):
+    with patch("kurukuru.host_capacity.psutil", None):
         cap = compute_capacity(session, settings)
 
     assert cap.degraded is True
@@ -166,7 +166,7 @@ def test_missing_psutil_degrades_permissively(session, settings):
 
 
 def test_a_raising_probe_degrades_rather_than_failing(session, settings):
-    with patch("app.host_capacity.psutil.cpu_count", side_effect=OSError("boom")):
+    with patch("kurukuru.host_capacity.psutil.cpu_count", side_effect=OSError("boom")):
         cap = compute_capacity(session, settings)
 
     assert cap.degraded is True
@@ -175,7 +175,7 @@ def test_a_raising_probe_degrades_rather_than_failing(session, settings):
 
 def test_unreadable_disk_degrades(session, settings):
     a, b, _ = fake_host()
-    with a, b, patch("app.host_capacity._disk_free_bytes", side_effect=OSError("no")):
+    with a, b, patch("kurukuru.host_capacity._disk_free_bytes", side_effect=OSError("no")):
         cap = compute_capacity(session, settings)
     assert cap.degraded is True
 

@@ -23,9 +23,9 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session, select
 
-from app import auth
-from app.console import CLOSE_UNAUTHENTICATED
-from app.models import ConsoleTicket, Instance, InstanceStatus
+from kurukuru import auth
+from kurukuru.console import CLOSE_UNAUTHENTICATED
+from kurukuru.models import ConsoleTicket, Instance, InstanceStatus
 
 from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
 

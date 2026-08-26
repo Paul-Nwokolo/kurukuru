@@ -52,7 +52,7 @@ UI actually renders).
 
 `check:name` guards a different kind of drift. The CLI is called `kurukuru` today
 and will not be forever, so the name has one definition — `CLI_NAME` in
-`backend/app/product.py` — and reaches the dashboard as `cli_name` on
+`backend/kurukuru/product.py` — and reaches the dashboard as `cli_name` on
 `GET /auth/first-run`. Copy renders it through `cliCommand()`; nothing spells
 it. The strings this protects are the ones on the **login screen**, read by
 someone who is locked out and following them literally: a rename that left
@@ -242,7 +242,7 @@ into the project's exception hierarchy: missing binary →
 `qemu-img`'s explanation is more useful than ours.
 
 **Migrations are additive**, applied by `init_db()` on every startup and
-idempotent. Add a column to `_ADDED_COLUMNS` in `app/database.py`; redefine an
+idempotent. Add a column to `_ADDED_COLUMNS` in `kurukuru/database.py`; redefine an
 index through `_REDEFINED_INDEXES`. Data backfills go in
 `_backfill_instance_sizing` or a sibling. SQLite cannot drop a table constraint
 in place, so prefer designs that do not require it — an index can be dropped and
@@ -456,8 +456,8 @@ deliberately rather than at a glance.
 ## Layout
 
 ```
-backend/app/            control plane
-backend/app/engines/    ComputeEngine ABC and drivers
+backend/kurukuru/            control plane
+backend/kurukuru/engines/    ComputeEngine ABC and drivers
 backend/tests/          pytest suite
 frontend/src/           React dashboard
 docs/                   architecture, API, decisions

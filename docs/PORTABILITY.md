@@ -78,7 +78,7 @@ appeared in this repo's scratch directory during Phase 8. Win32 OpenSSH
 understands `/dev/null`.
 
 So the fix is the opposite of what it looks like: hardcode the **POSIX**
-spelling on every platform. `app/cli/commands_instances.py` now defines
+spelling on every platform. `kurukuru/cli/commands_instances.py` now defines
 `NULL_DEVICE = "/dev/null"` with the table above beside it, and a test asserts
 the CLI never emits the bare device name.
 

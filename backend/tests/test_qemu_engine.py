@@ -19,24 +19,24 @@ from unittest.mock import patch
 
 import pytest
 
-import app.engines.qemu as qemu_module
-from app.config import Settings
-from app.engines.base import (
+import kurukuru.engines.qemu as qemu_module
+from kurukuru.config import Settings
+from kurukuru.engines.base import (
     ComputeEngineError,
     ComputeTimeoutError,
     HypervisorUnavailableError,
     LaunchOptions,
 )
-from app.engines.ports import PortAllocationError, allocate_port, is_port_free
-from app.engines.qemu import (
+from kurukuru.engines.ports import PortAllocationError, allocate_port, is_port_free
+from kurukuru.engines.qemu import (
     HOST_IP,
     WINDOWS_WHPX_CPU,
     InstanceRuntime,
     QemuEngine,
     guest_profile,
 )
-from app.engines.seed import VOLUME_LABEL, build_meta_data, build_seed_iso, read_seed_file
-from app.models import InstanceStatus
+from kurukuru.engines.seed import VOLUME_LABEL, build_meta_data, build_seed_iso, read_seed_file
+from kurukuru.models import InstanceStatus
 
 
 @pytest.fixture()
@@ -326,8 +326,8 @@ def test_iso_instance_advertises_no_ssh_endpoint(eng):
     """No key injection means no SSH — the row must not imply otherwise."""
     eng._write_runtime("inst", _runtime(pid=99, iso_path="C:\\isos\\alpine.iso"))
     with (
-        patch("app.engines.qemu.pid_alive", return_value=True),
-        patch("app.engines.qemu.is_responsive", return_value=True),
+        patch("kurukuru.engines.qemu.pid_alive", return_value=True),
+        patch("kurukuru.engines.qemu.is_responsive", return_value=True),
     ):
         info = eng.get_instance_info("inst")
 
@@ -341,8 +341,8 @@ def test_image_without_cloud_init_advertises_no_ssh_either(eng):
     """Same rule, different cause: no key injected means no endpoint to offer."""
     eng._write_runtime("plain", _runtime(pid=99, ssh_enabled=False))
     with (
-        patch("app.engines.qemu.pid_alive", return_value=True),
-        patch("app.engines.qemu.is_responsive", return_value=True),
+        patch("kurukuru.engines.qemu.pid_alive", return_value=True),
+        patch("kurukuru.engines.qemu.is_responsive", return_value=True),
     ):
         info = eng.get_instance_info("plain")
 
@@ -357,8 +357,8 @@ def test_legacy_iso_runtime_file_still_hides_ssh(eng):
         "legacy", _runtime(pid=99, iso_path=r"C:\isos\alpine.iso", ssh_enabled=True)
     )
     with (
-        patch("app.engines.qemu.pid_alive", return_value=True),
-        patch("app.engines.qemu.is_responsive", return_value=True),
+        patch("kurukuru.engines.qemu.pid_alive", return_value=True),
+        patch("kurukuru.engines.qemu.is_responsive", return_value=True),
     ):
         info = eng.get_instance_info("legacy")
 
@@ -408,8 +408,8 @@ def test_legacy_runtime_file_defaults_to_std(eng):
 def test_info_reports_the_display(eng):
     eng._write_runtime("web", _runtime(pid=1, display="virtio"))
     with (
-        patch("app.engines.qemu.pid_alive", return_value=True),
-        patch("app.engines.qemu.is_responsive", return_value=True),
+        patch("kurukuru.engines.qemu.pid_alive", return_value=True),
+        patch("kurukuru.engines.qemu.is_responsive", return_value=True),
     ):
         assert eng.get_instance_info("web").display == "virtio"
 
@@ -539,7 +539,7 @@ def test_kvm_device_problems_are_reported_with_their_remedy(monkeypatch, tmp_pat
     Left to QEMU's own message this appears as a one-line stderr the fallback
     warning truncates, and the user concludes their CPU lacks virtualization.
     """
-    import app.engines.qemu as module
+    import kurukuru.engines.qemu as module
 
     missing = tmp_path / "definitely-absent"
     monkeypatch.setattr(module, "Path", lambda p: missing if p == "/dev/kvm" else Path(p))
@@ -570,8 +570,8 @@ def test_accel_is_taken_from_the_runtime_not_the_host(settings):
 def test_info_reports_the_accelerator(eng):
     eng._write_runtime("web", _runtime(pid=1234, accel="tcg"))
     with (
-        patch("app.engines.qemu.pid_alive", return_value=True),
-        patch("app.engines.qemu.is_responsive", return_value=True),
+        patch("kurukuru.engines.qemu.pid_alive", return_value=True),
+        patch("kurukuru.engines.qemu.is_responsive", return_value=True),
     ):
         assert eng.get_instance_info("web").accel == "tcg"
 
@@ -586,7 +586,7 @@ def test_probe_falls_back_to_tcg_when_qemu_exits_immediately(settings, monkeypat
     """
     monkeypatch.setattr(qemu_module.sys, "platform", "win32")
     engine = QemuEngine(settings)
-    with patch("app.engines.qemu.subprocess.run") as run:
+    with patch("kurukuru.engines.qemu.subprocess.run") as run:
         run.return_value = subprocess.CompletedProcess(
             args=[], returncode=1, stdout="", stderr="whpx: Failed to enable partition"
         )
@@ -613,7 +613,7 @@ def test_probe_reports_the_platform_accelerator_when_qemu_stays_up(
     monkeypatch.setattr(QemuEngine, "_kvm_unavailable_reason", staticmethod(lambda: None))
     engine = QemuEngine(settings)
     with patch(
-        "app.engines.qemu.subprocess.run",
+        "kurukuru.engines.qemu.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="qemu", timeout=6),
     ):
         assert engine.accel() == expected
@@ -631,7 +631,7 @@ def test_probe_skips_qemu_entirely_when_dev_kvm_is_missing(settings, monkeypatch
         QemuEngine, "_kvm_unavailable_reason", staticmethod(lambda: "/dev/kvm does not exist")
     )
     engine = QemuEngine(settings)
-    with patch("app.engines.qemu.subprocess.run") as run:
+    with patch("kurukuru.engines.qemu.subprocess.run") as run:
         assert engine.accel() == "tcg"
     run.assert_not_called()
 
@@ -744,7 +744,7 @@ def test_seed_iso_volume_label_is_cidata(tmp_path: Path):
 
 
 def test_seed_iso_omits_network_config_when_not_supplied(tmp_path: Path):
-    from app.engines.seed import SeedIsoError
+    from kurukuru.engines.seed import SeedIsoError
 
     iso = build_seed_iso(
         tmp_path / "seed.iso", user_data="#cloud-config\n", meta_data=build_meta_data("web")
@@ -785,7 +785,7 @@ def test_engine_seed_carries_the_network_config(eng, tmp_path: Path):
 
 def test_engine_seed_matches_the_generated_cloud_init(eng, tmp_path: Path, monkeypatch):
     """The ISO must carry byte-identical YAML to what Multipass would receive."""
-    from app import cloud_init
+    from kurukuru import cloud_init
 
     document = cloud_init.render_user_data(
         "web", Settings(ssh_key_dir=str(tmp_path / "keys"))
@@ -811,7 +811,7 @@ def test_info_missing_directory_means_terminated(eng):
 
 def test_info_dead_pid_means_stopped_with_ports_retained(eng):
     eng._write_runtime("web", _runtime(pid=None))
-    with patch("app.engines.qemu.pid_alive", return_value=False):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=False):
         info = eng.get_instance_info("web")
 
     assert info.exists is True
@@ -824,8 +824,8 @@ def test_info_dead_pid_means_stopped_with_ports_retained(eng):
 def test_info_live_pid_and_responsive_qmp_means_running(eng):
     eng._write_runtime("web", _runtime(pid=1234))
     with (
-        patch("app.engines.qemu.pid_alive", return_value=True),
-        patch("app.engines.qemu.is_responsive", return_value=True),
+        patch("kurukuru.engines.qemu.pid_alive", return_value=True),
+        patch("kurukuru.engines.qemu.is_responsive", return_value=True),
         patch.object(QemuEngine, "_probe_ssh_banner", return_value="SSH-2.0-x"),
     ):
         info = eng.get_instance_info("web")
@@ -846,8 +846,8 @@ def test_a_booting_guest_is_running_but_has_no_address_yet(eng):
     """
     eng._write_runtime("web", _runtime(pid=1234))
     with (
-        patch("app.engines.qemu.pid_alive", return_value=True),
-        patch("app.engines.qemu.is_responsive", return_value=True),
+        patch("kurukuru.engines.qemu.pid_alive", return_value=True),
+        patch("kurukuru.engines.qemu.is_responsive", return_value=True),
         patch.object(QemuEngine, "_probe_ssh_banner", return_value=None),  # still booting
     ):
         info = eng.get_instance_info("web")
@@ -863,8 +863,8 @@ def test_the_readiness_probe_is_skipped_for_guests_with_no_key(eng):
     """An ISO guest never serves SSH, so probing it would only cost a second."""
     eng._write_runtime("inst", _runtime(pid=99, iso_path="/isos/alpine.iso"))
     with (
-        patch("app.engines.qemu.pid_alive", return_value=True),
-        patch("app.engines.qemu.is_responsive", return_value=True),
+        patch("kurukuru.engines.qemu.pid_alive", return_value=True),
+        patch("kurukuru.engines.qemu.is_responsive", return_value=True),
         patch.object(QemuEngine, "_probe_ssh_banner") as probe,
     ):
         info = eng.get_instance_info("inst")
@@ -881,9 +881,9 @@ def test_info_live_pid_but_nothing_bound_to_qmp_is_not_running(eng):
     """
     eng._write_runtime("web", _runtime(pid=1234))
     with (
-        patch("app.engines.qemu.pid_alive", return_value=True),
-        patch("app.engines.qemu.is_responsive", return_value=False),
-        patch("app.engines.qemu.is_port_free", return_value=True),
+        patch("kurukuru.engines.qemu.pid_alive", return_value=True),
+        patch("kurukuru.engines.qemu.is_responsive", return_value=False),
+        patch("kurukuru.engines.qemu.is_port_free", return_value=True),
     ):
         assert eng.get_instance_info("web").status is InstanceStatus.STOPPED
 
@@ -897,7 +897,7 @@ def test_info_directory_without_runtime_is_error(eng):
 def test_list_instances_covers_every_directory(eng):
     eng._write_runtime("a", _runtime(ssh_port=2200, qmp_port=4400, vnc_port=5900))
     eng._write_runtime("b", _runtime(ssh_port=2201, qmp_port=4401, vnc_port=5901))
-    with patch("app.engines.qemu.pid_alive", return_value=False):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=False):
         listing = eng.list_instances()
 
     assert set(listing) == {"a", "b"}
@@ -946,7 +946,7 @@ def test_start_refuses_when_a_pinned_port_was_taken(eng):
         held.bind((HOST_IP, 0))
         held.listen(1)
         eng._write_runtime("web", _runtime(ssh_port=held.getsockname()[1]))
-        with patch("app.engines.qemu.pid_alive", return_value=False):
+        with patch("kurukuru.engines.qemu.pid_alive", return_value=False):
             with pytest.raises(ComputeEngineError, match="pinned SSH port"):
                 eng.start_instance("web")
 
@@ -958,7 +958,7 @@ def test_destroy_is_idempotent_for_an_unknown_instance(eng):
 def test_destroy_removes_the_instance_directory(eng):
     eng._write_runtime("web", _runtime(pid=None))
     (eng._dir("web") / "disk.qcow2").write_bytes(b"stub")
-    with patch("app.engines.qemu.pid_alive", return_value=False):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=False):
         eng.destroy_instance("web")
     assert not eng._dir("web").exists()
 
@@ -967,14 +967,14 @@ def test_destroy_removes_the_instance_directory(eng):
 # Subprocess failure translation
 # --------------------------------------------------------------------------- #
 def test_missing_binary_raises_hypervisor_unavailable(eng):
-    with patch("app.engines.qemu.subprocess.run", side_effect=FileNotFoundError()):
+    with patch("kurukuru.engines.qemu.subprocess.run", side_effect=FileNotFoundError()):
         with pytest.raises(HypervisorUnavailableError):
             eng._run(["qemu-img", "info"], timeout=5)
 
 
 def test_timeout_raises_compute_timeout(eng):
     with patch(
-        "app.engines.qemu.subprocess.run",
+        "kurukuru.engines.qemu.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd="qemu-img", timeout=5),
     ):
         with pytest.raises(ComputeTimeoutError):
@@ -982,7 +982,7 @@ def test_timeout_raises_compute_timeout(eng):
 
 
 def test_nonzero_exit_carries_stderr(eng):
-    with patch("app.engines.qemu.subprocess.run") as run:
+    with patch("kurukuru.engines.qemu.subprocess.run") as run:
         run.return_value = subprocess.CompletedProcess(
             args=[], returncode=1, stdout="", stderr="Could not open backing file"
         )
@@ -994,7 +994,7 @@ def test_nonzero_exit_carries_stderr(eng):
 
 
 def test_is_available_false_when_qemu_is_missing(eng):
-    with patch("app.engines.qemu.subprocess.run", side_effect=FileNotFoundError()):
+    with patch("kurukuru.engines.qemu.subprocess.run", side_effect=FileNotFoundError()):
         assert eng.is_available() is False
 
 
@@ -1094,9 +1094,9 @@ def test_a_live_pid_with_a_silent_qmp_is_unreachable_not_stopped(eng):
     flap that stopped the moment the competing client disconnected.
     """
     runtime = _runtime(pid=4242)
-    with patch("app.engines.qemu.pid_alive", return_value=True), \
-         patch("app.engines.qemu.is_responsive", return_value=False), \
-         patch("app.engines.qemu.is_port_free", return_value=False):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=True), \
+         patch("kurukuru.engines.qemu.is_responsive", return_value=False), \
+         patch("kurukuru.engines.qemu.is_port_free", return_value=False):
         assert eng._liveness(runtime) == "unreachable"
         assert eng._is_running(runtime) is True
 
@@ -1109,25 +1109,25 @@ def test_a_recycled_pid_is_still_caught(eng):
     the port is what tells it apart from a merely busy monitor.
     """
     runtime = _runtime(pid=4242)
-    with patch("app.engines.qemu.pid_alive", return_value=True), \
-         patch("app.engines.qemu.is_responsive", return_value=False), \
-         patch("app.engines.qemu.is_port_free", return_value=True):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=True), \
+         patch("kurukuru.engines.qemu.is_responsive", return_value=False), \
+         patch("kurukuru.engines.qemu.is_port_free", return_value=True):
         assert eng._liveness(runtime) == "stopped"
         assert eng._is_running(runtime) is False
 
 
 def test_a_dead_pid_is_stopped_whatever_qmp_says(eng):
     runtime = _runtime(pid=4242)
-    with patch("app.engines.qemu.pid_alive", return_value=False), \
-         patch("app.engines.qemu.is_responsive", return_value=True):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=False), \
+         patch("kurukuru.engines.qemu.is_responsive", return_value=True):
         assert eng._liveness(runtime) == "stopped"
         assert eng._is_running(runtime) is False
 
 
 def test_a_healthy_vm_is_running(eng):
     runtime = _runtime(pid=4242)
-    with patch("app.engines.qemu.pid_alive", return_value=True), \
-         patch("app.engines.qemu.is_responsive", return_value=True):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=True), \
+         patch("kurukuru.engines.qemu.is_responsive", return_value=True):
         assert eng._liveness(runtime) == "running"
         assert eng._is_running(runtime) is True
 
@@ -1138,9 +1138,9 @@ def test_a_busy_monitor_does_not_let_a_clone_read_a_live_disk(eng, tmp_path):
     quietly removed that guard exactly when another tool was poking the VM."""
     (eng._dir("web")).mkdir(parents=True, exist_ok=True)
     eng._write_runtime("web", _runtime(pid=4242))
-    with patch("app.engines.qemu.pid_alive", return_value=True), \
-         patch("app.engines.qemu.is_responsive", return_value=False), \
-         patch("app.engines.qemu.is_port_free", return_value=False):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=True), \
+         patch("kurukuru.engines.qemu.is_responsive", return_value=False), \
+         patch("kurukuru.engines.qemu.is_port_free", return_value=False):
         with pytest.raises(ComputeEngineError):
             eng._refuse_if_running("web", "clone")
 
@@ -1192,9 +1192,9 @@ def test_info_reports_an_unreachable_monitor_without_calling_it_stopped(eng):
     """The state that produced 40 minutes of Running/Stopped flapping, now
     carried out of the engine instead of only logged."""
     eng._write_runtime("web", _runtime(pid=4242))
-    with patch("app.engines.qemu.pid_alive", return_value=True), \
-         patch("app.engines.qemu.is_responsive", return_value=False), \
-         patch("app.engines.qemu.is_port_free", return_value=False):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=True), \
+         patch("kurukuru.engines.qemu.is_responsive", return_value=False), \
+         patch("kurukuru.engines.qemu.is_port_free", return_value=False):
         info = eng.get_instance_info("web")
 
     assert info.status is InstanceStatus.RUNNING
@@ -1203,8 +1203,8 @@ def test_info_reports_an_unreachable_monitor_without_calling_it_stopped(eng):
 
 def test_info_reports_a_healthy_monitor(eng):
     eng._write_runtime("web", _runtime(pid=4242))
-    with patch("app.engines.qemu.pid_alive", return_value=True), \
-         patch("app.engines.qemu.is_responsive", return_value=True), \
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=True), \
+         patch("kurukuru.engines.qemu.is_responsive", return_value=True), \
          patch.object(QemuEngine, "_probe_ssh_banner", return_value=None):
         info = eng.get_instance_info("web")
 
@@ -1215,7 +1215,7 @@ def test_a_stopped_instance_has_no_monitor_to_report_on(eng):
     """None, not False. A stopped VM has no monitor, and reporting it as
     unanswering would put every stopped instance into a warning state."""
     eng._write_runtime("web", _runtime(pid=4242))
-    with patch("app.engines.qemu.pid_alive", return_value=False):
+    with patch("kurukuru.engines.qemu.pid_alive", return_value=False):
         info = eng.get_instance_info("web")
 
     assert info.status is InstanceStatus.STOPPED

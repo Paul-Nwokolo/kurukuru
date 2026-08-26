@@ -6,8 +6,8 @@ is always the one added last, by someone who did not know there was a list to
 add it to. So nothing here names a route: it enumerates what the application
 actually registered and asserts each entry is either
 
-  * in :data:`app.security.PUBLIC_ROUTES`, with a written reason, or
-  * in :data:`app.security.TICKET_ROUTES`, authenticated by its own mechanism, or
+  * in :data:`kurukuru.security.PUBLIC_ROUTES`, with a written reason, or
+  * in :data:`kurukuru.security.TICKET_ROUTES`, authenticated by its own mechanism, or
   * genuinely answering 401 to an anonymous caller.
 
 A route added next year is covered the moment it is registered. If it is open,
@@ -19,8 +19,8 @@ from __future__ import annotations
 import pytest
 from starlette.routing import Route, WebSocketRoute
 
-from app.main import app
-from app.security import PUBLIC_ROUTES, TICKET_ROUTES
+from kurukuru.main import app
+from kurukuru.security import PUBLIC_ROUTES, TICKET_ROUTES
 
 from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
 
@@ -76,7 +76,7 @@ def test_every_route_is_closed_or_deliberately_public(anon_client, path, method)
     assert response.status_code == 401, (
         f"{method} {path} answered {response.status_code} to an anonymous caller. "
         f"Every route is closed by default; if this one must be open, add it to "
-        f"app.security.PUBLIC_ROUTES with the reason."
+        f"kurukuru.security.PUBLIC_ROUTES with the reason."
     )
 
 

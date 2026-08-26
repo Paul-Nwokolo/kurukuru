@@ -2093,7 +2093,7 @@ content did not change, only its path, so writing the header and touching
 nothing else is the whole job. The safe form would be hours of I/O to produce an
 identical file.
 
-**Decision.** `app/state_migration.py` runs before the first database
+**Decision.** `kurukuru/state_migration.py` runs before the first database
 connection, and is timid in the same shape as decision 26:
 
 - only on the default layout, and only when the engine about to be used is the
@@ -2140,9 +2140,9 @@ had a different cost and each was paid rather than deferred:
   hash — so a token issued as `iaas_…` keeps working until it is revoked;
 - the `localStorage` keys would have silently discarded a saved project
   selection and theme, so their values are carried across once;
-- the CSRF header was spelled **twice**, in `app/auth.py` and in
-  `app/cli/client.py`, and renaming one of them broke the CLI's own login. It now
-  has one definition in `app/product.py`, which is the only module both the
+- the CSRF header was spelled **twice**, in `kurukuru/auth.py` and in
+  `kurukuru/cli/client.py`, and renaming one of them broke the CLI's own login. It now
+  has one definition in `kurukuru/product.py`, which is the only module both the
   control plane and its client are allowed to import.
 
 **The guest username stays `iaas`, deliberately.** `default_vm_user` is not a

@@ -20,8 +20,8 @@ from pathlib import Path
 import pytest
 from sqlmodel import create_engine
 
-import app.database as db_module
-from app.config import Settings
+import kurukuru.database as db_module
+from kurukuru.config import Settings
 
 _LEGACY_SCHEMA = """
 CREATE TABLE instances (
@@ -62,7 +62,7 @@ def _names(path: Path) -> set[str]:
 
 @pytest.fixture()
 def legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict]:
-    """A pre-migration database with rows, wired into app.database.
+    """A pre-migration database with rows, wired into kurukuru.database.
 
     Settings are patched too, and must agree with the engine: ``backup_database``
     refuses to run when they disagree, which is what stops the suite writing

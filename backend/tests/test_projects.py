@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session, select
 
-from app.models import Image, ImageStatus, Instance, InstanceStatus, KeyPair, Project
+from kurukuru.models import Image, ImageStatus, Instance, InstanceStatus, KeyPair, Project
 
 from tests.test_instances_api import client, iso_dir  # noqa: F401 - fixtures
 

@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, select
 
-from app.models import Instance, InstanceStatus, Volume, VolumeStatus
+from kurukuru.models import Instance, InstanceStatus, Volume, VolumeStatus
 
 from tests.test_instances_api import client, iso_dir  # noqa: F401 - fixtures
 
@@ -38,13 +38,13 @@ def vol_client(client, monkeypatch, tmp_path):
     file instead, so the suite keeps running on a host without QEMU while the
     file still genuinely exists and can genuinely be deleted.
     """
-    import app.routers.volumes as volumes_module
+    import kurukuru.routers.volumes as volumes_module
 
     def _fake_create(self, path, size_gb):  # noqa: ANN001
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_bytes(b"QFI\xfb" + b"\0" * 60)  # a qcow2 magic header
 
-    from app.engines.qemu import QemuEngine
+    from kurukuru.engines.qemu import QemuEngine
 
     monkeypatch.setattr(QemuEngine, "create_blank_disk", _fake_create)
     monkeypatch.setattr(volumes_module, "get_settings", lambda: _settings(tmp_path))
@@ -52,7 +52,7 @@ def vol_client(client, monkeypatch, tmp_path):
 
 
 def _settings(tmp_path):
-    from app.config import Settings
+    from kurukuru.config import Settings
 
     return Settings(state_dir=str(tmp_path / "volstate"))
 
@@ -133,7 +133,7 @@ def test_attach_order_decides_the_drive_arguments(vol_client):
         _attach(vol_client, _volume(vol_client, name)["id"], instance["id"])
 
     with Session(vol_client.db_engine) as session:
-        from app.routers.volumes import _attached_paths
+        from kurukuru.routers.volumes import _attached_paths
 
         paths = _attached_paths(session, instance["id"])
         names = [
@@ -178,7 +178,7 @@ def test_an_attachment_reports_which_guest_is_looking_at_it(vol_client):
     path, and waiting for provisioning to exist would leave the UI free to
     keep printing ``/dev/vdb`` at Windows users in the meantime.
     """
-    from app.models import GuestOS
+    from kurukuru.models import GuestOS
 
     instance = _instance(vol_client)
     volume = _volume(vol_client, "data")

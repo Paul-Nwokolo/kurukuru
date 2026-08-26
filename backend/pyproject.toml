@@ -32,13 +32,13 @@ dependencies = [
 dev = ["pytest==8.3.5"]
 
 # The command name lives in exactly two places: here, and CLI_NAME in
-# app/product.py. Renaming the product is those two lines — and, from Phase 16
+# kurukuru/product.py. Renaming the product is those two lines — and, from Phase 16
 # on, the state-dir migration that carries an existing install across it.
 [project.scripts]
-kurukuru = "app.cli.main:main"
+kurukuru = "kurukuru.cli.main:main"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["kurukuru*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
