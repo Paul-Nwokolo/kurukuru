@@ -9,7 +9,7 @@ import { formatBytes } from '../lib/format'
  *
  * Read-only, and honest about why: settings are read once at startup and
  * cached, and several name directories that VMs already on disk depend on.
- * So every row shows the IAAS_ environment variable that controls it — a
+ * So every row shows the KURUKURU_ environment variable that controls it — a
  * settings screen that shows a value without saying how to change it has told
  * the user half of what they came for.
  *

@@ -2280,6 +2280,69 @@ which is wrong and does not help. `serve` probes the port first and distinguishe
 the two cases by name, giving the `netsh` command that lists the reserved ranges
 for the one where that is the answer.
 
+## 52. A build must not know its own origin
+
+**Context.** Part B made the backend serve the dashboard so the product is one
+process on one port. `client.ts` resolved the API's origin as:
+
+```js
+import.meta.env.VITE_API_URL?.replace(/\/$/, '') || window.location.origin
+```
+
+which reads as "prefer the configured origin, otherwise use this page's". It is
+not that. **Vite inlines `import.meta.env.VITE_API_URL` as a string literal at
+build time**, so once the variable is set on the build machine the literal is
+non-empty, the `||` is dead code, and the fallback can never run. The build
+machine's development `.env` is welded into the shipped artefact.
+
+**Observed.** A bundle built while `frontend/.env` said
+`VITE_API_URL=http://localhost:8000`, served from port 7842. The document and
+every asset loaded 200 — same origin, nothing unusual — and both XHRs went to
+`http://localhost:8000/api/...`, where nothing was listening. The dashboard
+rendered "Cannot reach the backend. Start it, then reload" while the backend
+answered `curl` on the very origin serving the page. The same path fetched from
+the page's own origin returned 200 with real data.
+
+The shape of the failure is worth recording, because it invites the wrong
+diagnosis: **documents and assets succeed while XHR fails** looks exactly like
+an extension blocking `xmlhttprequest` as a resource type. It was not. The
+requests were not being blocked; they were being sent somewhere else. Reading
+the request URL rather than the failure mode is what separates the two, and it
+took one line of network log to settle what could have been an afternoon of
+disabling extensions.
+
+**Decision.** A build always talks to its own origin, and `VITE_API_URL` applies
+in development only:
+
+```js
+export const API_ORIGIN = import.meta.env.DEV
+  ? import.meta.env.VITE_API_URL?.replace(/\/$/, '') || window.location.origin
+  : window.location.origin
+```
+
+`import.meta.env.DEV` is statically replaced with `false` in a build, so the dev
+branch is eliminated and the variable never reaches the output.
+
+**Even a correct value would be wrong to bake in.** The backend serves the
+bundle, so the right origin is whatever the user reached it on — and they may
+change the port, use `127.0.0.1` rather than `localhost`, or come through a
+hostname or a proxy. Only `window.location.origin` is right in all of them.
+
+**A build-time guard, because this is invisible where it is produced.**
+`scripts/check-bundle-origin.mjs` fails when the built bundle contains a
+loopback origin or the string `VITE_API_URL`, runs in `npm run verify` *after*
+the build, and is also invoked by `tools/build_installer.py` so an automated
+release cannot skip it. It refuses to pass when `dist/` is missing, because a
+check that reports green with nothing to check is worse than no check. Axios's
+own non-browser fallback base is exempted by name with its reason, so the check
+does not cry wolf and get deleted.
+
+Extending it immediately found two more things that had shipped: the copy
+`"point VITE_API_URL at the one you meant"`, which names a build-time setting a
+user of an installed copy cannot act on, and `IAAS_CORS_ORIGINS` in the
+origin-refused remedy — the Phase 16 rename covered the backend, the tests and
+the docs, but never `frontend/src`.
+
 ## Known limitations
 
 - **The guest username is still `iaas`.** See decision 49; it needs a

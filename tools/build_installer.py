@@ -395,6 +395,12 @@ def build_dashboard(out: Path) -> Path:
     dist = frontend / "dist"
     if not (dist / "index.html").is_file():
         raise BuildError(f"{dist} has no index.html; the dashboard build produced nothing.")
+
+    # A bundle with an origin welded into it is broken for every user whose
+    # origin differs from the build machine's, and it looks perfect on the
+    # machine that built it. That shipped once; it is checked here so it cannot
+    # ship again from an automated build that skipped `npm run verify`.
+    run([npm, "run", "check:origin"], cwd=frontend)
     target = out / "dashboard"
     if target.exists():
         shutil.rmtree(target)

@@ -20,7 +20,7 @@ prove the mock.
 Frontend (from `frontend/`):
 
 ```bash
-npm run verify      # typecheck, lint, colour, contrast, console, name, build
+npm run verify      # typecheck, lint, colour, contrast, console, name, build, origin
 ```
 
 Or individually:
@@ -32,6 +32,7 @@ npm run check:colour   # no hard-coded colours outside the token layer
 npm run check:contrast # WCAG AA over every token pair the UI uses
 npm run check:console  # the VNC console's connect ordering
 npm run check:name     # the product's name is never spelled in copy
+npm run check:origin   # the BUILD has no origin welded into it (run after build)
 npm run build
 ```
 

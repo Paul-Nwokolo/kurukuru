@@ -4,11 +4,10 @@
  * Components never import axios directly — they call the typed functions
  * exported here.
  *
- * **The default is this page's own origin**, because the backend serves this
- * bundle. That is the shipped shape: one process, one port, no configuration,
- * and it keeps working when the user changes the port. VITE_API_URL overrides
- * it and is what the Vite dev server needs, since there the dashboard is served
- * by Vite and the API is somewhere else.
+ * **A build always talks to its own origin**, because the backend serves this
+ * bundle: one process, one port, no configuration, and it keeps working when
+ * the user changes the port. VITE_API_URL applies in development only, where
+ * Vite serves the dashboard and the API is genuinely somewhere else.
  *
  * Everything the API serves lives under API_PREFIX and nothing else does. The
  * dashboard's own routes are the readable ones — `/images`, `/instances/:id` —
@@ -20,10 +19,35 @@ import axios, { AxiosError } from 'axios'
 /** Where the API is mounted. Mirrors API_PREFIX in backend/kurukuru/product.py. */
 const API_PREFIX = '/api'
 
-/** Origin serving the API — this page's own, unless told otherwise. */
-export const API_ORIGIN =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, '') ||
-  (typeof window !== 'undefined' ? window.location.origin : '')
+/**
+ * Origin serving the API.
+ *
+ * **In a build this is always the page's own origin, and VITE_API_URL is not
+ * consulted at all.** That is not a preference, it is a correctness
+ * requirement, and getting it wrong shipped a broken dashboard once already.
+ *
+ * Vite inlines `import.meta.env.VITE_API_URL` as a *string literal at build
+ * time*. So `VITE_API_URL || window.location.origin` does not mean "prefer the
+ * configured origin, else fall back" — once the variable is set on the build
+ * machine, the literal is non-empty, the `||` is dead, and the fallback can
+ * never run. The build machine's development `.env` is welded into the shipped
+ * artefact. That is exactly what happened: a bundle built with
+ * `VITE_API_URL=http://localhost:8000` was served from port 7842, so its
+ * documents and assets loaded fine and every XHR went to a port with nothing
+ * on it.
+ *
+ * Even a *correct* value would be wrong to bake in. The backend serves this
+ * bundle, so the origin is whatever the user reached it on — and they may
+ * change the port, use `127.0.0.1` rather than `localhost`, or reach it over a
+ * hostname. Only the page's own origin is right in all of those.
+ *
+ * `import.meta.env.DEV` is statically replaced with `false` in a build, so the
+ * dev branch below is eliminated entirely and VITE_API_URL never appears in the
+ * output. `scripts/check-bundle-origin.mjs` asserts that.
+ */
+export const API_ORIGIN = import.meta.env.DEV
+  ? import.meta.env.VITE_API_URL?.replace(/\/$/, '') || window.location.origin
+  : window.location.origin
 
 /** Base every request is joined to. */
 export const API_URL = `${API_ORIGIN}${API_PREFIX}`
@@ -560,7 +584,7 @@ export interface SettingEntry {
   key: string
   label: string
   value: string | number | boolean | null
-  /** The IAAS_ environment variable to set. Restart required. */
+  /** The KURUKURU_ environment variable to set. Restart required. */
   env: string
   /**
    * Presentation hint. `path` gets the app's one path treatment — mono,

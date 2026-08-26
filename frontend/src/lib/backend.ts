@@ -174,7 +174,10 @@ export function useBackendStatus(): BackendStatus {
       online: false,
       reason: 'no-listener',
       summary: `Nothing is listening on ${API_URL}.`,
-      remedy: 'Start the backend, or point VITE_API_URL at the one you meant.',
+      // Deliberately does not mention VITE_API_URL. It is inlined at *build*
+      // time, so in an installed copy there is no such setting to point
+      // anywhere — advice a user cannot act on is worse than none.
+      remedy: 'Start the backend, then reload this page.',
     }
   }
 
@@ -194,7 +197,7 @@ export function useBackendStatus(): BackendStatus {
     // The overwhelmingly common cause: Vite moved to the next free port
     // because 5173 was taken, and the backend has never heard of the new one.
     remedy:
-      `Add ${window.location.origin} to IAAS_CORS_ORIGINS and restart the ` +
+      `Add ${window.location.origin} to KURUKURU_CORS_ORIGINS and restart the ` +
       `backend — or serve this page from an allowed origin.`,
   }
 }
