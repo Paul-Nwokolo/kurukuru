@@ -2343,6 +2343,68 @@ user of an installed copy cannot act on, and `IAAS_CORS_ORIGINS` in the
 origin-refused remedy — the Phase 16 rename covered the backend, the tests and
 the docs, but never `frontend/src`.
 
+## 53. The installer is per-user, and the startup task is registered by API rather than by `schtasks`
+
+**Context.** Part C had to put a working dashboard in front of somebody who has
+never opened a terminal, without asking for administrator rights.
+
+**Inno Setup, per-user.** `PrivilegesRequired=lowest` installs to
+`%LOCALAPPDATA%\Programs`, writes the Start Menu entry and the `PATH` change
+under `HKCU`, and never prompts. WiX was rejected: a per-user MSI is possible
+but awkward, and its real advantage — Intune and Group Policy deployment — is
+not what a stranger downloading from GitHub needs. That would be a second
+installer, not a reason to start with the harder one.
+
+**The startup mechanism is not the one recommended, because the recommendation
+was wrong.** The plan said "a scheduled task at logon" and assumed `schtasks`
+could create one. It cannot, unelevated:
+
+| | |
+|---|---|
+| `schtasks /Create /SC ONLOGON` | **Access is denied** |
+| the same, plus `/RU <me>` | **Access is denied** |
+| `schtasks /Create /SC ONCE` | succeeds |
+| `Register-ScheduledTask -AtLogOn`, trigger and principal scoped to the current user | **succeeds** |
+
+A logon trigger created through `schtasks` is treated as applying to *any* user,
+which is an administrator's decision. Scoped explicitly to one user through the
+proper API, it is only ever asking to run something as the person asking. So the
+design survives and the tool changes: `startup-task.ps1`, installed alongside so
+the registration can be read rather than merely trusted.
+
+A Startup-folder shortcut would also have worked unelevated and was rejected: a
+console window at every sign-in, no restart-on-failure, and invisible in the
+place Windows users are told to look.
+
+**Uninstall keeps user data.** The state directory is frequently tens of
+gigabytes of VM disks. The uninstaller asks once, explicitly, defaulting to No.
+
+**Two bugs that only a real install could produce**, both invisible to every
+test that ran before it:
+
+- The `.ps1` was UTF-8 *without a BOM*, and Windows PowerShell 5.1 decodes a
+  script as the system ANSI codepage unless it has one. The em-dashes in its
+  prose became mojibake; mojibake inside a quoted string is a **parse error**.
+  The installer reported complete success and registered nothing. The build now
+  refuses to package a `.ps1` that lacks a BOM or that the parser rejects.
+- `find_dashboard` looked for the bundle beside the **package**, and a
+  PyInstaller onedir build puts the package two directories below the
+  executable while the installer puts the dashboard beside it. The installed
+  application served its entire API correctly and answered every dashboard URL
+  with `{"detail": "Not Found"}`. The development checkout never showed it,
+  because there `frontend/dist` is found instead.
+
+Both are the argument for the live verification existing at all: neither is
+reachable from a source tree.
+
+**Verified end to end.** Installed silently with no elevation; the task
+registered as the user at Limited run level and started the backend; a fresh
+state directory reported `configured: false` and the dashboard offered a setup
+form; an account was created and the route then answered 409; a VM launched and
+reached Running; and installing 0.1.1 over a running 0.1.0 preserved the
+account, the instance, every database row and the VM's disk, with the version
+moving in `/health` and the CLI together.
+
 ## Known limitations
 
 - **The guest username is still `iaas`.** See decision 49; it needs a

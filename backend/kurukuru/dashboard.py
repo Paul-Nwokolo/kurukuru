@@ -28,6 +28,7 @@ link — has to be answered with ``index.html`` and allowed to route itself.
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -37,16 +38,29 @@ from kurukuru.product import API_PREFIX
 
 logger = logging.getLogger("kurukuru.dashboard")
 
-#: Where the built dashboard lands relative to the repo, and where it lands
-#: relative to a frozen application. Both are checked, in this order, because
-#: the answer differs between a developer's checkout and an installed copy and
-#: neither should have to be configured for the common case.
-_CANDIDATES = (
-    # A frozen build: the bundle sits beside the executable's data root.
-    Path(__file__).resolve().parent / "dashboard",
+def _candidates() -> tuple[Path, ...]:
+    """Where a built dashboard might be, most specific first.
+
+    Computed rather than a module constant because the frozen answer depends on
+    ``sys.executable``, and getting that wrong is not a small bug: the installed
+    application served its API perfectly and answered every dashboard URL with
+    ``{"detail": "Not Found"}``, because it looked for the bundle beside the
+    *package* while the installer had put it beside the *executable*.
+
+    In a PyInstaller onedir build the package lives under ``_internal/``, so
+    ``__file__`` is two directories below the .exe. Anchoring on
+    ``sys.executable`` is what makes "next to the program" mean what it says.
+    The development checkout never showed this: there the third candidate finds
+    ``frontend/dist`` and everything works.
+    """
+    here = Path(__file__).resolve()
+    found: list[Path] = []
+    if getattr(sys, "frozen", False):
+        found.append(Path(sys.executable).resolve().parent / "dashboard")
+    found.append(here.parent / "dashboard")
     # A source checkout: backend/kurukuru/ -> repo root -> frontend/dist.
-    Path(__file__).resolve().parent.parent.parent / "frontend" / "dist",
-)
+    found.append(here.parent.parent.parent / "frontend" / "dist")
+    return tuple(found)
 
 #: Files Vite fingerprints with a content hash. The hash *is* the cache key, so
 #: these can be cached hard and permanently — a rebuild produces new names, and
@@ -77,7 +91,7 @@ def find_dashboard(explicit: str | None = None) -> Path | None:
         )
         return None
 
-    for candidate in _CANDIDATES:
+    for candidate in _candidates():
         if (candidate / "index.html").is_file():
             return candidate
     return None

@@ -302,3 +302,44 @@ def test_an_origin_that_already_has_the_prefix_is_not_doubled():
     assert ApiClient(f"http://host:7842{API_PREFIX}").base_url == (
         f"http://host:7842{API_PREFIX}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Finding the bundle in an installed copy
+# --------------------------------------------------------------------------- #
+def test_a_frozen_build_looks_beside_the_executable(monkeypatch, tmp_path: Path):
+    """The candidate that only matters once the thing is actually installed.
+
+    In a PyInstaller onedir build the package lives under ``_internal/``, so
+    ``__file__`` is two directories below the .exe while the installer puts the
+    dashboard *next to* the .exe. Looking only beside the package meant the
+    installed application served its whole API correctly and answered every
+    dashboard URL with ``{"detail": "Not Found"}`` — and the development
+    checkout never showed it, because there ``frontend/dist`` is found instead.
+    """
+    from kurukuru import dashboard as module
+
+    exe = tmp_path / "app" / "kurukuru.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    bundle = exe.parent / "dashboard"
+    bundle.mkdir()
+    (bundle / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+    monkeypatch.setattr(module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(module.sys, "executable", str(exe))
+
+    assert module._candidates()[0] == bundle
+    assert module.find_dashboard() == bundle
+
+
+def test_an_unfrozen_run_does_not_look_beside_the_interpreter(monkeypatch):
+    """Otherwise a checkout would hunt for a dashboard next to python.exe."""
+    from kurukuru import dashboard as module
+
+    monkeypatch.setattr(module.sys, "frozen", False, raising=False)
+
+    assert not any(
+        c == Path(module.sys.executable).resolve().parent / "dashboard"
+        for c in module._candidates()
+    )

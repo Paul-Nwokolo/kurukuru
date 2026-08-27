@@ -1,13 +1,101 @@
-# Kurukuru
+# Kurukuru — local cloud infrastructure
 
-A local cloud platform for a single machine. It gives you an HTTP API and a web
-dashboard for the whole VM lifecycle — provision, start, stop, terminate — on
-top of QEMU, with a disk image catalog, cloud-init provisioning, a browser
-console, and sizing bounded by what the host can actually spare. It is aimed at
-people who want EC2-shaped workflows (launch by API, pick a size, get an SSH
-command back) without a cloud account or a hypervisor GUI.
+Launch virtual machines on your own computer the way you would in a cloud: pick
+a size, get an SSH command back, and forget where it is running. An HTTP API, a
+web dashboard and a CLI over the whole VM lifecycle, on top of QEMU — with an
+image catalog, cloud-init provisioning, a browser console, and sizing bounded by
+what your machine can actually spare.
+
+It is for people who want EC2-shaped workflows without a cloud account, a
+monthly bill, or a hypervisor GUI.
 
 ![The instances list in the dashboard's dark theme](docs/images/dashboard.png)
+
+**Windows only, today.** It runs on Windows 10 and 11 with hardware
+acceleration. Linux and macOS have code paths but no installer and, for the
+accelerated ones, no validation — see [Platform support](#platform-support).
+
+---
+
+## The name
+
+*Kurukuru* is Yoruba for **fog**, or cloud. It seemed like the right word for a
+cloud that only exists on your desk.
+
+It is written with its descriptor — *Kurukuru — local cloud infrastructure* —
+rather than on its own, and the visual language is deliberately plain. There is
+a live Nintendo trademark for "KURUKURU KURURIN" covering video game programs;
+a single-host hypervisor control plane is not in that category, and resembling
+one would be a cost with no upside.
+
+---
+
+## Install
+
+Download the latest `Kurukuru-<version>-Setup.exe` from
+[Releases](https://github.com/Paul-Nwokolo/local-iaas/releases) and run it.
+Nothing else is needed first — not Python, not QEMU. It installs into your own
+user profile and never asks for an administrator prompt.
+
+> **Windows will warn you.** This build is not code-signed, so SmartScreen shows
+> *"Windows protected your PC"* with no visible Run button. Click **More info**
+> → **Run anyway**. That warning appears for any unsigned executable, which is
+> exactly why it is worth saying plainly rather than letting you meet it
+> unexplained. [docs/INSTALL.md](docs/INSTALL.md) shows the dialog and what it
+> means.
+
+Then open **<http://127.0.0.1:7842>** — or the Start Menu entry.
+
+**Full instructions, including what the installer touches, where your data
+lives, how to upgrade and how to uninstall without deleting your VMs:
+[docs/INSTALL.md](docs/INSTALL.md).**
+
+---
+
+## First launch
+
+A fresh install has no account, so the first screen creates one. Pick a
+username and a password of at least 12 characters — no character rules, because
+length is what makes a password hard to guess. That form works only from this
+machine and only until an account exists.
+
+Then, from a terminal:
+
+```
+kurukuru doctor                 # what Kurukuru found on this host
+kurukuru launch web --wait      # a Linux VM; downloads the base image once
+kurukuru ssh web                # a shell in it
+kurukuru ls                     # what is running
+kurukuru rm web                 # and gone
+```
+
+The first launch downloads the Ubuntu 24.04 cloud image, about 600 MB, once.
+Everything after that costs only the difference — instance disks are
+copy-on-write overlays, so a new VM is megabytes rather than gigabytes.
+
+Prefer the dashboard? Everything above is there too, plus a browser console
+that works even for VMs with no network.
+
+---
+
+## Honest limitations
+
+Read this before you rely on it.
+
+- **Windows guests are in progress.** They boot their installer and can be
+  driven through Setup, but no Windows install has ever completed here. Windows
+  11 is permanently out of reach on a Windows host: it needs TPM 2.0, which
+  QEMU excludes on Windows at build time. Linux guests work properly.
+- **No transport encryption.** Plain HTTP on loopback. Beyond this machine,
+  credentials and VM framebuffers would cross the wire in the clear — put a
+  TLS-terminating proxy in front of it. See [docs/SECURITY.md](docs/SECURITY.md).
+- **No roles.** There is authentication on every route, but every account is a
+  full administrator. Projects organise resources; they do not isolate them.
+- **One host.** No clustering, no remote hypervisors.
+- **SQLite, single writer.** Right for one machine, not for a shared service.
+- **Unsigned installer.** See above.
+
+---
 
 ## What works today
 
@@ -104,7 +192,7 @@ VM disk.
 What this does and does not protect, and how to recover a forgotten password,
 is in [docs/SECURITY.md](docs/SECURITY.md).
 
-## Requirements
+## Requirements (from source)
 
 | Component | Version | Notes |
 |---|---|---|
@@ -174,7 +262,11 @@ else (progress goes to stderr), exit codes distinguish *not found* from
 
 Full reference: [docs/CLI.md](docs/CLI.md).
 
-## Quickstart
+## Running from source
+
+For working *on* Kurukuru. To *use* it, install the release build above —
+these steps give you a checkout, not an installed application.
+
 
 ### Backend
 
@@ -184,7 +276,7 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn kurukuru.main:app --reload --port 8000
+uvicorn kurukuru.main:app --reload --port 7842
 ```
 
 ```bash
@@ -193,7 +285,7 @@ cd backend
 python3 -m venv .venv           # Ubuntu ships no bare `python`; see prerequisites
 source .venv/bin/activate       # Windows Git Bash: source .venv/Scripts/activate
 pip install -r requirements.txt
-uvicorn kurukuru.main:app --reload --port 8000
+uvicorn kurukuru.main:app --reload --port 7842
 ```
 
 The API is then on <http://localhost:7842>, with interactive docs at
@@ -229,7 +321,7 @@ Three things worth knowing about how `.env` is read:
   harmless, but a typo will also be silently ignored — if an override seems to
   have no effect, check the spelling first.
 
-## First launch
+## First launch (from source)
 
 1. Open <http://localhost:5173>. The header shows whether the backend is
    reachable.
@@ -357,8 +449,8 @@ the guest's serial log at:
 
 ## Project status
 
-Early, and honest about it. It runs real VMs and has been used to do real work,
-but:
+Early, and honest about it. It runs real VMs and has been used to do real work.
+The short version is under [Honest limitations](#honest-limitations); in full:
 
 - **Single host.** No clustering, no remote hypervisors.
 - **No authorization.** There *is* authentication — every route requires it —
@@ -440,6 +532,8 @@ multi-tenant cloud. The target is a single-machine platform with cloud-shaped
 ergonomics.
 
 ## Documentation
+
+- [INSTALL.md](docs/INSTALL.md) — installing, upgrading, uninstalling, and what the installer touches.
 
 - [Architecture](docs/ARCHITECTURE.md) — layering, state machine, reconciler,
   QEMU specifics, and how to add an engine.
