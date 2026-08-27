@@ -37,6 +37,7 @@ from kurukuru.cli.output import Output
 
 def register(app: typer.Typer) -> None:
     app.command("serve")(serve)
+    app.command("dashboard")(dashboard)
 
 
 def serve(
@@ -184,3 +185,75 @@ def _port_error(host: str, port: int, exc: OSError) -> CliError:
             f"or set {env_var('PORT')} to change the default."
         )
     return CliError(cause, ExitCode.USAGE, hint=hint)
+
+
+# --------------------------------------------------------------------------- #
+# dashboard
+# --------------------------------------------------------------------------- #
+def dashboard(
+    wait: Annotated[
+        bool,
+        typer.Option("--wait", help="Wait for the backend to answer before opening."),
+    ] = False,
+    print_url: Annotated[
+        bool, typer.Option("--print", help="Print the URL instead of opening a browser.")
+    ] = False,
+) -> None:
+    """Open the dashboard in a browser.
+
+    What the Start Menu entry and the desktop shortcut run, which is why it is
+    here rather than among the API-client commands: it needs to know the address
+    the backend is *configured* to serve on, and it must work before anyone has
+    signed in — so it cannot ask the API where the API is.
+
+    ``--wait`` exists for the installer. The backend takes several seconds to
+    become ready, almost all of it a QEMU capability probe, and a browser opened
+    into that gap shows a connection error on a working install. Waiting turns
+    that into a short pause.
+    """
+    import webbrowser
+
+    settings = _serve_settings()
+    host = "127.0.0.1" if not _is_loopback(settings.host) else settings.host
+    if host in ("", "0.0.0.0", "::"):  # noqa: S104 - normalising, not binding
+        host = "127.0.0.1"
+    url = f"http://{host}:{settings.port}/"
+    out = Output()
+
+    if wait and not _wait_for_backend(host, settings.port):
+        raise CliError(
+            f"The backend at {url} did not answer.",
+            ExitCode.UNREACHABLE,
+            hint=(
+                f"Start it with '{CLI_NAME} serve', or check whether the startup "
+                f"task is running:\n"
+                f"    schtasks /Query /TN KurukuruBackend"
+            ),
+        )
+
+    if print_url:
+        out.human(url)
+        return
+    out.note(f"Opening {url}")
+    webbrowser.open(url)
+
+
+def _wait_for_backend(host: str, port: int, timeout: float = 90.0) -> bool:
+    """Poll until something accepts a connection on the backend's port.
+
+    A TCP connect rather than an HTTP request on purpose: this runs before any
+    account exists, so every route that would prove more is either public
+    (and therefore proves little) or answers 401. "Something is listening" is
+    exactly what the caller needs to know, and it is the honest limit of what
+    can be checked without a credential.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with socket.socket() as probe:
+            probe.settimeout(1.0)
+            if probe.connect_ex((host, port)) == 0:
+                return True
+        time.sleep(0.5)
+    return False

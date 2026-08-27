@@ -1,0 +1,184 @@
+; Kurukuru — Windows installer.
+;
+; Generated inputs come from tools/build_installer.py, which stages the frozen
+; backend, the built dashboard and the trimmed QEMU bundle and then invokes
+; ISCC with /DAppVersion and /DStageDir. Nothing here is written by hand at
+; release time.
+;
+; Two properties shape most of what follows:
+;
+;   * **Per-user, no elevation.** PrivilegesRequired=lowest installs to
+;     %LOCALAPPDATA%\Programs, writes its Start Menu entry and PATH change under
+;     HKCU, and never shows a UAC prompt. This is a tool that manages VMs for
+;     the signed-in user out of that user's home directory; installing it
+;     machine-wide would need elevation for no benefit and would put the state
+;     directory somewhere the user does not own.
+;
+;   * **Uninstall never deletes user data.** VM disks, imported images, volumes,
+;     boot media and the database live in the state directory, and they are the
+;     user's work. The uninstaller removes the program and offers removal of the
+;     data as a separate, clearly-labelled, default-off choice.
+
+#ifndef AppVersion
+  #define AppVersion "0.0.0-dev"
+#endif
+#ifndef StageDir
+  #define StageDir "..\..\..\build\stage"
+#endif
+
+#define AppName        "Kurukuru"
+#define AppTagline     "local cloud infrastructure"
+#define AppPublisher   "Paul Nwokolo"
+#define AppExeName     "kurukuru.exe"
+#define AppUrl         "https://github.com/Paul-Nwokolo/local-iaas"
+#define TaskName       "Kurukuru"
+
+[Setup]
+AppId={{7B3E2F14-9C5A-4D71-A2E6-5F8B1C0D4A93}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppVerName={#AppName} {#AppVersion}
+AppPublisher={#AppPublisher}
+AppSupportURL={#AppUrl}
+VersionInfoVersion={#AppVersion}
+
+; Per-user. No UAC prompt, and no write outside the user's own profile.
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+
+; %LOCALAPPDATA%\Programs\Kurukuru. Short on purpose: the frozen backend nests
+; dependency metadata several directories deep, and Windows' 260-character path
+; limit has broken this project's builds three times. A long install root moves
+; that failure from the build machine to the user's machine, where it presents
+; as an installer that fails partway through on a file nobody has heard of.
+DefaultDirName={autopf}\{#AppName}
+DisableDirPage=no
+DefaultGroupName={#AppName}
+DisableProgramGroupPage=yes
+
+OutputDir={#StageDir}\..\dist
+OutputBaseFilename=Kurukuru-{#AppVersion}-Setup
+Compression=lzma2/max
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+
+; Shown before installing. The SmartScreen warning is documented rather than
+; hidden — this build is unsigned, and a user who is surprised by that warning
+; is a user who should not trust the next thing that produces one.
+InfoBeforeFile={#StageDir}\BEFORE-INSTALL.txt
+LicenseFile={#StageDir}\LICENSE
+UninstallDisplayName={#AppName} {#AppVersion}
+UninstallDisplayIcon={app}\{#AppExeName}
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "startup"; Description: "Start {#AppName} when I sign in"; GroupDescription: "Startup"
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts"; Flags: unchecked
+
+[Files]
+; The frozen backend and the CLI, the built dashboard, and QEMU with the
+; manifest recording the SHA-256 of every file in it.
+Source: "{#StageDir}\dist\kurukuru\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StageDir}\dashboard\*";     DestDir: "{app}\dashboard"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#StageDir}\qemu\*";          DestDir: "{app}\qemu";      Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "startup-task.ps1";                 DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\LICENSE";              DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\NOTICE";               DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+Name: "{group}\{#AppName}";            Filename: "{app}\{#AppExeName}"; Parameters: "dashboard"; Comment: "{#AppName} — {#AppTagline}"
+Name: "{group}\{#AppName} console";    Filename: "{cmd}"; Parameters: "/K ""set PATH={app};%PATH%"""; Comment: "A prompt with {#AppName} on PATH"
+Name: "{autodesktop}\{#AppName}";      Filename: "{app}\{#AppExeName}"; Parameters: "dashboard"; Tasks: desktopicon
+
+[Registry]
+; kurukuru on PATH, per-user. HKCU because this is a per-user install; writing
+; the machine PATH would need elevation and would put the command on PATH for
+; users who never installed it.
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
+    ValueData: "{olddata};{app}"; Check: NeedsAddPath('{app}')
+
+[Run]
+; The backend runs as a **scheduled task at logon**, not as a Windows service.
+;
+; A service needs elevation to install, runs as LocalSystem or a service
+; account, and would therefore resolve ~/.kurukuru to somewhere other than the
+; signed-in user's home — silently changing what every path in the product means
+; and invalidating Phase 15's file-permission model. WHPX-accelerated VMs also
+; belong to an interactive session. A logon task runs as the user, needs no
+; elevation, survives sign-out and back in, and can be inspected or disabled in
+; Task Scheduler by somebody who does not trust it.
+;
+; Registered through PowerShell rather than schtasks.exe, and that is not a
+; style preference: `schtasks /Create /SC ONLOGON` fails with "Access is denied"
+; for a standard user, with or without /RU, because a logon trigger created that
+; way is treated as applying to any user. Register-ScheduledTask with the
+; trigger and the principal both scoped to the current user succeeds unelevated.
+; Measured — see startup-task.ps1, which is installed alongside so the
+; registration is readable rather than merely trusted.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe";     Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\startup-task.ps1"" -Install -ExePath ""{app}\{#AppExeName}""";     Tasks: startup; Flags: runhidden waituntilterminated; StatusMsg: "Registering the startup task..."
+
+; Open the dashboard, which is where the first-run setup form is. --wait because
+; the backend takes several seconds to become ready — almost all of it a QEMU
+; capability probe — and a browser opened into that gap shows a connection error
+; on a working install.
+Filename: "{app}\{#AppExeName}"; Parameters: "dashboard --wait";     Description: "Open the {#AppName} dashboard"; Flags: postinstall nowait skipifsilent
+
+[UninstallRun]
+; Remove the task before the files go, or Task Scheduler is left with an entry
+; pointing at an executable that no longer exists — which fails silently at
+; every logon and is exactly the kind of leftover nobody connects back to an
+; uninstall months later.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe";     Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\startup-task.ps1"" -Uninstall";     Flags: runhidden waituntilterminated; RunOnceId: "RemoveStartupTask"
+
+[Code]
+function NeedsAddPath(Param: string): Boolean;
+var
+  CurrentPath: string;
+begin
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', CurrentPath) then
+  begin
+    Result := True;
+    exit;
+  end;
+  { Semicolons either side so that a directory whose name merely *contains*
+    another entry is not mistaken for it. }
+  Result := Pos(';' + Lowercase(ExpandConstant(Param)) + ';',
+                ';' + Lowercase(CurrentPath) + ';') = 0;
+end;
+
+function StateDir(): string;
+begin
+  Result := ExpandConstant('{%USERPROFILE}') + '\.kurukuru';
+end;
+
+{ The uninstaller asks — once, explicitly, defaulting to NO — whether to remove
+  the state directory. It holds VM disks, imported images, volumes, boot media
+  and the database, which are the user's work and are frequently many
+  gigabytes. Deleting them silently because somebody uninstalled a program
+  would be destroying data they never agreed to lose. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Dir: string;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    Dir := StateDir();
+    if DirExists(Dir) then
+    begin
+      if MsgBox('Also delete your virtual machines and their data?' + #13#10#13#10 +
+                Dir + #13#10#13#10 +
+                'This holds every VM disk, imported image, volume, ISO and the ' +
+                'database. It cannot be undone.' + #13#10#13#10 +
+                'Choose No to keep it — reinstalling will pick it up again.',
+                mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+      begin
+        DelTree(Dir, True, True, True);
+      end;
+    end;
+  end;
+end;

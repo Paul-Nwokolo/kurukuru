@@ -219,6 +219,22 @@ export async function login(username: string, password: string): Promise<User> {
   return response.data
 }
 
+/**
+ * Create the owner account on a fresh install, and sign in as it.
+ *
+ * Only works while the install has no account: the backend answers 409 forever
+ * after it succeeds, and accepts the call only from a loopback peer. Both of
+ * those are the backend's to enforce — this is a form, not a trust boundary.
+ */
+export async function createFirstAccount(
+  username: string,
+  password: string,
+): Promise<User> {
+  const response = await http.post<User>('/auth/first-run', { username, password })
+  setCsrfToken(response.headers[CSRF_HEADER_LOWER] ?? null)
+  return response.data
+}
+
 export async function logout(): Promise<void> {
   // Deliberately not awaited for the outcome: whether the server accepted it or
   // the session had already expired, this client is signed out either way.

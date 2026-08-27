@@ -22,6 +22,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from kurukuru.product import (
     DATABASE_LEAF,
+    VERSION,
     ENV_PREFIX,
     PRODUCT_NAME,
     STATE_DIR,
@@ -74,7 +75,7 @@ class Settings(BaseSettings):
 
     # --- General ---
     app_name: str = PRODUCT_NAME
-    app_version: str = "0.1.0"
+    app_version: str = VERSION
     debug: bool = False
 
     # --- Database ---

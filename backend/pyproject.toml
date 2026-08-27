@@ -4,7 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kurukuru"
-version = "0.1.0"
+# Read from kurukuru/product.py, which is the one place the version is
+# written. Repeating it here is how a wheel comes to disagree with the
+# /health endpoint inside it.
+dynamic = ["version"]
 description = "Kurukuru — local cloud infrastructure: a single-host cloud platform over QEMU"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -56,6 +59,9 @@ build = ["pyinstaller==6.22.2"]
 # on, the state-dir migration that carries an existing install across it.
 [project.scripts]
 kurukuru = "kurukuru.cli.main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "kurukuru.product.VERSION" }
 
 [tool.setuptools.packages.find]
 include = ["kurukuru*"]

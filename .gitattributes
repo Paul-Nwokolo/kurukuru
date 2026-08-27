@@ -50,3 +50,10 @@ LICENSE      -text
 NOTICE       -text
 backend/LICENSE -text
 backend/NOTICE  -text
+
+# Windows PowerShell 5.1 decodes a .ps1 as the system ANSI codepage unless the
+# file has a UTF-8 BOM. Without one, an em-dash inside a string is mojibake, and
+# mojibake inside a quoted string is a parse error — which is how a working
+# installer came to fail at "registering the startup task" with a syntax error
+# on a line that looked fine.
+*.ps1 text eol=crlf working-tree-encoding=UTF-8

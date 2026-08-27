@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import { LogIn, ShieldCheck, Terminal } from 'lucide-react'
-import { apiErrorMessage, cliCommand, login, takeSignOutNotice } from '../api/client'
+import { LogIn, ShieldCheck } from 'lucide-react'
+import {
+  apiErrorMessage,
+  cliCommand,
+  createFirstAccount,
+  login,
+  takeSignOutNotice,
+} from '../api/client'
 import type { FirstRunStatus } from '../api/client'
 import { Button } from '../ui/Button'
 import { Field, Input } from '../ui/Field'
 import { Alert } from '../ui/Feedback'
 import { PRODUCT_NAME, PRODUCT_TAGLINE } from '../ui/product'
+
+/** Mirrors MIN_PASSWORD_LENGTH in backend/kurukuru/models.py, which is what
+ *  actually enforces it — this only makes the form say what is missing. */
+const MIN_PASSWORD_LENGTH = 12
 
 /**
  * The sign-in screen, and the only thing rendered when there is no session.
@@ -33,6 +43,7 @@ export function LoginScreen({
 }) {
   const [username, setUsername] = useState('owner')
   const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Read once, on mount, and cleared as it is read: whatever put us here is
@@ -42,12 +53,40 @@ export function LoginScreen({
 
   const reachable = status !== null
   const configured = status?.configured ?? null
+  // Checked here only to keep the button honest and say what is missing. The
+  // backend enforces the same minimum through the same validator, so this can
+  // never be the only thing standing between a short password and an account.
+  const tooShort = password.length < MIN_PASSWORD_LENGTH
+  const mismatched = confirm !== password
   const initCommand = cliCommand('auth init')
   const resetCommand = cliCommand('auth reset-password')
 
   useEffect(() => {
-    if (configured) passwordRef.current?.focus()
+    // Either screen puts the cursor where the typing starts: the password on
+    // a login, and the password on setup too, since the username is prefilled.
+    if (configured !== null) passwordRef.current?.focus()
   }, [configured])
+
+  async function createOwner() {
+    setBusy(true)
+    setError(null)
+    try {
+      await createFirstAccount(username.trim(), password)
+      setPassword('')
+      setConfirm('')
+      // The backend signs the new owner in, so there is no second step: going
+      // straight through is what stops it reading like the account was not
+      // created and then asking for the password typed ten seconds ago.
+      onSignedIn()
+    } catch (e) {
+      setError(apiErrorMessage(e))
+      setPassword('')
+      setConfirm('')
+      passwordRef.current?.focus()
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function submit() {
     setBusy(true)
@@ -80,7 +119,7 @@ export function LoginScreen({
           </p>
           <p className="text-sm text-text-muted">
             {configured === false
-              ? 'This install has no account yet.'
+              ? 'Create the owner account for this install.'
               : 'Sign in to manage your virtual machines.'}
           </p>
         </div>
@@ -94,29 +133,92 @@ export function LoginScreen({
           </Alert>
         )}
 
-        {/* No account: a password would be the wrong question entirely. */}
+        {/* No account yet: this is the setup form, not a login form. Asking for
+            a password here would be asking for a credential that cannot exist. */}
         {reachable && configured === false ? (
-          <div className="space-y-4 rounded-xl border border-border bg-surface p-5">
-            <div className="flex items-start gap-3">
-              <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" aria-hidden />
-              <div className="space-y-2 text-sm text-text-muted">
-                <p>
-                  Create the owner account on the machine running the backend:
-                </p>
-                <pre className="overflow-x-auto rounded-lg bg-bg px-3 py-2 font-mono text-xs text-text">
-                  {initCommand}
-                </pre>
-                <p>
-                  It is done on the host rather than here on purpose: a setup
-                  page reachable over the network would hand ownership of every
-                  VM to whoever opened it first.
-                </p>
-              </div>
-            </div>
-            <Button className="w-full" onClick={() => window.location.reload()}>
-              I have run it — reload
+          <form
+            className="space-y-4 rounded-xl border border-border bg-surface p-5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void createOwner()
+            }}
+          >
+            {error && <Alert tone="danger">{error}</Alert>}
+
+            <Field label="Username">
+              {({ id, describedBy }) => (
+                <Input
+                  id={id}
+                  aria-describedby={describedBy}
+                  value={username}
+                  autoComplete="username"
+                  onChange={(e) => setUsername(e.target.value)}
+                  disabled={busy}
+                />
+              )}
+            </Field>
+
+            <Field
+              label="Password"
+              help={`At least ${MIN_PASSWORD_LENGTH} characters. There are no character rules — length is what makes a password hard to guess.`}
+            >
+              {({ id, describedBy }) => (
+                <Input
+                  id={id}
+                  aria-describedby={describedBy}
+                  ref={passwordRef}
+                  type="password"
+                  value={password}
+                  autoComplete="new-password"
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={busy}
+                />
+              )}
+            </Field>
+
+            <Field label="Confirm password">
+              {({ id, describedBy }) => (
+                <Input
+                  id={id}
+                  aria-describedby={describedBy}
+                  type="password"
+                  value={confirm}
+                  autoComplete="new-password"
+                  onChange={(e) => setConfirm(e.target.value)}
+                  disabled={busy}
+                />
+              )}
+            </Field>
+
+            {password.length > 0 && tooShort && (
+              <p className="text-xs text-text-muted">
+                {MIN_PASSWORD_LENGTH - password.length} more character
+                {MIN_PASSWORD_LENGTH - password.length === 1 ? '' : 's'} needed.
+              </p>
+            )}
+            {confirm.length > 0 && mismatched && (
+              <p className="text-xs text-danger">The two passwords do not match.</p>
+            )}
+
+            <Button
+              type="submit"
+              intent="primary"
+              icon={LogIn}
+              className="w-full"
+              loading={busy}
+              disabled={busy || tooShort || mismatched || !confirm}
+            >
+              Create account
             </Button>
-          </div>
+
+            <p className="text-xs text-text-subtle">
+              This form works only from the machine running the backend, and
+              only until an account exists. Reaching it already means access to
+              this machine — which is the same thing running{' '}
+              {initCommand ? <code className="font-mono">{initCommand}</code> : 'the setup command'}{' '}
+              in a terminal would require.
+            </p>
+          </form>
         ) : (
           reachable && (
             <form

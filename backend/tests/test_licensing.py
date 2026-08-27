@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
+
 BACKEND = Path(__file__).resolve().parent.parent
 REPO = BACKEND.parent
 
@@ -121,3 +123,47 @@ def test_pyinstaller_is_a_declared_build_dependency():
     build = metadata["project"]["optional-dependencies"]["build"]
 
     assert any(dep.startswith("pyinstaller==") for dep in build), build
+
+
+# --------------------------------------------------------------------------- #
+# The version
+# --------------------------------------------------------------------------- #
+def test_the_version_has_exactly_one_definition():
+    """A version written twice eventually disagrees with itself, and the copy
+    people trust is whichever one is wrong.
+
+    ``pyproject.toml`` must declare it dynamic rather than repeating the number,
+    or a wheel can ship metadata that contradicts the ``/health`` endpoint
+    inside it.
+    """
+    metadata = tomllib.loads((BACKEND / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "version" not in metadata["project"], (
+        "pyproject.toml spells the version; it should be dynamic and read from "
+        "kurukuru.product.VERSION"
+    )
+    assert "version" in metadata["project"]["dynamic"]
+    assert metadata["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "kurukuru.product.VERSION"
+    }
+
+
+def test_every_surface_reports_the_same_version():
+    """The three places the brief asks for it: the API, the CLI, the package."""
+    from importlib.metadata import version as installed_version
+
+    from kurukuru.config import Settings
+    from kurukuru.product import VERSION
+
+    assert Settings().app_version == VERSION
+    assert installed_version("kurukuru") == VERSION
+
+
+def test_health_reports_the_version(anon_client):  # noqa: F811
+    """/health is the one route reachable without a credential, so it is what a
+    supervisor, an upgrade check or a bug report can actually read."""
+    from kurukuru.product import VERSION
+
+    body = anon_client.get("/health").json()
+
+    assert body["version"] == VERSION

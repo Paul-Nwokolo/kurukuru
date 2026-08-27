@@ -242,7 +242,14 @@ def health(
     debugging the wrong layer, so the engine's own view is reported here — one
     glance instead of a session with the logs.
     """
-    payload: dict[str, object] = {"status": "ok", "service": settings.app_name}
+    payload: dict[str, object] = {
+        "status": "ok",
+        "service": settings.app_name,
+        # Reported here because /health is the one route reachable without a
+        # credential, so it is what a supervisor, an upgrade check or a bug
+        # report can actually read. One definition, in kurukuru.product.
+        "version": settings.app_version,
+    }
     try:
         qemu = registry.get("qemu")
         engine_info = qemu.describe()

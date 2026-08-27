@@ -16,7 +16,7 @@ import { Button, IconButton } from '../ui/Button'
 import { Field, Input } from '../ui/Field'
 import { Alert, CopyButton, TimeAgo } from '../ui/Feedback'
 
-/** Mirrors MIN_PASSWORD_LENGTH in backend/app/models.py. The backend enforces
+/** Mirrors MIN_PASSWORD_LENGTH in backend/kurukuru/models.py. The backend enforces
  *  it; this only avoids making the user submit to find out. */
 const MIN_PASSWORD_LENGTH = 12
 

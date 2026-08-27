@@ -40,6 +40,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
+#: Written out rather than escaped inline, because this file is edited by
+#: scripts often enough that a collapsed escape has broken it twice.
+NEWLINE = chr(10)
+
 # --------------------------------------------------------------------------- #
 # 1. The path budget
 # --------------------------------------------------------------------------- #
@@ -389,7 +393,30 @@ def build_dashboard(out: Path) -> Path:
     npm = shutil.which("npm") or shutil.which("npm.cmd")
     if npm is None:
         raise BuildError("npm is not on PATH; the dashboard cannot be built.")
-    run([npm, "ci"], cwd=frontend)
+
+    # `npm ci` rather than `npm install`: a release build installs exactly what
+    # the lockfile pins, and resolves nothing. It deletes node_modules first,
+    # which is the point — and also the one way this stage fails for a reason
+    # that has nothing to do with the code.
+    try:
+        run([npm, "ci"], cwd=frontend)
+    except BuildError as exc:
+        raise BuildError(
+            f"{exc}\n"
+            f"\n"
+            f"If that mentions EPERM or 'operation not permitted' on a file "
+            f"under node_modules, something has it open. `npm ci` deletes the "
+            f"whole directory before reinstalling, so a running dev server is "
+            f"enough to stop it — the Vite dev server loads native modules from "
+            f"there and holds them for as long as it runs.\n"
+            f"\n"
+            f"Find it:\n"
+            f"    Get-NetTCPConnection -State Listen -LocalPort 5173\n"
+            f"then stop that process and build again. The dev server is not "
+            f"needed for a release build; the backend serves the built "
+            f"dashboard itself."
+        ) from exc
+
     run([npm, "run", "build"], cwd=frontend)
 
     dist = frontend / "dist"
@@ -452,6 +479,190 @@ def freeze_backend(out: Path, work: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- #
+# 5. The installer
+# --------------------------------------------------------------------------- #
+#: Where Inno Setup's compiler lands. Checked in order; the per-user location
+#: first, because ``winget install JRSoftware.InnoSetup`` puts it there and a
+#: build machine is not necessarily one where anybody has administrator rights.
+_ISCC_CANDIDATES = (
+    Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+    Path(os.environ.get("ProgramFiles(x86)", "")) / "Inno Setup 6" / "ISCC.exe",
+    Path(os.environ.get("ProgramFiles", "")) / "Inno Setup 6" / "ISCC.exe",
+)
+
+BEFORE_INSTALL = """{name} {version}
+
+WHAT THIS INSTALLS
+
+  * {name} itself, with its own Python runtime. You do not need Python.
+  * QEMU {qemu}, pinned and bundled. It is not installed system-wide and it
+    does not touch any QEMU you already have.
+  * A Start Menu entry, and optionally a startup task that runs {name} when
+    you sign in.
+
+Everything goes under your own user profile. No administrator rights are
+needed and none are requested.
+
+
+WINDOWS WILL WARN YOU ABOUT THIS INSTALLER
+
+This build is not code-signed, so Windows SmartScreen will show a blue
+"Windows protected your PC" dialog saying the publisher is unknown. That is
+expected. To continue, click "More info" and then "Run anyway".
+
+We would rather tell you this than have you meet it unexplained. A signing
+certificate is a purchase and a yearly renewal; until there is one, an
+unsigned build that says so honestly is better than pretending otherwise.
+
+
+YOUR DATA
+
+Your virtual machines, disks, images and database live in:
+
+    %USERPROFILE%\\.kurukuru
+
+Uninstalling does NOT delete that directory unless you explicitly ask it to.
+
+
+LICENCE
+
+{name} is Apache-2.0. The bundled QEMU is GPLv2 and is a separate program
+invoked as a subprocess; its licence text and the written offer of source are
+installed alongside it. See THIRD-PARTY-NOTICES.md.
+"""
+
+
+def find_iscc() -> Path | None:
+    """Inno Setup's command-line compiler, or None."""
+    for candidate in _ISCC_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    found = shutil.which("iscc") or shutil.which("ISCC")
+    return Path(found) if found else None
+
+
+def stage_legal_texts(out: Path, qemu_version: str) -> None:
+    """Put the licences and the pre-install notice where the installer wants them.
+
+    The notice names the SmartScreen warning explicitly. A user who is surprised
+    by that dialog is a user learning to click through security warnings, which
+    is a worse outcome than the warning itself — so it is described before it
+    appears, along with why it appears.
+    """
+    for name in ("LICENSE", "NOTICE", "THIRD-PARTY-NOTICES.md"):
+        source = REPO / name
+        if not source.is_file():
+            raise BuildError(f"{source} is missing; the installer must ship it.")
+        shutil.copyfile(source, out / name)
+
+    (out / "BEFORE-INSTALL.txt").write_text(
+        BEFORE_INSTALL.format(
+            name="Kurukuru", version=version(), qemu=qemu_version
+        ),
+        encoding="utf-8",
+    )
+
+
+def version() -> str:
+    """The one definition, read from the source rather than imported.
+
+    Importing ``kurukuru`` here would make the build depend on the backend being
+    installed into the interpreter running the build, which is exactly the kind
+    of "works on the author's machine" coupling this script exists to avoid.
+    """
+    import re
+
+    text = (REPO / "backend" / "kurukuru" / "product.py").read_text(encoding="utf-8")
+    match = re.search(r'^VERSION = "([^"]+)"', text, re.M)
+    if not match:
+        raise BuildError("Could not read VERSION from backend/kurukuru/product.py")
+    return match.group(1)
+
+
+def check_powershell_scripts() -> None:
+    """Refuse to build if a shipped .ps1 will not parse on the target.
+
+    Windows PowerShell 5.1 decodes a script as the system ANSI codepage unless
+    the file carries a UTF-8 BOM. Without one, every non-ASCII character becomes
+    mojibake -- and mojibake inside a quoted string is a *parse error*, not a
+    cosmetic problem.
+
+    That is exactly how a correct script shipped inside a correct installer and
+    then failed at "Registering the startup task..." with "The string is missing
+    the terminator", pointing at a line that looked fine in every editor. The
+    installer reported success; only the task was silently absent.
+
+    Both properties are checked, because either alone would have missed it: the
+    BOM, and that the parser actually accepts the file.
+    """
+    #: UTF-8 byte order mark, spelled as escapes rather than as the character
+    #: itself -- a literal BOM inside a bytes literal is not valid Python source,
+    #: and a file about encoding bugs should not contain one.
+    bom = b"\xef\xbb\xbf"
+
+    for script in sorted((REPO / "packaging").rglob("*.ps1")):
+        if not script.read_bytes().startswith(bom):
+            raise BuildError(
+                f"{script} has no UTF-8 BOM." + NEWLINE + NEWLINE
+                + "Windows PowerShell 5.1 will decode it as the system ANSI "
+                  "codepage, turning every non-ASCII character into mojibake. If "
+                  "any of them sit inside a quoted string the script fails to "
+                  "parse at run time, and the installer reports success anyway."
+                + NEWLINE + NEWLINE
+                + "Re-save it as UTF-8 with BOM."
+            )
+
+        command = (
+            "$errors = $null; "
+            "[System.Management.Automation.Language.Parser]::ParseFile("
+            f"'{script}', [ref]$null, [ref]$errors) | Out-Null; "
+            "if ($errors -and $errors.Count) { "
+            "Write-Output $errors[0].Message; exit 1 }"
+        )
+        probe = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, check=False,
+        )
+        if probe.returncode != 0:
+            detail = (probe.stdout or probe.stderr).strip()
+            raise BuildError(
+                f"{script} does not parse:" + NEWLINE + f"  {detail}"
+            )
+
+
+def build_installer(out: Path, qemu_version: str) -> Path:
+    """Compile the installer. Returns the produced .exe."""
+    iscc = find_iscc()
+    if iscc is None:
+        raise BuildError(
+            "Inno Setup's compiler (ISCC.exe) was not found.\n"
+            "\n"
+            "Install it and run this again:\n"
+            "    winget install --id JRSoftware.InnoSetup --exact\n"
+            "\n"
+            "It installs per-user by default, which is why no administrator "
+            "rights are needed to build."
+        )
+
+    check_powershell_scripts()
+    stage_legal_texts(out, qemu_version)
+    script = REPO / "packaging" / "windows" / "kurukuru.iss"
+    run(
+        [
+            str(iscc),
+            f"/DAppVersion={version()}",
+            f"/DStageDir={out}",
+            str(script),
+        ],
+        cwd=script.parent,
+    )
+    produced = sorted((out.parent / "dist").glob("Kurukuru-*-Setup.exe"))
+    if not produced:
+        raise BuildError(f"ISCC reported success but produced nothing in {out.parent / 'dist'}")
+    return produced[-1]
+
+
+# --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
@@ -472,13 +683,30 @@ def main(argv: list[str] | None = None) -> int:
         "--check-only", action="store_true",
         help="Run the pre-flight checks and stop. Fast, and safe to run anywhere.",
     )
+    parser.add_argument(
+        "--skip-installer", action="store_true",
+        help="Stage everything but do not compile the installer.",
+    )
     args = parser.parse_args(argv)
 
     try:
-        print("[1/5] Checking the build root")
+        print(f"Kurukuru {version()}")
+        print("[1/6] Checking the build root")
         check_build_root(args.build_root)
         print(f"      {args.build_root} — {len(str(args.build_root.resolve()))}"
               f"/{MAX_BUILD_ROOT} characters")
+        if not args.skip_installer and find_iscc() is None:
+            # Checked here rather than at the end, for the same reason the path
+            # is: discovering a missing compiler after freezing and hashing
+            # everything wastes the whole build.
+            raise BuildError(
+                "Inno Setup's compiler (ISCC.exe) was not found, and the "
+                "installer is the point of this script.\n"
+                "\n"
+                "    winget install --id JRSoftware.InnoSetup --exact\n"
+                "\n"
+                "or pass --skip-installer to stage the parts without it."
+            )
         if args.check_only:
             print("      --check-only, stopping here.")
             return 0
@@ -486,23 +714,31 @@ def main(argv: list[str] | None = None) -> int:
         out = args.build_root / "stage"
         out.mkdir(parents=True, exist_ok=True)
 
-        print("[2/5] Building the dashboard")
+        print("[2/6] Building the dashboard")
         if args.skip_dashboard:
             print("      skipped")
         else:
             print(f"      -> {build_dashboard(out)}")
 
-        print("[3/5] Freezing the backend")
+        print("[3/6] Freezing the backend")
         print(f"      -> {freeze_backend(out, args.build_root / 'work')}")
 
-        print("[4/5] Collecting QEMU")
+        print("[4/6] Collecting QEMU")
         manifest = collect_qemu(args.qemu, out / "qemu")
         print(f"      QEMU {manifest.qemu_version}, {len(manifest.files)} files hashed")
 
-        print("[5/5] Verifying the bundle against its manifest")
+        print("[5/6] Verifying the bundle against its manifest")
         print(f"      {verify_qemu(out / 'qemu')} files verified")
 
-        print(f"\nStaged at {out}")
+        if args.skip_installer:
+            print(f"\nStaged at {out} (installer skipped)")
+            return 0
+
+        print("[6/6] Compiling the installer")
+        installer = build_installer(out, manifest.qemu_version)
+        size = installer.stat().st_size
+        print(f"      -> {installer}  ({size / 1024 / 1024:.0f} MB)")
+        print(f"\n{installer}")
         return 0
     except BuildError as exc:
         print(f"\nBuild failed.\n\n{exc}\n", file=sys.stderr)

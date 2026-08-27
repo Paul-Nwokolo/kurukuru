@@ -58,6 +58,20 @@ ENV_PREFIX = "KURUKURU_"
 #: Distribution that ships the command.
 DISTRIBUTION_NAME = "kurukuru"
 
+#: The version, and the only place it is written down.
+#:
+#: Everything else derives from here: ``pyproject.toml`` reads it at build time
+#: through a setuptools dynamic version, ``Settings.app_version`` defaults to
+#: it, ``/health`` and ``kurukuru version`` report it, and the installer stamps
+#: it into its own metadata. A version spelled in two places is a version that
+#: eventually disagrees with itself, and the copy people will trust is whichever
+#: one is wrong.
+#:
+#: The *installed* distribution's metadata is still the authority at runtime
+#: when there is one — see ``cli_version()`` — because a wheel built from an
+#: older tree genuinely is that older version, whatever this file now says.
+VERSION = "0.1.0"
+
 #: Root of everything this tool keeps on disk, before ``~`` is expanded.
 #: :mod:`kurukuru.config` re-exports it as ``DEFAULT_STATE_DIR`` and roots every
 #: other path under it.
