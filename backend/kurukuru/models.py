@@ -1544,6 +1544,24 @@ class LoginRequest(SQLModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class FirstRunRequest(SQLModel):
+    """Body for POST /auth/first-run — creating the owner account.
+
+    Validates the password the same way every other path does, through
+    :func:`validate_password`, so the web setup form and ``auth init`` cannot
+    end up enforcing different rules. A minimum that applies in a terminal but
+    not in a browser would be no minimum.
+    """
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+    @field_validator("password")
+    @classmethod
+    def _check_password(cls, value: str) -> str:
+        return validate_password(value)
+
+
 class PasswordChange(SQLModel):
     """Body for POST /auth/password."""
 

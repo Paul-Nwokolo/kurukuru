@@ -123,3 +123,31 @@ def test_health_is_public_and_says_nothing_about_instances(anon_client):  # noqa
     serialised = str(body).lower()
     for leak in ("instance", "vm-", "192.168", "ssh_port"):
         assert leak not in serialised, f"/health leaked {leak!r} to an anonymous caller"
+
+
+def test_no_route_is_declared_twice_in_the_security_tables():
+    """A duplicate key is a silent replacement, not a second rule.
+
+    These tables are keyed by path, and Python takes the last literal — so
+    adding an entry for a path that already has one deletes the existing reason
+    without any error, and the surviving text may describe a different method.
+    It happened while adding POST /auth/first-run beside the GET.
+
+    Parsed from the source rather than read from the dict, because by the time
+    it is a dict the duplicate is already gone.
+    """
+    import ast
+    import pathlib
+
+    import kurukuru.security as security_module
+
+    tree = ast.parse(pathlib.Path(security_module.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        keys = [k.value for k in node.keys if isinstance(k, ast.Constant)]
+        duplicates = sorted({k for k in keys if keys.count(k) > 1})
+        assert not duplicates, (
+            f"declared more than once in kurukuru/security.py: {duplicates}. "
+            f"One path is one entry; describe every method it serves in it."
+        )

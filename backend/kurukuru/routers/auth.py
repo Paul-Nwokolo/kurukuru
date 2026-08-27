@@ -15,6 +15,7 @@ which has to say what it is or the user cannot act on it.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -23,8 +24,9 @@ from sqlmodel import select
 
 from kurukuru import auth
 from kurukuru.database import get_session
-from kurukuru.product import CLI_NAME, CREDENTIALS_REJECTED
+from kurukuru.product import CLI_NAME, CREDENTIALS_REJECTED, PRODUCT_NAME
 from kurukuru.models import (
+    FirstRunRequest,
     ApiToken,
     ApiTokenCreate,
     ApiTokenCreated,
@@ -91,6 +93,104 @@ def first_run_status(db: DbSession = Depends(get_session)) -> dict[str, object]:
         "configured": db.exec(select(User)).first() is not None,
         "cli_name": CLI_NAME,
     }
+
+
+#: Peers allowed to create the first account over HTTP. Loopback only, and
+#: that is the whole trust boundary — see :func:`_require_loopback`.
+_LOOPBACK_NETWORKS = (ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("::1/128"))
+
+
+def _require_loopback(request: Request) -> None:
+    """Refuse a first-run setup request that did not come from this machine.
+
+    Decision 47 put account creation on the host rather than over the API,
+    because an unauthenticated "create the owner" route reachable from the
+    network is a way to take an install over. Packaging did not weaken that
+    reasoning, but it did separate two things the original decision treated as
+    one: *host-local* and *in a terminal*.
+
+    A request from ``127.0.0.1`` is host-local by the same standard the terminal
+    is — reaching it already means code execution on this machine. So the
+    boundary is kept and the terminal requirement is dropped, which is what lets
+    somebody who installed from an installer reach a working dashboard without
+    being told to open a command prompt.
+
+    ``request.client.host`` is the *peer* address — the other end of the TCP
+    connection — not anything the caller can assert. A header could be forged;
+    this cannot. It is only trustworthy because this service binds loopback by
+    default and there is no proxy in front of it: behind a reverse proxy every
+    request appears to come from 127.0.0.1, which is exactly why this route
+    exists only until the first account is created.
+    """
+    peer = request.client.host if request.client else None
+    try:
+        address = ipaddress.ip_address(peer) if peer else None
+    except ValueError:
+        address = None
+    if address is None or not any(address in net for net in _LOOPBACK_NETWORKS):
+        logger.warning("Refused a first-run setup request from %s", peer)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "The first account can only be created from the machine running "
+                f"{PRODUCT_NAME}. Run '{CLI_NAME} auth init' there."
+            ),
+        )
+
+
+@router.post(
+    "/first-run",
+    response_model=UserRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create the owner account, once, from this machine",
+)
+def create_first_account(
+    payload: FirstRunRequest,
+    request: Request,
+    response: Response,
+    db: DbSession = Depends(get_session),
+) -> User:
+    """Create the owner account. Works only while there is no account at all.
+
+    **This route stops existing the moment it succeeds.** Not "requires
+    authentication afterwards" — it answers 409 for every subsequent call, so
+    there is no window in which it can add a second owner or overwrite the first
+    one's password. Changing a password is ``auth reset-password``, host-local
+    and deliberately louder.
+
+    Signs the new owner in on success, because the alternative is to create an
+    account and then present a login form for the password typed ten seconds
+    ago, which reads like the account was not created.
+    """
+    _require_loopback(request)
+
+    # Re-checked inside the same session that writes, so two concurrent setup
+    # requests cannot both find an empty table and both create an owner.
+    if db.exec(select(User)).first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This install already has an account. Sign in, or reset the "
+                f"password on the host with '{CLI_NAME} auth reset-password'."
+            ),
+        )
+
+    user = User(
+        username=payload.username,
+        password_hash=auth.hash_password(payload.password),
+        credential_version=1,
+        is_owner=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    logger.info("Owner account '%s' created from %s", user.username,
+                request.client.host if request.client else "?")
+
+    session, secret = auth.create_session(db, user)
+    _set_session_cookie(response, secret)
+    response.headers[auth.CSRF_HEADER] = session.csrf_token
+    return user
 
 
 @router.post("/login", response_model=UserRead, summary="Sign in")

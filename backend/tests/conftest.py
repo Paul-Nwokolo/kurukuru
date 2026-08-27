@@ -339,6 +339,12 @@ def api_client(app, **kwargs) -> "TestClient":
     from kurukuru.product import API_PREFIX
 
     base = kwargs.pop("base_url", "http://testserver")
+    # A loopback peer, because that is what the real service sees: it binds
+    # 127.0.0.1 and there is no proxy in front of it. Starlette's default peer
+    # is the string "testclient", which is not an address at all — so a route
+    # that checks where the request came from (POST /auth/first-run) would
+    # refuse every test for a reason no real caller could hit.
+    kwargs.setdefault("client", ("127.0.0.1", 50000))
     return TestClient(app, base_url=f"{base.rstrip('/')}{API_PREFIX}", **kwargs)
 
 

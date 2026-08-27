@@ -37,10 +37,20 @@ PUBLIC_ROUTES: dict[str, str] = {
         "nothing about the instances on it."
     ),
     "/auth/login": "you cannot authenticate to obtain authentication",
+    # One entry, two methods. This table is keyed by *path*, so a second entry
+    # for the same path is not a second rule — it silently replaces the first,
+    # and the reason recorded for GET would have been lost with it.
     "/auth/first-run": (
-        "lets the dashboard choose between a login form and setup instructions. "
-        "Reports only whether any account exists, which an install with none "
-        "cannot hide anyway."
+        "GET lets the dashboard choose between a login form and a setup form. "
+        "It reports only whether any account exists, which an install with none "
+        "cannot hide anyway.\n"
+        "POST creates the owner account, and only while there is no account to "
+        "authenticate as — it answers 409 forever after it succeeds, so there is "
+        "no window in which it can add a second owner or overwrite a password. "
+        "It is restricted to loopback peers by the route itself, which is the "
+        "same boundary `auth init` has: reaching 127.0.0.1 already means code "
+        "execution on this machine. That is what lets somebody who installed "
+        "from an installer reach a working dashboard without opening a terminal."
     ),
     "/{full_path:path}": (
         "the dashboard's own files. It has to be reachable unauthenticated for "
