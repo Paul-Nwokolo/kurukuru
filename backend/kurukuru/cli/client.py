@@ -27,7 +27,13 @@ from typing import Any
 import httpx
 
 from kurukuru.cli.errors import CliError, ExitCode
-from kurukuru.cli.naming import API_PREFIX, CLI_NAME, CSRF_HEADER, env_var
+from kurukuru.cli.naming import (
+    API_PREFIX,
+    CLI_NAME,
+    CREDENTIALS_REJECTED,
+    CSRF_HEADER,
+    env_var,
+)
 
 #: Reads and quick mutations. Generous enough for a loaded host, short enough
 #: that a wedged backend doesn't look like a hang.
@@ -93,6 +99,43 @@ def _detail(response: httpx.Response) -> str:
             if parts:
                 return "; ".join(parts)
     return f"HTTP {response.status_code}"
+
+
+def _unauthenticated(response: httpx.Response) -> CliError:
+    """The right sentence for a 401, decided by what the server actually said.
+
+    **There are two different 401s and they need opposite advice.**
+
+    A credential that was *absent or unrecognised* means "sign in" — the stored
+    token is missing, expired, or was revoked, and ``auth login`` fixes it.
+
+    A credential that was *presented and rejected* means the password is wrong,
+    and telling that user to run ``auth login`` sends them back to the command
+    that just refused them. That is a loop with no exit, and it is worse than an
+    unhelpful message because it reads like the tool did not notice.
+
+    The server already distinguishes them in its ``detail``; the CLI used to
+    discard that and print one message for both. So this reads it, and both the
+    generic request path and ``login`` come through here — one place decides,
+    and the two cannot drift.
+    """
+    if _detail(response).startswith(CREDENTIALS_REJECTED):
+        return CliError(
+            "Incorrect username or password.",
+            ExitCode.UNAUTHENTICATED,
+            hint=(
+                f"If you have forgotten it, reset it on the host with "
+                f"'{CLI_NAME} auth reset-password'."
+            ),
+        )
+    return CliError(
+        "Not authenticated.",
+        ExitCode.UNAUTHENTICATED,
+        hint=(
+            f"Run '{CLI_NAME} auth login'. If this install has no account "
+            f"yet, run '{CLI_NAME} auth init' on the machine hosting it."
+        ),
+    )
 
 
 class ApiClient:
@@ -185,14 +228,7 @@ class ApiClient:
             raise self._unreachable(exc) from exc
 
         if response.status_code == 401:
-            raise CliError(
-                "Not authenticated.",
-                ExitCode.UNAUTHENTICATED,
-                hint=(
-                    f"Run '{CLI_NAME} auth login'. If this install has no account "
-                    f"yet, run '{CLI_NAME} auth init' on the machine hosting it."
-                ),
-            )
+            raise _unauthenticated(response)
         if response.status_code >= 400:
             raise CliError(
                 _detail(response),
@@ -224,10 +260,9 @@ class ApiClient:
             json={"username": username, "password": password},
         )
         if response.status_code == 401:
-            raise CliError(
-                "Incorrect username or password.", ExitCode.UNAUTHENTICATED,
-                hint=f"Reset it on the host with '{CLI_NAME} auth reset-password'.",
-            )
+            # Same helper as every other 401, so the two can never drift into
+            # giving different advice for the same server answer.
+            raise _unauthenticated(response)
         if response.status_code == 429:
             raise CliError(_detail(response), ExitCode.CONFLICT,
                            hint="Too many attempts; wait and try again.")

@@ -24,6 +24,7 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 from kurukuru.product import (
     API_PREFIX,
     CLI_NAME,
+    CREDENTIALS_REJECTED,
     CSRF_HEADER,
     DISTRIBUTION_NAME,
     ENV_PREFIX,
@@ -34,6 +35,7 @@ from kurukuru.product import (
 __all__ = [
     "API_PREFIX",
     "CLI_NAME",
+    "CREDENTIALS_REJECTED",
     "CSRF_HEADER",
     "PRODUCT_NAME",
     "apply_legacy_env",

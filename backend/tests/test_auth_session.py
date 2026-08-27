@@ -336,3 +336,75 @@ def test_an_expired_session_is_rejected_and_cleaned_up(browser):
 
     with Session(browser.db_engine) as session:
         assert session.exec(select(SessionRow)).first() is None
+
+
+# --------------------------------------------------------------------------- #
+# Which 401 is it?
+# --------------------------------------------------------------------------- #
+def test_a_rejected_password_names_reset_password_not_login(anon_client):  # noqa: F811
+    """The advice must not send the user back to the command that just failed.
+
+    Two different things return 401. A credential that was *absent or
+    unrecognised* means "sign in", and `auth login` is the fix. A credential
+    that was *presented and rejected* means the password is wrong — and telling
+    that user to run `auth login` is a loop with no exit, which reads like the
+    tool did not notice they had just tried exactly that.
+    """
+    from kurukuru.cli.client import ApiClient
+    from kurukuru.cli.errors import CliError
+
+    with pytest.raises(CliError) as exc:
+        ApiClient("http://testserver", http=anon_client).login("owner", "wrong-password")
+
+    assert "Incorrect username or password" in exc.value.message
+    assert "reset-password" in (exc.value.hint or ""), exc.value.hint
+    assert "auth login" not in (exc.value.hint or ""), (
+        "the hint sends the user back to the command that just refused them"
+    )
+
+
+def test_an_unknown_user_gets_the_same_answer_as_a_wrong_password(anon_client):  # noqa: F811
+    """Whether an account exists is not something a failed login may reveal."""
+    from kurukuru.cli.client import ApiClient
+    from kurukuru.cli.errors import CliError
+
+    errors = []
+    for username in ("owner", "no-such-user"):
+        with pytest.raises(CliError) as exc:
+            ApiClient("http://testserver", http=anon_client).login(username, "wrong")
+        errors.append((exc.value.message, exc.value.hint))
+
+    assert errors[0] == errors[1]
+
+
+def test_a_missing_credential_still_says_sign_in(anon_client):  # noqa: F811
+    """The other half. Sending this user to reset-password would be wrong —
+    there is nothing wrong with their password; they have not presented one."""
+    from kurukuru.cli.client import ApiClient
+    from kurukuru.cli.errors import CliError
+
+    with pytest.raises(CliError) as exc:
+        ApiClient("http://testserver", http=anon_client, token="kurukuru_nonsense").request(
+            "GET", "/auth/whoami"
+        )
+
+    assert "Not authenticated" in exc.value.message
+    assert "auth login" in (exc.value.hint or "")
+    assert "reset-password" not in (exc.value.hint or "")
+
+
+def test_the_cli_and_the_api_agree_on_the_rejection_detail(anon_client):  # noqa: F811
+    """The CLI branches on the server's wording, so a drift silently reinstates
+    the loop: the generic branch would win and every rejected password would be
+    told to sign in again.
+
+    Asserted against the **response**, not the source. A source check passes as
+    soon as the constant is imported anywhere, whether or not it is what the
+    route actually returns.
+    """
+    from kurukuru.product import CREDENTIALS_REJECTED
+
+    response = _login(anon_client, password="wrong-password")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == CREDENTIALS_REJECTED

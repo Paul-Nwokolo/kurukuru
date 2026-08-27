@@ -944,7 +944,7 @@ export async function deleteProject(id: string): Promise<void> {
   await http.delete(`/projects/${id}`)
 }
 
-export interface IaasNetwork {
+export interface GuestNetwork {
   id: string
   name: string
   mode: 'user' | 'host_only' | 'bridged'
@@ -983,8 +983,8 @@ export interface PortForward {
   derived: boolean
 }
 
-export async function getNetworks(): Promise<IaasNetwork[]> {
-  const { data } = await http.get<IaasNetwork[]>('/networks')
+export async function getNetworks(): Promise<GuestNetwork[]> {
+  const { data } = await http.get<GuestNetwork[]>('/networks')
   return data
 }
 

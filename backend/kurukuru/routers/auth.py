@@ -23,7 +23,7 @@ from sqlmodel import select
 
 from kurukuru import auth
 from kurukuru.database import get_session
-from kurukuru.product import CLI_NAME
+from kurukuru.product import CLI_NAME, CREDENTIALS_REJECTED
 from kurukuru.models import (
     ApiToken,
     ApiTokenCreate,
@@ -121,7 +121,7 @@ def login(
         logger.info("Failed login for %r from %s", payload.username, client)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
+            detail=CREDENTIALS_REJECTED,
         )
 
     auth.throttle.record_success(payload.username, client)

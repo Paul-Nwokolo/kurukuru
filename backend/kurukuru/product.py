@@ -77,6 +77,16 @@ DATABASE_LEAF = "kurukuru.db"
 #: definition has to sit below both, which is here.
 CSRF_HEADER = "X-Kurukuru-CSRF"
 
+#: What the API answers when a credential was **presented and rejected**, as
+#: distinct from absent. Both are 401, and the difference decides what the user
+#: should be told to do next: an absent credential means "sign in", a rejected
+#: one means "that password is wrong" — and telling somebody whose password was
+#: just refused to go and sign in is a loop with no exit.
+#:
+#: Here rather than in ``kurukuru.auth`` for the same reason as CSRF_HEADER: the
+#: CLI has to recognise it and may not import the control plane.
+CREDENTIALS_REJECTED = "Incorrect username or password"
+
 #: Where the HTTP API is mounted. Everything the CLI and the dashboard call
 #: lives under it; nothing else does.
 #:

@@ -65,6 +65,23 @@ const RULES = [
     re: /\bLocal IaaS\b/,
     fix: "the product is no longer called this; import PRODUCT_NAME from src/ui/product.ts",
   },
+  {
+    // Added after `IAAS_CORS_ORIGINS` survived the Phase 16 rename in this
+    // app's own copy and shipped. It slipped through because every rule above
+    // is case-sensitive on the *lower*-case command name, and an environment
+    // variable is upper-case — so nothing here was ever looking at it.
+    what: 'the previous environment-variable prefix',
+    re: /\bIAAS_[A-Z0-9_]*/,
+    fix: 'environment variables are KURUKURU_-prefixed; check backend/kurukuru/config.py for the current name',
+  },
+  {
+    // The old product name in the casings the rules above miss — `IaasNetwork`,
+    // `IaaSClient`. Identifiers are not copy, but they are still the old name,
+    // and leaving them teaches the next reader a name that no longer exists.
+    what: 'the previous product name in an identifier',
+    re: /\bIaa[Ss]\b|\bIaa[Ss][A-Z]/,
+    fix: 'name it for what it is rather than for what the product used to be called',
+  },
 ]
 
 /**
