@@ -656,10 +656,17 @@ def build_installer(out: Path, qemu_version: str) -> Path:
         ],
         cwd=script.parent,
     )
-    produced = sorted((out.parent / "dist").glob("Kurukuru-*-Setup.exe"))
-    if not produced:
-        raise BuildError(f"ISCC reported success but produced nothing in {out.parent / 'dist'}")
-    return produced[-1]
+    # Named exactly, not "the newest thing matching the glob". The output
+    # directory accumulates every version ever built here, and picking the
+    # lexically-last one reported `Kurukuru-0.1.1-Setup.exe` after building
+    # 0.1.0 — a build that tells you it produced a different artefact than it
+    # did is worse than one that fails.
+    produced = out.parent / "dist" / f"Kurukuru-{version()}-Setup.exe"
+    if not produced.is_file():
+        raise BuildError(
+            f"ISCC reported success but {produced} is not there."
+        )
+    return produced
 
 
 # --------------------------------------------------------------------------- #
