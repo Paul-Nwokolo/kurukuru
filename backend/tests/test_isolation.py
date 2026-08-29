@@ -2,7 +2,7 @@
 Tests for the test harness itself.
 
 Two incidents motivated this file. Phase 10's ``POST /keypairs/generate`` ran
-real ``ssh-keygen`` into the developer's ``~/.local-iaas/keys`` because one
+real ``ssh-keygen`` into the developer's ``~/.kurukuru/keys`` because one
 fixture pinned the ISO directory and not the key directory. Phase 11's event
 writer put 130 rows into the real ``iaas.db`` because one of four test modules
 was never added to a hand-maintained list of modules to redirect. Both were
@@ -47,7 +47,7 @@ REAL_DB = REAL_DB_FILES[0]
 def test_every_module_that_holds_an_engine_got_the_test_one(tmp_path):
     """The assertion that would have caught the event-log leak.
 
-    ``from app.database import engine as db_engine`` binds a copy, so six
+    ``from kurukuru.database import engine as db_engine`` binds a copy, so six
     modules each hold their own reference. Five were redirected; the sixth was
     new. Nothing in the failing run said so — the tests passed, and the rows
     turned up in the real database.
@@ -101,8 +101,8 @@ def test_generating_a_keypair_writes_into_tmp_not_the_real_key_directory(tmp_pat
     This runs real ssh-keygen and really writes two files, which is exactly why
     it was able to litter a developer's home directory ten times over.
     """
-    from app.config import get_settings
-    from app.keypairs import generate_keypair
+    from kurukuru.config import get_settings
+    from kurukuru.keypairs import generate_keypair
 
     private, _ = generate_keypair("harness check", get_settings())
 
@@ -189,9 +189,9 @@ def test_an_engine_built_against_the_real_url_cannot_connect(tmp_path):
     that builds its own engine and forgets to point it somewhere safe."""
     from sqlmodel import Session, create_engine
 
-    from app.config import Settings
+    from kurukuru.config import Settings
 
-    # `resolved_database_url`, which is what app.database itself opens: the
+    # `resolved_database_url`, which is what kurukuru.database itself opens: the
     # configured URL still holds an unexpanded "~", and SQLAlchemy would take
     # that literally and miss the real file entirely.
     engine = create_engine(Settings().resolved_database_url)

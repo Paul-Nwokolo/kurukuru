@@ -1,9 +1,35 @@
 # tools
 
-Standalone diagnostics. Neither is imported by the backend, and neither is
-needed to run the orchestrator — but both exist because a specific mistake was
-made without them, and both are here rather than in a scratch directory so they
-cannot drift or be lost.
+Standalone diagnostics and the release build, none of them imported by the
+backend. The diagnostics exist because a specific mistake was made without
+them; the build script exists because a release has to be reproducible by
+somebody who is not its author. All of them live here rather than in a scratch
+directory so they cannot drift or be lost.
+
+## build_installer.py
+
+Produces the shipped artefacts from a clean checkout: the built dashboard, the
+frozen backend, and a trimmed QEMU bundle with a SHA-256 recorded for every
+file.
+
+```
+python tools/build_installer.py --check-only          # pre-flight, fast, safe
+python tools/build_installer.py --build-root C:/kk-build
+```
+
+Two of its checks are worth knowing about, because both guard failures that
+have already happened here:
+
+- **The build root is length-checked before anything is built.** Windows' 260
+  character limit has broken this project three times, and the symptom is
+  always an error naming a file in a dependency nobody was thinking about. The
+  refusal carries the arithmetic — how long, what the budget is, how far over —
+  because "use a shorter path" is not actionable on its own.
+- **Every bundled QEMU file is hashed at collection and re-verified before
+  packaging.** Upstream's Windows installer is signed with an expired
+  certificate, so the signature is treated as absent; the manifest pins *what
+  was tested* instead. It catches a changed byte, a truncation, a missing
+  licence text, and a file that appeared without being recorded.
 
 Run them with the backend virtualenv, which already has the one third-party
 dependency they use (`pycdlib`, declared in `backend/requirements.txt`):
@@ -37,7 +63,7 @@ components that cannot be signed (`etfsboot.com` is raw real-mode code with no P
 header) instead of skipping them, and verifies `boot.wim`'s integrity table.
 
 ```
-python tools/verify_media.py                              # every ISO in ~/.local-iaas/isos
+python tools/verify_media.py                              # every ISO in ~/.kurukuru/isos
 python tools/verify_media.py <iso> --no-hash              # one, skip the slow whole-ISO SHA256
 python tools/verify_media.py <iso> --firmware uefi        # judge the UEFI path instead
 ```
@@ -69,7 +95,7 @@ arm. It never emits a verdict — a human reads the distribution.
 
 ```
 python tools/ab_measure.py --runs 3 --cap 240 \
-    --iso ~/.local-iaas/isos/Windows10.iso \
+    --iso ~/.kurukuru/isos/Windows10.iso \
     --arm "novnc:" --arm "vnc:-vnc,127.0.0.1:30"
 ```
 

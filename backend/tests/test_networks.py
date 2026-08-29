@@ -23,7 +23,7 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session, select
 
-from app.models import Instance, InstanceStatus, Network, PortForward
+from kurukuru.models import Instance, InstanceStatus, Network, PortForward
 
 from tests.test_instances_api import client, iso_dir  # noqa: F401 - fixtures
 
@@ -225,7 +225,7 @@ def test_removing_a_forward_reaches_the_engine_and_drops_the_row(client):
 
 def test_a_forward_the_engine_refuses_is_not_recorded(client):
     """Otherwise the database would claim a forward that does not exist."""
-    from app.engines import ComputeEngineError
+    from kurukuru.engines import ComputeEngineError
 
     instance = _instance(client)
 

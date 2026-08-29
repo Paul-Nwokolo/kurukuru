@@ -18,8 +18,9 @@ import pytest
 from sqlalchemy import inspect
 from sqlmodel import Session, create_engine, select
 
-import app.database as db_module
-from app.models import BootSource, Instance, InstanceEvent, InstanceStatus, Project
+import kurukuru.database as db_module
+from kurukuru.models import BootSource, Instance, InstanceEvent, InstanceStatus, Project
+from kurukuru.product import DATABASE_LEAF
 
 # The `instances` table exactly as the pre-Phase-5 build created it: no engine
 # or runtime-port columns, and a UNIQUE index on name.
@@ -49,7 +50,7 @@ _LEGACY_ROW = (
 
 @pytest.fixture()
 def legacy_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """A database in the pre-migration shape, wired into app.database."""
+    """A database in the pre-migration shape, wired into kurukuru.database."""
     path = tmp_path / "legacy.db"
     conn = sqlite3.connect(path)
     conn.executescript(_LEGACY_SCHEMA)
@@ -348,14 +349,14 @@ def relocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     settings and an engine that agree, which is the only configuration under
     which it does anything at all.
     """
-    from app.config import Settings
+    from kurukuru.config import Settings
     from sqlalchemy import create_engine as sa_create_engine
 
     state = tmp_path / "state"
     legacy = tmp_path / "old" / "iaas.db"
     settings = Settings(state_dir=str(state))
     target = settings.database_path
-    assert target == state / "iaas.db"
+    assert target == state / DATABASE_LEAF
 
     monkeypatch.setattr(db_module, "_legacy_database_candidates", lambda: [legacy])
     engine = sa_create_engine(f"sqlite:///{target.as_posix()}")
@@ -443,7 +444,7 @@ def test_nothing_happens_when_the_database_was_configured_explicitly(
     starts, so no fixture can end up dragging a developer's real database into
     a ``tmp_path``.
     """
-    from app.config import Settings
+    from kurukuru.config import Settings
     from sqlalchemy import create_engine as sa_create_engine
 
     legacy = _make_db(tmp_path / "old" / "iaas.db", "untouched")
@@ -471,7 +472,7 @@ def test_nothing_happens_when_the_engine_points_somewhere_else(
     runs in. Moving a file for an engine that will never read it would be pure
     damage.
     """
-    from app.config import Settings
+    from kurukuru.config import Settings
     from sqlalchemy import create_engine as sa_create_engine
 
     legacy = _make_db(tmp_path / "old" / "iaas.db", "untouched")
@@ -502,7 +503,7 @@ def test_relocation_is_idempotent(relocation):
 
 
 def test_the_search_looks_where_the_old_default_actually_landed():
-    """``uvicorn app.main:app`` only resolves from ``backend/``, so that is
+    """``uvicorn kurukuru.main:app`` only resolves from ``backend/``, so that is
     where a CWD-relative database ended up. Anchored to this package rather
     than to the process CWD, so it is found from wherever you start today."""
     candidates = db_module._legacy_database_candidates()

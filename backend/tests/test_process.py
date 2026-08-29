@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from app.engines import process as process_module
-from app.engines.process import ProcessError, spawn_detached
+from kurukuru.engines import process as process_module
+from kurukuru.engines.process import ProcessError, spawn_detached
 
 # The module's own resolved constants, not signal.SIGKILL — Windows has no
 # SIGKILL, and these tests deliberately run everywhere.

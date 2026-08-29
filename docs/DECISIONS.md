@@ -2067,9 +2067,348 @@ authentication is a different mechanism from every other route's, silently
 depends on `SameSite` behaviour on a WebSocket upgrade, and gives a leaked URL
 nothing to expire. A ticket costs one request and is auditable.
 
+## 49. The rename is a data migration, and the guest username is not part of it
+
+**Context.** Phase 16 renamed the product to **Kurukuru** — Yoruba for
+fog/cloud. That moved the command (`iaas` → `kurukuru`), the environment prefix
+(`IAAS_` → `KURUKURU_`), the state directory (`~/.local-iaas` → `~/.kurukuru`)
+and the database filename (`iaas.db` → `kurukuru.db`). Every one of those has an
+existing install sitting on the old value.
+
+**The tree is not self-contained**, which is what makes this more than a
+directory rename. Three kinds of absolute path point *into* it:
+
+| Where | What |
+|---|---|
+| `qemu/instances/<name>/runtime.json` | `iso_path`, and each attached volume, replayed verbatim on every start |
+| database rows | `keypairs.private_key_path`, `volumes.path` |
+| **qcow2 headers** | an overlay's backing file, written *inside the image* as the absolute path it was created with |
+
+The third is the dangerous one. Nothing in the database or the runtime file
+mentions it, so a migration that rewrote only the first two would move the tree,
+present a completely healthy dashboard, and fail every VM built on a shared base
+image at launch with "Could not open backing file". It is repaired with
+`qemu-img rebase -u` — the *unsafe* form, which is the correct one here: the
+content did not change, only its path, so writing the header and touching
+nothing else is the whole job. The safe form would be hours of I/O to produce an
+identical file.
+
+**Decision.** `kurukuru/state_migration.py` runs before the first database
+connection, and is timid in the same shape as decision 26:
+
+- only on the default layout, and only when the engine about to be used is the
+  one pointing there — two conditions, because a *tree*-moving migration
+  guarded by one is a fixture away from relocating a developer's real install;
+- never onto a target that has contents;
+- a database backup first, through Phase 14's machinery;
+- the move is a `rename`, which either happens or does not — there is no
+  half-moved state to recover from;
+- a marker records what happened, and a second run is a no-op.
+
+**Running VMs refuse the whole thing, and the backend does not start.** Windows
+will not rename a directory containing an open file and a running QEMU holds its
+disk open (Phase 13). Starting anyway would open a fresh empty database at the
+new path while twenty gigabytes of the user's VMs sat untouched at the old one —
+decision 26's "indistinguishable from data loss", reintroduced by a rename. The
+error names each instance and its pid, and gives the one-variable escape hatch
+for stopping them cleanly.
+
+Liveness uses **both** the pid and its QMP port, the same tie-breaker
+`QemuEngine._liveness` uses. A live pid alone can be a recycled number, and
+refusing an upgrade because some unrelated program inherited an old pid is a
+failure the user can neither diagnose nor work around.
+
+**`IAAS_*` variables are honoured for one release, with a warning.** The three
+options were refuse, ignore and honour. Ignoring is the actively dangerous one:
+an operator who set `IAAS_STATE_DIR=D:ms` would find the backend pointed at
+`~/.kurukuru` reporting an install with no instances in it. Refusing is safe but
+turns an upgrade into an outage for the users who configured the tool most
+carefully. And `IAAS_STATE_DIR` in particular has to be read *before* the
+migration, because it is what says where this install actually lives. The shim
+runs in the CLI too — it resolves its token file from the environment directly
+and never touches `Settings`, so without it the two halves of one product would
+disagree about where the install is.
+
+**The wire identifiers moved too**, coherently on both sides: the cookie
+(`iaas_session` → `kurukuru_session`), the CSRF header (`X-IAAS-CSRF` →
+`X-Kurukuru-CSRF`), the API token prefix and the two `localStorage` keys. Each
+had a different cost and each was paid rather than deferred:
+
+- the cookie costs **one forced sign-in** on upgrade, and the old one is
+  actively cleared rather than left to expire beside the live one;
+- the token prefix is written at *issue* time only — presentation is checked by
+  hash — so a token issued as `iaas_…` keeps working until it is revoked;
+- the `localStorage` keys would have silently discarded a saved project
+  selection and theme, so their values are carried across once;
+- the CSRF header was spelled **twice**, in `kurukuru/auth.py` and in
+  `kurukuru/cli/client.py`, and renaming one of them broke the CLI's own login. It now
+  has one definition in `kurukuru/product.py`, which is the only module both the
+  control plane and its client are allowed to import.
+
+**The guest username stays `iaas`, deliberately.** `default_vm_user` is not a
+product string: it is an identity written into a guest's `/etc/passwd` at
+provision time, and the instance row does not record which name it got —
+`Instance.ssh_user` returns the *live setting*. Renaming it would rewrite the
+"Copy SSH" command of every existing instance into a username its guest has
+never heard of, failing as "Permission denied (publickey)" and looking like a
+broken key rather than a wrong user. Changing it is a two-step job: persist the
+user on the row, backfill existing rows with `iaas` (correct for all of them),
+and only then move the default. Until that is done, the rename stops at the
+host.
+
+**The mark appears with its descriptor.** There is a live Nintendo registration
+for "KURUKURU KURURIN" in Class 009, video game programs. A single-host
+hypervisor control plane is not in that category, but resembling one has a cost
+and no upside — so "Kurukuru — local cloud infrastructure" rather than the bare
+word, and the visual language stays plain: no pixel art, no retro-game styling,
+no spinning characters. `src/ui/product.ts` is the one file allowed to spell the
+brand, and `check-product-name.mjs` now enforces that as well as the command
+name. Extending the guard found `Local IaaS` living in *two* files while the
+script's own comment claimed it had exactly one home — the check only knew about
+the lower-case command name, so the display name had never been guarded at all.
+
+## 50. The API moved under `/api`, because the dashboard already owned those URLs
+
+**Context.** Packaging means one process on one port serving both the API and
+the dashboard. The dashboard has a client-side route per page, and the API had a
+route with the identical path *and method* for each one:
+
+| Path | The API meant | The dashboard meant |
+|---|---|---|
+| `/instances` | list instances | the Instances page |
+| `/images` | list images | the Images page |
+| `/isos` | list boot media | the ISOs page |
+| `/volumes` | list volumes | the Volumes page |
+| `/networks` | list networks | the Networks page |
+| `/keypairs` | list key pairs | the Key pairs page |
+| `/projects` | list projects | the Projects page |
+| `/settings` | system settings | the Settings page |
+
+Eight exact collisions, plus `/instances/{id}` — simultaneously a dashboard deep
+link and an API resource. On two origins none of this was visible. On one it is
+a direct conflict.
+
+**The only same-path resolution is content negotiation, and it is a trap.** A
+browser sends `Accept: text/html` and `fetch` sends `application/json`, so
+branching on the header appears to work. But `curl` sends `*/*`, and so does
+most tooling that was never told to care; each of those silently gets whichever
+side the branch prefers. A tool whose response depends on a header nobody sets
+deliberately is a tool that behaves differently in a terminal than in a browser,
+for reasons invisible in the URL.
+
+**Decision.** The API mounts under `API_PREFIX` (`/api`) and the dashboard keeps
+the readable paths. The dashboard's are the ones a person types, bookmarks and
+pastes into chat, and the brief's own requirement — that `/instances/{id}`
+resolve as a deep link — settles which side moves.
+
+One `APIRouter` collects everything and is mounted once, so there is a single
+place that decides where the API lives, and a test asserts that no route is
+registered outside it. The dashboard's catch-all is registered **last**;
+Starlette matches in registration order, and that ordering is the entire
+guarantee that an API route always wins.
+
+`kurukuru/dashboard.py` serves the built bundle with the two rules a
+single-page app needs, and one it is easy to miss:
+
+- hashed assets are cached `immutable` for a year — the content hash *is* the
+  cache key, so the name is never reused for different bytes;
+- `index.html` is never cached, because it names the current hashed bundles and
+  a cached copy pins the browser to the previous build's asset names, which
+  after an upgrade are the files that no longer exist;
+- an unmatched path **under the prefix** is a JSON 404 rather than the
+  dashboard. Handing HTML to a JSON client turns a typo in a URL into a parse
+  error one stack frame away from the mistake.
+
+**Consequences, and they are breaking.** Every API path moved. The CLI and the
+dashboard both append the prefix in one place each, so a user configures an
+*origin* and never a path — and an origin that already carries `/api` (what you
+get by copying out of the address bar after opening the docs) is tolerated
+rather than doubled. `tests/test_dashboard.py` re-derives both route sets from
+the frontend's own router and asserts they cannot overlap, plus a
+guards-the-guard test asserting the historical collision is still visible with
+the prefix stripped — otherwise the disjointness test would pass while proving
+nothing.
+
+The tables in `kurukuru/security.py` stay keyed **without** the prefix, through
+one shared normaliser. Keying them by the mount point would mean that moving it
+silently unprotects everything, since a path matching no key is simply not
+public. Stripping fails the other way.
+
+## 51. Loopback, an unfamiliar port, and CSRF confirmed rather than assumed
+
+**Context.** Part B had three smaller decisions attached, and one obligation:
+the brief asked whether making the dashboard same-origin lets the CSRF token
+retire.
+
+**It does not, and this was re-measured rather than reasoned about.** Decision
+45 turns on `SameSite` being computed from scheme and registrable domain, with
+port excluded — so a page on *any other local port* is same-site and the cookie
+travels. Same-origin packaging changes nothing about a different port. Measured
+in Chrome against the packaged build, signed in on `127.0.0.1:7842`, with a page
+served from `127.0.0.1:8099`:
+
+| From the other port | Result |
+|---|---|
+| `fetch()` with `credentials: include` | preflight `OPTIONS` → **400**; blocked by CORS before it was sent |
+| plain form POST (no preflight; CORS does not gate it) | **403** |
+| `document.cookie` on the backend's own origin | `""` — httpOnly holds |
+
+**403, not 401** — the cookie *was* sent and the CSRF token is what refused it.
+No project was created. Controls on the same run: no credential → 401, cookie
+without the header → 403, cookie with it → 201. The token is not defence in
+depth here; it is still the only thing standing there.
+
+**CORS ships empty.** Same-origin means there is no cross-origin request to
+permit, so the correct list is the empty one — and the measurement above shows
+it doing real work, refusing the preflight outright. Development is the
+exception and is stated explicitly rather than left as a default production
+inherits: the Vite dev server needs `KURUKURU_CORS_ORIGINS` set, which
+`backend/.env.example` carries commented for exactly that.
+
+**Loopback by default, and 7842 rather than 8000.** Everything served is either
+unauthenticated at the network layer or protected by a session cookie over plain
+HTTP — VM consoles, SSH forwards, the API — so a wildcard bind publishes all of
+it. `--host` is accepted and warns about precisely what was accepted.
+
+8000 is contended enough to be taken on a developer's own machine most of the
+time. But the number matters less than the handling, because **a fixed default
+cannot be guaranteed bindable on Windows at all**: the TCP dynamic port range
+starts at 1024 on a default install, and Hyper-V and WSL reserve blocks inside
+it that move across reboots. So a port with nothing listening on it can still
+refuse to bind, with `WSAEACCES` — which reads as "run me as administrator",
+which is wrong and does not help. `serve` probes the port first and distinguishes
+the two cases by name, giving the `netsh` command that lists the reserved ranges
+for the one where that is the answer.
+
+## 52. A build must not know its own origin
+
+**Context.** Part B made the backend serve the dashboard so the product is one
+process on one port. `client.ts` resolved the API's origin as:
+
+```js
+import.meta.env.VITE_API_URL?.replace(/\/$/, '') || window.location.origin
+```
+
+which reads as "prefer the configured origin, otherwise use this page's". It is
+not that. **Vite inlines `import.meta.env.VITE_API_URL` as a string literal at
+build time**, so once the variable is set on the build machine the literal is
+non-empty, the `||` is dead code, and the fallback can never run. The build
+machine's development `.env` is welded into the shipped artefact.
+
+**Observed.** A bundle built while `frontend/.env` said
+`VITE_API_URL=http://localhost:8000`, served from port 7842. The document and
+every asset loaded 200 — same origin, nothing unusual — and both XHRs went to
+`http://localhost:8000/api/...`, where nothing was listening. The dashboard
+rendered "Cannot reach the backend. Start it, then reload" while the backend
+answered `curl` on the very origin serving the page. The same path fetched from
+the page's own origin returned 200 with real data.
+
+The shape of the failure is worth recording, because it invites the wrong
+diagnosis: **documents and assets succeed while XHR fails** looks exactly like
+an extension blocking `xmlhttprequest` as a resource type. It was not. The
+requests were not being blocked; they were being sent somewhere else. Reading
+the request URL rather than the failure mode is what separates the two, and it
+took one line of network log to settle what could have been an afternoon of
+disabling extensions.
+
+**Decision.** A build always talks to its own origin, and `VITE_API_URL` applies
+in development only:
+
+```js
+export const API_ORIGIN = import.meta.env.DEV
+  ? import.meta.env.VITE_API_URL?.replace(/\/$/, '') || window.location.origin
+  : window.location.origin
+```
+
+`import.meta.env.DEV` is statically replaced with `false` in a build, so the dev
+branch is eliminated and the variable never reaches the output.
+
+**Even a correct value would be wrong to bake in.** The backend serves the
+bundle, so the right origin is whatever the user reached it on — and they may
+change the port, use `127.0.0.1` rather than `localhost`, or come through a
+hostname or a proxy. Only `window.location.origin` is right in all of them.
+
+**A build-time guard, because this is invisible where it is produced.**
+`scripts/check-bundle-origin.mjs` fails when the built bundle contains a
+loopback origin or the string `VITE_API_URL`, runs in `npm run verify` *after*
+the build, and is also invoked by `tools/build_installer.py` so an automated
+release cannot skip it. It refuses to pass when `dist/` is missing, because a
+check that reports green with nothing to check is worse than no check. Axios's
+own non-browser fallback base is exempted by name with its reason, so the check
+does not cry wolf and get deleted.
+
+Extending it immediately found two more things that had shipped: the copy
+`"point VITE_API_URL at the one you meant"`, which names a build-time setting a
+user of an installed copy cannot act on, and `IAAS_CORS_ORIGINS` in the
+origin-refused remedy — the Phase 16 rename covered the backend, the tests and
+the docs, but never `frontend/src`.
+
+## 53. The installer is per-user, and the startup task is registered by API rather than by `schtasks`
+
+**Context.** Part C had to put a working dashboard in front of somebody who has
+never opened a terminal, without asking for administrator rights.
+
+**Inno Setup, per-user.** `PrivilegesRequired=lowest` installs to
+`%LOCALAPPDATA%\Programs`, writes the Start Menu entry and the `PATH` change
+under `HKCU`, and never prompts. WiX was rejected: a per-user MSI is possible
+but awkward, and its real advantage — Intune and Group Policy deployment — is
+not what a stranger downloading from GitHub needs. That would be a second
+installer, not a reason to start with the harder one.
+
+**The startup mechanism is not the one recommended, because the recommendation
+was wrong.** The plan said "a scheduled task at logon" and assumed `schtasks`
+could create one. It cannot, unelevated:
+
+| | |
+|---|---|
+| `schtasks /Create /SC ONLOGON` | **Access is denied** |
+| the same, plus `/RU <me>` | **Access is denied** |
+| `schtasks /Create /SC ONCE` | succeeds |
+| `Register-ScheduledTask -AtLogOn`, trigger and principal scoped to the current user | **succeeds** |
+
+A logon trigger created through `schtasks` is treated as applying to *any* user,
+which is an administrator's decision. Scoped explicitly to one user through the
+proper API, it is only ever asking to run something as the person asking. So the
+design survives and the tool changes: `startup-task.ps1`, installed alongside so
+the registration can be read rather than merely trusted.
+
+A Startup-folder shortcut would also have worked unelevated and was rejected: a
+console window at every sign-in, no restart-on-failure, and invisible in the
+place Windows users are told to look.
+
+**Uninstall keeps user data.** The state directory is frequently tens of
+gigabytes of VM disks. The uninstaller asks once, explicitly, defaulting to No.
+
+**Two bugs that only a real install could produce**, both invisible to every
+test that ran before it:
+
+- The `.ps1` was UTF-8 *without a BOM*, and Windows PowerShell 5.1 decodes a
+  script as the system ANSI codepage unless it has one. The em-dashes in its
+  prose became mojibake; mojibake inside a quoted string is a **parse error**.
+  The installer reported complete success and registered nothing. The build now
+  refuses to package a `.ps1` that lacks a BOM or that the parser rejects.
+- `find_dashboard` looked for the bundle beside the **package**, and a
+  PyInstaller onedir build puts the package two directories below the
+  executable while the installer puts the dashboard beside it. The installed
+  application served its entire API correctly and answered every dashboard URL
+  with `{"detail": "Not Found"}`. The development checkout never showed it,
+  because there `frontend/dist` is found instead.
+
+Both are the argument for the live verification existing at all: neither is
+reachable from a source tree.
+
+**Verified end to end.** Installed silently with no elevation; the task
+registered as the user at Limited run level and started the backend; a fresh
+state directory reported `configured: false` and the dashboard offered a setup
+form; an account was created and the route then answered 409; a VM launched and
+reached Running; and installing 0.1.1 over a running 0.1.0 preserved the
+account, the instance, every database row and the VM's disk, with the version
+moving in `/health` and the CLI together.
+
 ## Known limitations
 
-- **No license chosen.** Until one exists, the code is not usable by anyone else.
+- **The guest username is still `iaas`.** See decision 49; it needs a
+  per-instance column before it can move.
 - **No authorization.** Authentication exists (decisions 45-48); roles and
   project isolation do not. Every account is a full administrator.
 - **No transport encryption.** Plain HTTP, so anything beyond loopback needs

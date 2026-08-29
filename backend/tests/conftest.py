@@ -9,8 +9,8 @@ object and a database rooted in its own ``tmp_path``, applied by an autouse
 fixture that *discovers* which modules to redirect rather than naming them. The
 previous design was opt-in per module, and it failed twice in the way opt-in
 designs fail: Phase 10 wrote generated SSH keypairs into the developer's
-``~/.local-iaas/keys`` (ten orphans before anyone looked), and Phase 11 wrote
-130 event rows into the real ``iaas.db``, which surfaced as test instances named
+``~/.kurukuru/keys`` (ten orphans before anyone looked), and Phase 11 wrote
+130 event rows into the real database, which surfaced as test instances named
 ``web-one`` and ``doomed`` appearing in the live dashboard's activity feed.
 Neither was a bug in the code under test. Both were a new module that nobody
 remembered to add to a list.
@@ -20,7 +20,7 @@ none.** It is the backstop for what this file cannot prevent — a module
 imported after the fixture ran, a subprocess, an absolute path written by hand
 — and it works differently for the two things being protected:
 
-* The **database is prevented**. Opening the real ``iaas.db`` raises on the
+* The **database is prevented**. Opening the real database raises on the
   spot, with a traceback pointing at the line that did it.
 * The **state directories are detected**, fingerprinted before and after every
   test. There is no single call to intercept for "wrote a file somewhere", so
@@ -46,14 +46,23 @@ import pytest
 from sqlmodel import SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from app.config import DEFAULT_STATE_DIR, Settings, get_settings
-from app.host_capacity import invalidate_cache
+from kurukuru.config import DEFAULT_STATE_DIR, Settings, get_settings
+from kurukuru.product import LEGACY_STATE_DIR
+from kurukuru.host_capacity import invalidate_cache
 
 # --------------------------------------------------------------------------- #
 # What "the real machine" means, resolved once
 # --------------------------------------------------------------------------- #
 #: The state tree a developer's own install uses.
 REAL_STATE_DIR = Path(DEFAULT_STATE_DIR).expanduser()
+
+#: And the one Phase 16 renamed it from, which is still sitting there on any
+#: machine that has not been upgraded yet — including, until it runs, this one.
+#: Watched because the state-dir migration *moves whole directories*: a test
+#: that reached it would not leave a stray file behind, it would relocate the
+#: developer's entire install. The guards in ``migrate_state_dir`` are what
+#: prevent that; this is how we would find out if they stopped working.
+LEGACY_REAL_STATE_DIR = Path(LEGACY_STATE_DIR).expanduser()
 
 #: The live database. ``_REAL_DB`` is the path connections are refused to;
 #: the WAL sidecars are named alongside it because a write lands there first,
@@ -64,7 +73,7 @@ REAL_STATE_DIR = Path(DEFAULT_STATE_DIR).expanduser()
 #: default now lives under ``~``, and ``Path("~/...").resolve()`` produces a
 #: directory named ``~`` inside the CWD — a path nothing will ever open, which
 #: would have left the guard below matching nothing and reporting green.
-_REAL_DB = (Settings().database_path or Path("iaas.db")).resolve()
+_REAL_DB = (Settings().database_path or Path("kurukuru.db")).resolve()
 REAL_DB_FILES = (_REAL_DB, Path(f"{_REAL_DB}-wal"), Path(f"{_REAL_DB}-shm"))
 
 #: Names inside the state root that belong to the database and must be excluded
@@ -128,7 +137,12 @@ def _real_state_fingerprint() -> dict[str, object]:
     """
     return _fingerprint(
         (),
-        (REAL_STATE_DIR, REAL_STATE_DIR / "keys", REAL_STATE_DIR / "cloud-init"),
+        (
+            REAL_STATE_DIR,
+            REAL_STATE_DIR / "keys",
+            REAL_STATE_DIR / "cloud-init",
+            LEGACY_REAL_STATE_DIR,
+        ),
         ignore=_DB_SIDECAR_NAMES,
     )
 
@@ -184,7 +198,7 @@ def _describe_drift(before: dict, after: dict) -> str:
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "real_state: test may read or write the real ~/.local-iaas state and "
+        "real_state: test may read or write the real ~/.kurukuru state and "
         "database. Opts out of the isolation every other test gets by default.",
     )
 
@@ -193,10 +207,10 @@ def pytest_configure(config: pytest.Config) -> None:
 # Isolation
 # --------------------------------------------------------------------------- #
 def _app_modules_with(attribute: str):
-    """Every imported ``app.*`` module holding its own reference to something.
+    """Every imported ``kurukuru.*`` module holding its own reference to something.
 
-    ``from app.database import engine as db_engine`` binds a *copy* of the
-    name, so patching ``app.database.engine`` alone leaves every importer still
+    ``from kurukuru.database import engine as db_engine`` binds a *copy* of the
+    name, so patching ``kurukuru.database.engine`` alone leaves every importer still
     pointing at the real database. The same is true of ``get_settings``.
 
     Discovered rather than listed, which is the entire point of this file: a
@@ -208,7 +222,7 @@ def _app_modules_with(attribute: str):
     return [
         module
         for name, module in list(sys.modules.items())
-        if name == "app" or name.startswith("app.")
+        if name == "kurukuru" or name.startswith("kurukuru.")
         if module is not None and hasattr(module, attribute)
     ]
 
@@ -244,7 +258,7 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
         return
 
     state = tmp_path / "state"
-    database = tmp_path / "iaas.db"
+    database = tmp_path / "kurukuru.db"
 
     # The CLI reads its API token from a file resolved through the environment,
     # so without this a test run on a machine where somebody has signed in picks
@@ -252,7 +266,7 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
     # the test database has never heard of it. Same rule as the rest of this
     # fixture: a test must not be able to reach the state of the machine
     # running it, in either direction.
-    monkeypatch.setenv("IAAS_AUTH_TOKEN_FILE", str(tmp_path / "cli-token"))
+    monkeypatch.setenv("KURUKURU_AUTH_TOKEN_FILE", str(tmp_path / "cli-token"))
     settings = Settings(
         state_dir=str(state),
         database_url=f"sqlite:///{database.as_posix()}",
@@ -272,8 +286,8 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
     SQLModel.metadata.create_all(engine)
 
     get_settings.cache_clear()
-    monkeypatch.setattr("app.config.get_settings", lambda: settings)
-    monkeypatch.setattr("app.database.engine", engine)
+    monkeypatch.setattr("kurukuru.config.get_settings", lambda: settings)
+    monkeypatch.setattr("kurukuru.database.engine", engine)
     for module in _app_modules_with("get_settings"):
         monkeypatch.setattr(module, "get_settings", lambda: settings, raising=False)
     for module in _app_modules_with("db_engine"):
@@ -281,8 +295,8 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
 
     # The FastAPI dependency, for any test that drives TestClient without
     # overriding it — otherwise requests would still resolve the real session.
-    from app.database import get_session
-    from app.main import app as api_app
+    from kurukuru.database import get_session
+    from kurukuru.main import app as api_app
 
     def _session_override():
         from sqlmodel import Session
@@ -301,6 +315,55 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
             api_app.dependency_overrides.pop(get_session, None)
         engine.dispose()
         get_settings.cache_clear()
+
+
+# --------------------------------------------------------------------------- #
+# Talking to the API
+# --------------------------------------------------------------------------- #
+def api_client(app, **kwargs) -> "TestClient":
+    """A ``TestClient`` whose base URL already carries the API's prefix.
+
+    Every route now lives under ``API_PREFIX``, because the dashboard is served
+    from the same origin and its client-side routes were the same eight URLs as
+    the API's. Rather than rewrite several hundred call sites, the prefix goes
+    on the client's base URL — which is exactly what the real CLI and the real
+    dashboard do, so the tests exercise the same joining the product does.
+
+    The distinction matters for what a *wrong* path now returns: an unmatched
+    path outside the prefix is the dashboard's catch-all and answers 200 with
+    HTML, so a test that accidentally dropped the prefix would see a puzzling
+    success rather than a 404. Going through here is what stops that.
+    """
+    from fastapi.testclient import TestClient
+
+    from kurukuru.product import API_PREFIX
+
+    base = kwargs.pop("base_url", "http://testserver")
+    # A loopback peer, because that is what the real service sees: it binds
+    # 127.0.0.1 and there is no proxy in front of it. Starlette's default peer
+    # is the string "testclient", which is not an address at all — so a route
+    # that checks where the request came from (POST /auth/first-run) would
+    # refuse every test for a reason no real caller could hit.
+    kwargs.setdefault("client", ("127.0.0.1", 50000))
+    return TestClient(app, base_url=f"{base.rstrip('/')}{API_PREFIX}", **kwargs)
+
+
+def api_ws(path: str) -> str:
+    """A WebSocket path with the API prefix on it.
+
+    Separate from :func:`api_client` because Starlette's
+    ``TestClient.websocket_connect`` does **not** use the client's ``base_url``
+    — it joins against a hard-coded ``ws://testserver`` — so a WebSocket path
+    has to carry the prefix itself even on a client that already has one.
+
+    Worth knowing beyond the tests: the same asymmetry exists in the browser.
+    axios has a ``baseURL``; the ``WebSocket`` constructor has nothing of the
+    kind, so ``consoleWsUrl`` in the dashboard builds its URL from the prefix
+    explicitly too.
+    """
+    from kurukuru.product import API_PREFIX
+
+    return f"{API_PREFIX}{path}"
 
 
 # --------------------------------------------------------------------------- #
@@ -366,9 +429,9 @@ def small_host():
     vm = type("VM", (), {"total": 16384 * 1024**2, "available": 8192 * 1024**2})()
     invalidate_cache()
     with (
-        patch("app.host_capacity.psutil.cpu_count", return_value=8),
-        patch("app.host_capacity.psutil.virtual_memory", return_value=vm),
-        patch("app.host_capacity._disk_free_bytes",
+        patch("kurukuru.host_capacity.psutil.cpu_count", return_value=8),
+        patch("kurukuru.host_capacity.psutil.virtual_memory", return_value=vm),
+        patch("kurukuru.host_capacity._disk_free_bytes",
               return_value=(1000 * 1024**3, 500 * 1024**3)),
     ):
         yield
@@ -393,8 +456,8 @@ def authenticate_test_client(client, engine) -> str:
     """
     from sqlmodel import Session as _Session
 
-    from app import auth as _auth
-    from app.models import User as _User
+    from kurukuru import auth as _auth
+    from kurukuru.models import User as _User
 
     with _Session(engine) as session:
         user = _User(

@@ -17,9 +17,9 @@ from datetime import datetime, timezone
 import pytest
 from sqlmodel import Session, select
 
-from app.engines import ComputeEngineError, SnapshotInfo
-from app.engines.qemu import _parse_snapshot_list
-from app.models import Instance, InstanceStatus, Snapshot, SnapshotStatus
+from kurukuru.engines import ComputeEngineError, SnapshotInfo
+from kurukuru.engines.qemu import _parse_snapshot_list
+from kurukuru.models import Instance, InstanceStatus, Snapshot, SnapshotStatus
 
 from tests.test_instances_api import FakeQemuEngine, client, iso_dir  # noqa: F401
 
@@ -95,13 +95,13 @@ def snap_client(client):
     """The standard client, with a snapshot-capable engine behind it."""
     fake = SnapshottingFake()
     client.fake.__class__ = SnapshottingFake  # keep identity for other helpers
-    from app.engines import EngineRegistry
-    import app.engines as engines_module
+    from kurukuru.engines import EngineRegistry
+    import kurukuru.engines as engines_module
 
     registry = EngineRegistry({"qemu": lambda: fake})
     engines_module._registry = registry
-    from app.engines import get_engine_registry
-    from app.main import app as api_app
+    from kurukuru.engines import get_engine_registry
+    from kurukuru.main import app as api_app
 
     api_app.dependency_overrides[get_engine_registry] = lambda: registry
     client.fake = fake  # type: ignore[attr-defined]

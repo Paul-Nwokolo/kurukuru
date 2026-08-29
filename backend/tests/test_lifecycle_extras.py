@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import pytest
 from sqlmodel import Session, select
 
-from app.models import GuestOS, Instance, InstanceStatus
+from kurukuru.models import GuestOS, Instance, InstanceStatus
 
 from tests.test_instances_api import client, iso_dir  # noqa: F401 - fixtures
 
@@ -166,8 +166,8 @@ def test_a_clone_gets_its_own_ports_not_the_source_s(tmp_path):
     lives in ``_allocate_runtime``/``_reserved_ports``, so that is what is
     exercised.
     """
-    from app.config import Settings
-    from app.engines.qemu import QemuEngine
+    from kurukuru.config import Settings
+    from kurukuru.engines.qemu import QemuEngine
 
     engine = QemuEngine(Settings(state_dir=str(tmp_path)))
     source = engine._allocate_runtime("web-01", cpus=1, memory="1024")
@@ -245,7 +245,7 @@ def test_terminating_the_source_leaves_the_clone_alone(client):
 # URL image import
 # --------------------------------------------------------------------------- #
 def test_a_url_import_is_accepted_and_starts_importing(client, monkeypatch):
-    import app.routers.images as images_module
+    import kurukuru.routers.images as images_module
 
     captured = {}
 
@@ -254,7 +254,7 @@ def test_a_url_import_is_accepted_and_starts_importing(client, monkeypatch):
         captured["sha256"] = expected_sha256
         from pathlib import Path
 
-        from app.engines.images import base_images_dir
+        from kurukuru.engines.images import base_images_dir
 
         target = base_images_dir(settings) / filename
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -306,8 +306,8 @@ def test_fetch_rejects_a_declared_size_over_the_cap(tmp_path, monkeypatch):
     """A 40 GB image should be refused before a byte is written."""
     import httpx
 
-    from app.config import Settings
-    from app.image_store import ImageError, fetch_into_store
+    from kurukuru.config import Settings
+    from kurukuru.image_store import ImageError, fetch_into_store
 
     class _Response:
         headers = {"content-length": str(40 * 1024**3)}
@@ -338,9 +338,9 @@ def test_fetch_rejects_a_checksum_mismatch_and_leaves_nothing_behind(tmp_path, m
     """A corrupted or substituted download must not become launchable."""
     import httpx
 
-    from app.config import Settings
-    from app.engines.images import base_images_dir
-    from app.image_store import ImageError, fetch_into_store
+    from kurukuru.config import Settings
+    from kurukuru.engines.images import base_images_dir
+    from kurukuru.image_store import ImageError, fetch_into_store
 
     payload = b"not the image you asked for"
 
@@ -376,8 +376,8 @@ def test_fetch_rejects_a_checksum_mismatch_and_leaves_nothing_behind(tmp_path, m
 def test_fetch_accepts_a_matching_checksum(tmp_path, monkeypatch):
     import httpx
 
-    from app.config import Settings
-    from app.image_store import fetch_into_store
+    from kurukuru.config import Settings
+    from kurukuru.image_store import fetch_into_store
 
     payload = b"QFI\xfb" + b"\0" * 60
     digest = hashlib.sha256(payload).hexdigest()
@@ -419,7 +419,7 @@ def _read(**overrides):
     these assertions have to go through it — which is also the thing the
     dashboard actually receives.
     """
-    from app.models import Instance, InstanceRead, InstanceStatus
+    from kurukuru.models import Instance, InstanceRead, InstanceStatus
 
     base = dict(
         name="web", flavor="small", status=InstanceStatus.RUNNING,
@@ -451,7 +451,7 @@ def test_a_reachable_monitor_with_an_address_is_not_degraded():
 def test_a_stopped_instance_is_never_degraded_by_its_monitor():
     """monitor_reachable is cleared on stop, but even a stale False must not
     make a stopped instance look broken."""
-    from app.models import InstanceStatus
+    from kurukuru.models import InstanceStatus
 
     instance = _read(status=InstanceStatus.STOPPED, monitor_reachable=False)
 
@@ -487,9 +487,9 @@ def test_every_reconcilable_field_is_in_the_snapshot():
     `_apply_info` with an InstanceInfo that differs in one field at a time and
     asserts the snapshot notices.
     """
-    from app.engines.base import InstanceInfo
-    from app.models import Instance, InstanceStatus
-    from app.routers.instances import _apply_info, _row_snapshot
+    from kurukuru.engines.base import InstanceInfo
+    from kurukuru.models import Instance, InstanceStatus
+    from kurukuru.routers.instances import _apply_info, _row_snapshot
 
     # One differing value per field the engine reports.
     differing = {
@@ -532,8 +532,8 @@ def test_every_reconcilable_field_is_in_the_snapshot():
 
 def test_the_snapshot_and_its_field_names_stay_in_step():
     """They are one list now; this fails if someone splits them again."""
-    from app.models import Instance, InstanceStatus
-    from app.routers.instances import _SNAPSHOT_FIELDS, _row_snapshot
+    from kurukuru.models import Instance, InstanceStatus
+    from kurukuru.routers.instances import _SNAPSHOT_FIELDS, _row_snapshot
 
     instance = Instance(name="web", flavor="small", status=InstanceStatus.RUNNING)
 

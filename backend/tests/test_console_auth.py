@@ -23,10 +23,11 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session, select
 
-from app import auth
-from app.console import CLOSE_UNAUTHENTICATED
-from app.models import ConsoleTicket, Instance, InstanceStatus
+from kurukuru import auth
+from kurukuru.console import CLOSE_UNAUTHENTICATED
+from kurukuru.models import ConsoleTicket, Instance, InstanceStatus
 
+from tests.conftest import api_ws
 from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
 
 
@@ -57,7 +58,8 @@ def _connect(c, instance_id: str, ticket: str | None) -> tuple[bool, int | None,
     """
     from starlette.websockets import WebSocketDisconnect
 
-    url = f"/instances/{instance_id}/console"
+    # Explicitly prefixed: websocket_connect ignores the client base URL.
+    url = api_ws(f"/instances/{instance_id}/console")
     if ticket is not None:
         url += f"?ticket={ticket}"
     try:

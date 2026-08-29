@@ -2,13 +2,55 @@
  * Single source of truth for all backend HTTP access.
  *
  * Components never import axios directly — they call the typed functions
- * exported here. Base URL comes from VITE_API_URL (see .env.example),
- * defaulting to the local backend.
+ * exported here.
+ *
+ * **A build always talks to its own origin**, because the backend serves this
+ * bundle: one process, one port, no configuration, and it keeps working when
+ * the user changes the port. VITE_API_URL applies in development only, where
+ * Vite serves the dashboard and the API is genuinely somewhere else.
+ *
+ * Everything the API serves lives under API_PREFIX and nothing else does. The
+ * dashboard's own routes are the readable ones — `/images`, `/instances/:id` —
+ * and they used to be the same eight URLs as the API's. On two origins that was
+ * invisible; on one it is a conflict, so the API moved.
  */
 import axios, { AxiosError } from 'axios'
 
-export const API_URL =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, '') || 'http://localhost:8000'
+/** Where the API is mounted. Mirrors API_PREFIX in backend/kurukuru/product.py. */
+const API_PREFIX = '/api'
+
+/**
+ * Origin serving the API.
+ *
+ * **In a build this is always the page's own origin, and VITE_API_URL is not
+ * consulted at all.** That is not a preference, it is a correctness
+ * requirement, and getting it wrong shipped a broken dashboard once already.
+ *
+ * Vite inlines `import.meta.env.VITE_API_URL` as a *string literal at build
+ * time*. So `VITE_API_URL || window.location.origin` does not mean "prefer the
+ * configured origin, else fall back" — once the variable is set on the build
+ * machine, the literal is non-empty, the `||` is dead, and the fallback can
+ * never run. The build machine's development `.env` is welded into the shipped
+ * artefact. That is exactly what happened: a bundle built with
+ * `VITE_API_URL=http://localhost:8000` was served from port 7842, so its
+ * documents and assets loaded fine and every XHR went to a port with nothing
+ * on it.
+ *
+ * Even a *correct* value would be wrong to bake in. The backend serves this
+ * bundle, so the origin is whatever the user reached it on — and they may
+ * change the port, use `127.0.0.1` rather than `localhost`, or reach it over a
+ * hostname. Only the page's own origin is right in all of those.
+ *
+ * `import.meta.env.DEV` is statically replaced with `false` in a build, so the
+ * dev branch below is eliminated entirely and VITE_API_URL never appears in the
+ * output. `scripts/check-bundle-origin.mjs` asserts that.
+ */
+export const API_ORIGIN = import.meta.env.DEV
+  ? import.meta.env.VITE_API_URL?.replace(/\/$/, '') || window.location.origin
+  : window.location.origin
+
+/** Base every request is joined to. */
+export const API_URL = `${API_ORIGIN}${API_PREFIX}`
 
 // Default timeout for fast reads (health, list, flavors, create-202).
 const http = axios.create({
@@ -35,6 +77,19 @@ const http = axios.create({
  * local port POSTing to the API is answered 403 (cookie sent, CSRF refused),
  * not 401. See docs/SECURITY.md.
  */
+/**
+ * The CSRF header, spelled once.
+ *
+ * Sent on every unsafe request and read off the login response, so it appeared
+ * twice — and when the backend renamed it, only one of the two moved and login
+ * started failing its own CSRF check. HTTP header names are case-insensitive,
+ * but axios lower-cases response header keys, so the read below must use the
+ * lower-case form; keeping both derived from one constant is what stops them
+ * drifting again.
+ */
+export const CSRF_HEADER = 'X-Kurukuru-CSRF'
+const CSRF_HEADER_LOWER = CSRF_HEADER.toLowerCase()
+
 let csrfToken: string | null = null
 
 export function setCsrfToken(token: string | null): void {
@@ -49,7 +104,7 @@ const UNSAFE = new Set(['post', 'put', 'patch', 'delete'])
 
 http.interceptors.request.use((config) => {
   if (csrfToken && UNSAFE.has((config.method ?? 'get').toLowerCase())) {
-    config.headers.set('X-IAAS-CSRF', csrfToken)
+    config.headers.set(CSRF_HEADER, csrfToken)
   }
   return config
 })
@@ -160,7 +215,23 @@ export async function login(username: string, password: string): Promise<User> {
   const response = await http.post<User>('/auth/login', { username, password })
   // The CSRF token comes back in a header rather than a cookie, so that the
   // browser cannot replay it on its own.
-  setCsrfToken(response.headers['x-iaas-csrf'] ?? null)
+  setCsrfToken(response.headers[CSRF_HEADER_LOWER] ?? null)
+  return response.data
+}
+
+/**
+ * Create the owner account on a fresh install, and sign in as it.
+ *
+ * Only works while the install has no account: the backend answers 409 forever
+ * after it succeeds, and accepts the call only from a loopback peer. Both of
+ * those are the backend's to enforce — this is a form, not a trust boundary.
+ */
+export async function createFirstAccount(
+  username: string,
+  password: string,
+): Promise<User> {
+  const response = await http.post<User>('/auth/first-run', { username, password })
+  setCsrfToken(response.headers[CSRF_HEADER_LOWER] ?? null)
   return response.data
 }
 
@@ -186,7 +257,7 @@ export async function refreshCsrfToken(): Promise<string> {
   return data.csrf_token
 }
 
-/** A command as the user should type it, e.g. `iaas auth login`. Null when the
+/** A command as the user should type it, e.g. `kurukuru auth login`. Null when the
  *  backend has not been asked yet — callers omit the sentence rather than
  *  invent a name. */
 export function cliCommand(rest: string): string | null {
@@ -435,13 +506,16 @@ export async function getInstance(id: string): Promise<Instance> {
 /**
  * WebSocket URL for an instance's VNC console.
  *
- * In dev the Vite server proxies this exact path to the backend, so the socket
- * is opened same-origin and never becomes a cross-origin upgrade. In a build,
- * it is derived from the configured API base.
+ * Built from API_ORIGIN, which is this page's own origin unless VITE_API_URL
+ * overrides it — so in a packaged install the socket is same-origin, and in dev
+ * it points at wherever the backend actually is. The dev server proxies this
+ * exact path, so the DEV branch this used to carry is no longer a difference.
  */
 export function consoleWsUrl(instanceId: string, ticket: string): string {
-  const base = import.meta.env.DEV ? window.location.origin : API_URL
-  const url = new URL(`/instances/${encodeURIComponent(instanceId)}/console`, base)
+  const url = new URL(
+    `${API_PREFIX}/instances/${encodeURIComponent(instanceId)}/console`,
+    API_ORIGIN,
+  )
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   // The browser WebSocket API cannot set request headers, so the credential
   // has to travel in the URL. That is exactly why it is a ticket rather than
@@ -454,7 +528,7 @@ export function consoleWsUrl(instanceId: string, ticket: string): string {
 
 /**
  * Close codes the console endpoint uses to explain a refusal (RFC 6455 reserves
- * 4000-4999 for applications). Mirrors backend/app/console.py.
+ * 4000-4999 for applications). Mirrors backend/kurukuru/console.py.
  */
 export const CONSOLE_CLOSE = {
   UNAUTHENTICATED: 4401,
@@ -526,7 +600,7 @@ export interface SettingEntry {
   key: string
   label: string
   value: string | number | boolean | null
-  /** The IAAS_ environment variable to set. Restart required. */
+  /** The KURUKURU_ environment variable to set. Restart required. */
   env: string
   /**
    * Presentation hint. `path` gets the app's one path treatment — mono,
@@ -547,7 +621,7 @@ export async function getSettings(): Promise<SettingGroup[]> {
   return data.groups
 }
 
-/** Host-side facts: what `iaas doctor` reads. */
+/** Host-side facts: what the CLI's `doctor` command reads. */
 /**
  * A named guest port offered as one click instead of two numbers.
  *
@@ -886,7 +960,7 @@ export async function deleteProject(id: string): Promise<void> {
   await http.delete(`/projects/${id}`)
 }
 
-export interface IaasNetwork {
+export interface GuestNetwork {
   id: string
   name: string
   mode: 'user' | 'host_only' | 'bridged'
@@ -925,8 +999,8 @@ export interface PortForward {
   derived: boolean
 }
 
-export async function getNetworks(): Promise<IaasNetwork[]> {
-  const { data } = await http.get<IaasNetwork[]>('/networks')
+export async function getNetworks(): Promise<GuestNetwork[]> {
+  const { data } = await http.get<GuestNetwork[]>('/networks')
   return data
 }
 

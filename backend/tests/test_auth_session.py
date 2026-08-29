@@ -21,8 +21,8 @@ import pathlib
 
 import pytest
 
-from app import auth
-from app.models import ApiToken, Session as SessionRow, User
+from kurukuru import auth
+from kurukuru.models import ApiToken, Session as SessionRow, User
 from sqlmodel import Session, select
 
 from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
@@ -226,7 +226,7 @@ def test_a_revoked_token_is_still_listed(client):  # noqa: F811
 
 
 def test_a_made_up_token_is_rejected(anon_client):  # noqa: F811
-    anon_client.headers["Authorization"] = "Bearer iaas_not-a-real-token"
+    anon_client.headers["Authorization"] = "Bearer kurukuru_not-a-real-token"
 
     assert anon_client.get("/instances").status_code == 401
 
@@ -301,21 +301,21 @@ def test_first_run_tells_the_dashboard_what_the_command_is_called(anon_client): 
     naming the old command would break the one path that has no other way
     through. This is the field that stops the name being duplicated in TSX.
     """
-    from app.product import CLI_NAME
+    from kurukuru.product import CLI_NAME
 
     assert anon_client.get("/auth/first-run").json()["cli_name"] == CLI_NAME
 
 
 def test_the_cli_name_has_exactly_one_definition():
-    """``app.cli.naming`` re-exports it rather than holding a second copy.
+    """``kurukuru.cli.naming`` re-exports it rather than holding a second copy.
 
     The re-export exists so the hundred CLI modules that already import from
     ``naming`` keep working. If someone later "tidies" it back into a literal,
     the backend and the CLI can drift to different names without any test
     noticing — this is the one that notices.
     """
-    from app import product
-    from app.cli import naming
+    from kurukuru import product
+    from kurukuru.cli import naming
 
     assert naming.CLI_NAME is product.CLI_NAME
 
@@ -336,3 +336,75 @@ def test_an_expired_session_is_rejected_and_cleaned_up(browser):
 
     with Session(browser.db_engine) as session:
         assert session.exec(select(SessionRow)).first() is None
+
+
+# --------------------------------------------------------------------------- #
+# Which 401 is it?
+# --------------------------------------------------------------------------- #
+def test_a_rejected_password_names_reset_password_not_login(anon_client):  # noqa: F811
+    """The advice must not send the user back to the command that just failed.
+
+    Two different things return 401. A credential that was *absent or
+    unrecognised* means "sign in", and `auth login` is the fix. A credential
+    that was *presented and rejected* means the password is wrong — and telling
+    that user to run `auth login` is a loop with no exit, which reads like the
+    tool did not notice they had just tried exactly that.
+    """
+    from kurukuru.cli.client import ApiClient
+    from kurukuru.cli.errors import CliError
+
+    with pytest.raises(CliError) as exc:
+        ApiClient("http://testserver", http=anon_client).login("owner", "wrong-password")
+
+    assert "Incorrect username or password" in exc.value.message
+    assert "reset-password" in (exc.value.hint or ""), exc.value.hint
+    assert "auth login" not in (exc.value.hint or ""), (
+        "the hint sends the user back to the command that just refused them"
+    )
+
+
+def test_an_unknown_user_gets_the_same_answer_as_a_wrong_password(anon_client):  # noqa: F811
+    """Whether an account exists is not something a failed login may reveal."""
+    from kurukuru.cli.client import ApiClient
+    from kurukuru.cli.errors import CliError
+
+    errors = []
+    for username in ("owner", "no-such-user"):
+        with pytest.raises(CliError) as exc:
+            ApiClient("http://testserver", http=anon_client).login(username, "wrong")
+        errors.append((exc.value.message, exc.value.hint))
+
+    assert errors[0] == errors[1]
+
+
+def test_a_missing_credential_still_says_sign_in(anon_client):  # noqa: F811
+    """The other half. Sending this user to reset-password would be wrong —
+    there is nothing wrong with their password; they have not presented one."""
+    from kurukuru.cli.client import ApiClient
+    from kurukuru.cli.errors import CliError
+
+    with pytest.raises(CliError) as exc:
+        ApiClient("http://testserver", http=anon_client, token="kurukuru_nonsense").request(
+            "GET", "/auth/whoami"
+        )
+
+    assert "Not authenticated" in exc.value.message
+    assert "auth login" in (exc.value.hint or "")
+    assert "reset-password" not in (exc.value.hint or "")
+
+
+def test_the_cli_and_the_api_agree_on_the_rejection_detail(anon_client):  # noqa: F811
+    """The CLI branches on the server's wording, so a drift silently reinstates
+    the loop: the generic branch would win and every rejected password would be
+    told to sign in again.
+
+    Asserted against the **response**, not the source. A source check passes as
+    soon as the constant is imported anywhere, whether or not it is what the
+    route actually returns.
+    """
+    from kurukuru.product import CREDENTIALS_REJECTED
+
+    response = _login(anon_client, password="wrong-password")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == CREDENTIALS_REJECTED

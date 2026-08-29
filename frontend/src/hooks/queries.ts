@@ -569,7 +569,7 @@ export function useSettings() {
  *
  * For copy that has to name a real path or a real default rather than the
  * shipped one — the ISO directory and the guest username both move with
- * `IAAS_ISO_DIR` and `IAAS_DEFAULT_VM_USER`, and instructions naming the
+ * `KURUKURU_ISO_DIR` and `KURUKURU_DEFAULT_VM_USER`, and instructions naming the
  * default on an install that changed it send the user to the wrong place.
  */
 export function useSettingValue(key: string): string | null {

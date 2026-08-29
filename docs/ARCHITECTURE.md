@@ -3,19 +3,22 @@
 ## Layering
 
 ```
-React dashboard (Vite, TypeScript)      iaas CLI (Typer)   app/cli/
+React dashboard (Vite, TypeScript)      kurukuru CLI (Typer)   kurukuru/cli/
         │  HTTP + one WebSocket                 │  HTTP
+        │  everything under /api                │  everything under /api
         └──────────────────┬────────────────────┘
                            ▼
-FastAPI control plane          app/main.py, app/routers/
+FastAPI control plane          kurukuru/main.py, kurukuru/routers/
+        │  and it serves the dashboard itself, from the same port,
+        │  so a shipped install is one process   kurukuru/dashboard.py
         │
-        ├── SQLite (desired state)      app/models.py, app/database.py
+        ├── SQLite (desired state)      kurukuru/models.py, kurukuru/database.py
         │
         ▼
-ComputeEngine (ABC)            app/engines/base.py
+ComputeEngine (ABC)            kurukuru/engines/base.py
         │
         ▼
-QemuEngine                     app/engines/qemu.py
+QemuEngine                     kurukuru/engines/qemu.py
         │  subprocess + QMP over localhost TCP
         ▼
 qemu-system-x86_64 processes
@@ -25,7 +28,7 @@ Everything above `ComputeEngine` is hypervisor-agnostic. The routers, the
 models, the reconciler and the frontend do not know what a qcow2 file is.
 
 The CLI ships from the backend package (that is how `pip install -e backend`
-puts `iaas` on `PATH`) but is not part of the control plane: it imports no
+puts `kurukuru` on `PATH`) but is not part of the control plane: it imports no
 router, model, session or engine, and reaches the system only over HTTP. See
 [decision 11](DECISIONS.md) and [CLI.md](CLI.md).
 
@@ -33,7 +36,7 @@ router, model, session or engine, and reaches the system only over HTTP. See
 
 It is not speculative generality — it has already been exercised in both
 directions. A Multipass engine was added alongside QEMU in Phase 5 and retired
-in Phase 7. Retiring it meant deleting one module (`app/engines/multipass.py`)
+in Phase 7. Retiring it meant deleting one module (`kurukuru/engines/multipass.py`)
 and one entry in a factory dict. No router, model or reconciler code changed.
 
 That is the practical test of the abstraction, and it is why the registry and
@@ -43,20 +46,24 @@ the per-row `engine` column survive even though only one driver ships today.
 
 | Path | Responsibility |
 |---|---|
-| `app/main.py` | App wiring, lifespan, system endpoints (`/health`, `/diagnostics`, `/engines`, `/host/capacity`, `/flavors`, `/isos`, `/ssh-key`), background reconcile loop |
-| `app/routers/instances.py` | Instance lifecycle, sizing resolution and validation, the reconciler, the console WebSocket route |
-| `app/routers/images.py` | Image catalog and async import |
-| `app/models.py` | SQLModel tables and API schemas — one hierarchy serves both, so the DB and the API contract cannot drift |
-| `app/database.py` | Engine, WAL pragma, additive migrations |
-| `app/config.py` | `pydantic-settings`; every knob, `IAAS_`-prefixed |
-| `app/host_capacity.py` | psutil probes plus the allocatable arithmetic |
-| `app/console.py` | VNC↔WebSocket byte pump |
-| `app/cloud_init.py` | Renders the `#cloud-config` document |
-| `app/ssh_keys.py` | The orchestrator's single ed25519 keypair |
-| `app/image_store.py` | `qemu-img` probing, import copy, image paths |
-| `app/isos.py` | Boot-media listing and traversal-safe path resolution |
-| `app/engines/` | `base.py` (ABC), `qemu.py` (driver), `qmp.py`, `seed.py`, `images.py`, `ports.py`, `process.py` |
-| `app/cli/` | The `iaas` command. `main.py` (root app, error boundary), `client.py` (the only route to the system), `naming.py` (the command's name, in one place), `config.py`, `output.py`, `formats.py`, `support.py`, `commands_*.py` |
+| `kurukuru/main.py` | App wiring, lifespan, system endpoints (`/health`, `/diagnostics`, `/engines`, `/host/capacity`, `/flavors`, `/isos`, `/ssh-key`), background reconcile loop |
+| `kurukuru/routers/instances.py` | Instance lifecycle, sizing resolution and validation, the reconciler, the console WebSocket route |
+| `kurukuru/routers/images.py` | Image catalog and async import |
+| `kurukuru/models.py` | SQLModel tables and API schemas — one hierarchy serves both, so the DB and the API contract cannot drift |
+| `kurukuru/database.py` | Engine, WAL pragma, additive migrations, pre-migration backups |
+| `kurukuru/product.py` | The names — product, command, env prefix, state dir, database leaf — plus what each was called before Phase 16 and the `IAAS_*` env shim. No dependencies, so both the backend and the CLI import it downward |
+| `kurukuru/config.py` | `pydantic-settings`; every knob, `KURUKURU_`-prefixed |
+| `kurukuru/dashboard.py` | Serves the built frontend from the backend: one process, one port. SPA fallback so deep links resolve, hashed assets cached immutably, `index.html` never cached, and an unmatched path under `/api` answered as JSON rather than HTML |
+| `kurukuru/state_migration.py` | Moves a pre-Phase-16 `~/.local-iaas` to `~/.kurukuru` once: refuses while VMs run, backs the database up first, renames it, and repoints every persisted absolute path — runtime files, database columns, and qcow2 backing headers |
+| `kurukuru/host_capacity.py` | psutil probes plus the allocatable arithmetic |
+| `kurukuru/console.py` | VNC↔WebSocket byte pump |
+| `kurukuru/cloud_init.py` | Renders the `#cloud-config` document |
+| `kurukuru/ssh_keys.py` | The orchestrator's single ed25519 keypair |
+| `kurukuru/image_store.py` | `qemu-img` probing, import copy, image paths |
+| `kurukuru/isos.py` | Boot-media listing and traversal-safe path resolution |
+| `kurukuru/engines/` | `base.py` (ABC), `qemu.py` (driver), `qmp.py`, `seed.py`, `images.py`, `ports.py`, `process.py` |
+| `kurukuru/cli/serve.py` | `kurukuru serve`. The one CLI module allowed to import the backend — it does not call it, it *is* it — with the loopback warning and the port-bind diagnosis |
+| `kurukuru/cli/` | The `kurukuru` command. `main.py` (root app, error boundary), `client.py` (the only route to the system), `naming.py` (re-exports the names from `kurukuru/product.py`), `config.py`, `output.py`, `formats.py`, `support.py`, `commands_*.py` |
 
 ## Instance state machine
 
@@ -117,7 +124,7 @@ latter would time out on a VM that is working perfectly.
 
 **Degraded** is not a stored status. It is derived in `InstanceRead`: `Running`,
 with `ssh_enabled`, without an address, for longer than
-`IAAS_DEGRADED_AFTER_SECONDS`. Console-only instances are excluded, because
+`KURUKURU_DEGRADED_AFTER_SECONDS`. Console-only instances are excluded, because
 having no address is how they are supposed to work.
 
 ## The reconciler
@@ -125,7 +132,7 @@ having no address is how they are supposed to work.
 The database is the *desired* state. The hypervisor is the truth. The reconciler
 folds the second into the first.
 
-It runs on a timer (`IAAS_RECONCILE_INTERVAL_SECONDS`, default 30s) and on
+It runs on a timer (`KURUKURU_RECONCILE_INTERVAL_SECONDS`, default 30s) and on
 demand via `POST /instances/refresh`. Without a recurring pass, anything missed
 in the single post-launch sample stuck permanently, and changes made outside the
 API never appeared at all.
@@ -218,7 +225,7 @@ client before looking at the VM.
 
 ### Per-instance directory
 
-Everything under `IAAS_QEMU_DIR` (default `~/.local-iaas/qemu/`):
+Everything under `KURUKURU_QEMU_DIR` (default `~/.kurukuru/qemu/`):
 
 ```
 base-images/
@@ -260,7 +267,7 @@ points guests at real resolvers.
 
 ### Control
 
-Each VM gets a QMP socket on loopback. `app/engines/qmp.py` is a ~120-line
+Each VM gets a QMP socket on loopback. `kurukuru/engines/qmp.py` is a ~120-line
 blocking JSON-over-TCP client — hand-rolled rather than using the asyncio-first
 `qemu.qmp` package, because every caller lives in a synchronous background task.
 It supports the three commands the lifecycle needs: `query-status`,
@@ -278,7 +285,7 @@ closed std handles) so they survive a `uvicorn --reload` restart. QEMU's
 
 `os.kill(pid, 0)` is **not** a liveness probe on Windows — CPython maps it onto
 `TerminateProcess` for every signal but two, so the POSIX idiom would kill the VM
-it was asked about. `app/engines/process.py` uses `OpenProcess` +
+it was asked about. `kurukuru/engines/process.py` uses `OpenProcess` +
 `GetExitCodeProcess` instead.
 
 ### Ports
@@ -313,13 +320,13 @@ VNC is bound to loopback, so this proxy is the only route to a VM's framebuffer.
 
 The practical proof the abstraction is real. To add, say, a Hyper-V driver:
 
-1. Write `app/engines/hyperv.py` with a class implementing `ComputeEngine`
+1. Write `kurukuru/engines/hyperv.py` with a class implementing `ComputeEngine`
    (`is_available`, `provision_instance`, `start_instance`, `stop_instance`,
    `destroy_instance`, `get_instance_info`, `list_instances`, and optionally
    `describe`). Map the platform's native state vocabulary to `InstanceStatus`
    *inside* the driver — no native state names may leak out.
-2. Add one entry to `_FACTORIES` in `app/engines/__init__.py`.
-3. Add the name to `KNOWN_ENGINES` in `app/models.py`. An assertion at import
+2. Add one entry to `_FACTORIES` in `kurukuru/engines/__init__.py`.
+3. Add the name to `KNOWN_ENGINES` in `kurukuru/models.py`. An assertion at import
    time fails if the two disagree.
 
 That is the whole contract. Routers, reconciler, models and frontend need no

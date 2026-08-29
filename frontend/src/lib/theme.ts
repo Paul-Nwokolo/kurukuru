@@ -18,7 +18,31 @@ import { useCallback, useSyncExternalStore } from 'react'
  */
 export type ThemeChoice = 'dark' | 'light' | 'system'
 
-const STORAGE_KEY = 'iaas.theme'
+const STORAGE_KEY = 'kurukuru.theme'
+const LEGACY_STORAGE_KEY = 'iaas.theme'
+
+/**
+ * Move a value written under the pre-Phase-16 key, once.
+ *
+ * The key had to change with the product's name, but a key change is a *silent
+ * data loss* for anything stored under it: the setting does not fail, it simply
+ * reverts to a default and the user re-picks it wondering why. Carrying the
+ * value across costs four lines, so the old key is read, rewritten under the
+ * new one, and removed — after which this is a no-op forever.
+ */
+function migrateKey(from: string, to: string): void {
+  try {
+    const stored = window.localStorage.getItem(from)
+    if (stored !== null && window.localStorage.getItem(to) === null) {
+      window.localStorage.setItem(to, stored)
+    }
+    if (stored !== null) window.localStorage.removeItem(from)
+  } catch {
+    /* private mode, or storage disabled; nothing to carry across */
+  }
+}
+
+migrateKey(LEGACY_STORAGE_KEY, STORAGE_KEY)
 
 const query = () =>
   typeof window !== 'undefined' && window.matchMedia

@@ -22,7 +22,7 @@ suite plus live verification covers behaviour. See
 ## Talking to the backend
 
 `VITE_API_URL` (see `.env.example`) sets the API base, default
-`http://localhost:8000`. All HTTP access goes through `src/api/client.ts`;
+`http://localhost:7842`. All HTTP access goes through `src/api/client.ts`;
 components never import axios directly.
 
 The console WebSocket is the exception. In dev it is opened **same-origin** and

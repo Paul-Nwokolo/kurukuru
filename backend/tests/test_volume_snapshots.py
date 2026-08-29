@@ -33,9 +33,9 @@ def snap_client(vol_client):  # noqa: F811
     engine. Reuses the instance-snapshot fake rather than a parallel one, so a
     test can assert the two kinds are independent while both go through the
     same engine."""
-    import app.engines as engines_module
-    from app.engines import EngineRegistry, get_engine_registry
-    from app.main import app as api_app
+    import kurukuru.engines as engines_module
+    from kurukuru.engines import EngineRegistry, get_engine_registry
+    from kurukuru.main import app as api_app
 
     from tests.test_snapshots import SnapshottingFake
 

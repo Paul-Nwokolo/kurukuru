@@ -20,9 +20,9 @@ from datetime import timedelta
 import pytest
 from sqlmodel import Session, select
 
-import app.events as events_module
-from app.events import prune_events, record_event
-from app.models import (
+import kurukuru.events as events_module
+from kurukuru.events import prune_events, record_event
+from kurukuru.models import (
     EventActor,
     EventKind,
     Instance,
@@ -108,7 +108,7 @@ def test_force_terminate_is_a_different_kind_and_says_what_was_left_behind(clien
     """A forced terminate may leave a VM running. That has to be in the record."""
     instance = _launch(client)
 
-    from app.engines import ComputeEngineError
+    from kurukuru.engines import ComputeEngineError
 
     def _boom(name):  # noqa: ANN001
         raise ComputeEngineError("hypervisor wedged")
@@ -124,7 +124,7 @@ def test_force_terminate_is_a_different_kind_and_says_what_was_left_behind(clien
 
 def test_a_failed_launch_records_the_reason(client):
     """The reason is on the row too — but only until the next failure."""
-    from app.engines import ComputeEngineError
+    from kurukuru.engines import ComputeEngineError
 
     def _boom(**kwargs):  # noqa: ANN003
         raise ComputeEngineError("no disk space on the host")
@@ -140,7 +140,7 @@ def test_a_failed_launch_records_the_reason(client):
 def test_every_error_is_kept_not_just_the_most_recent(client):
     """``instances.error_message`` holds one message; the first is usually the
     one that explains the second."""
-    from app.engines import ComputeEngineError
+    from kurukuru.engines import ComputeEngineError
 
     instance = _launch(client)
     for message in ("first failure", "second failure"):
@@ -440,8 +440,8 @@ def test_a_change_this_process_is_making_is_left_alone(client):
     it as an unexplained correction nor write its own (possibly already stale)
     view over the top of it.
     """
-    from app.engines import get_engine_registry
-    from app.routers.instances import _api_operation, reconcile_all
+    from kurukuru.engines import get_engine_registry
+    from kurukuru.routers.instances import _api_operation, reconcile_all
 
     with Session(client.db_engine) as session:
         instance = Instance(name="racing", status=InstanceStatus.STOPPED)
@@ -470,8 +470,8 @@ def test_a_stop_landing_mid_pass_is_not_reverted(client):
     be started". Reproduced here by interleaving the two exactly as they raced
     live.
     """
-    from app.engines import get_engine_registry
-    from app.routers.instances import reconcile_all
+    from kurukuru.engines import get_engine_registry
+    from kurukuru.routers.instances import reconcile_all
 
     instance = _launch(client)  # Running, and the fake agrees
 
@@ -495,8 +495,8 @@ def test_a_stop_landing_mid_pass_is_not_reverted(client):
 
 def test_the_claim_is_released_and_the_next_change_is_reported(client):
     """The suppression lasts exactly as long as the operation does."""
-    from app.engines import get_engine_registry
-    from app.routers.instances import _api_operation, reconcile_all
+    from kurukuru.engines import get_engine_registry
+    from kurukuru.routers.instances import _api_operation, reconcile_all
 
     with Session(client.db_engine) as session:
         instance = Instance(name="racing-two", status=InstanceStatus.STOPPED)
@@ -524,7 +524,7 @@ def test_the_claim_is_released_and_the_next_change_is_reported(client):
 
 def test_a_claim_is_released_even_when_the_operation_raises(client):
     """A leaked claim would silence that instance's corrections forever."""
-    from app.routers.instances import _api_operation, _in_flight
+    from kurukuru.routers.instances import _api_operation, _in_flight
 
     with pytest.raises(RuntimeError):
         with _api_operation("some-id"):

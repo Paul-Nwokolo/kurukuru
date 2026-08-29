@@ -26,24 +26,25 @@ from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 from typer.testing import CliRunner
 
-import app.engines as engines_module
-from tests.conftest import authenticate_test_client, redirect_db_engines
-import app.events as events_module
-import app.routers.images as images_module
-import app.routers.instances as instances_module
-import app.routers.keypairs as keypairs_module
-from app.cli import support
-from app.cli.client import ApiClient, use_client
-from app.cli.commands_instances import _ssh_command
-from app.cli.errors import CliError, ExitCode
-from app.cli.formats import parse_disk_gb, parse_memory_mb
-from app.cli.main import app as cli_app
-from app.config import Settings, get_settings
-from app.database import get_session
-from app.engines import EngineRegistry, InstanceInfo, get_engine_registry
-from app.host_capacity import invalidate_cache
-from app.main import app as api_app
-from app.models import InstanceStatus
+import kurukuru.auth as auth
+import kurukuru.engines as engines_module
+from tests.conftest import api_client, authenticate_test_client, redirect_db_engines
+import kurukuru.events as events_module
+import kurukuru.routers.images as images_module
+import kurukuru.routers.instances as instances_module
+import kurukuru.routers.keypairs as keypairs_module
+from kurukuru.cli import support
+from kurukuru.cli.client import ApiClient, use_client
+from kurukuru.cli.commands_instances import _ssh_command
+from kurukuru.cli.errors import CliError, ExitCode
+from kurukuru.cli.formats import parse_disk_gb, parse_memory_mb
+from kurukuru.cli.main import app as cli_app
+from kurukuru.config import Settings, get_settings
+from kurukuru.database import get_session
+from kurukuru.engines import EngineRegistry, InstanceInfo, get_engine_registry
+from kurukuru.host_capacity import invalidate_cache
+from kurukuru.main import app as api_app
+from kurukuru.models import InstanceStatus
 from tests.test_instances_api import FakeQemuEngine
 
 runner = CliRunner()
@@ -71,7 +72,7 @@ class FailingEngine(FakeQemuEngine):
     """A hypervisor that refuses the launch, as a bad flag or a full disk would."""
 
     def provision_instance(self, name, cpus, memory, disk, cloud_init_path=None, options=None):
-        from app.engines import ComputeEngineError
+        from kurukuru.engines import ComputeEngineError
 
         raise ComputeEngineError("qemu-img: Could not create disk: No space left on device")
 
@@ -125,10 +126,10 @@ def make_cli(monkeypatch, tmp_path, small_host):
         # in milliseconds rather than seconds.
         monkeypatch.setattr(support, "POLL_SECONDS", 0.01)
         invalidate_cache()
-        http = TestClient(api_app)
+        http = api_client(api_app)
         http.app_engine = test_engine  # type: ignore[attr-defined]
         # The CLI talks to the API over this transport, so the credential
-        # goes on the transport. `iaas auth ...` has its own tests.
+        # goes on the transport. `kurukuru auth ...` has its own tests.
         authenticate_test_client(http, test_engine)
         return http, fake
 
@@ -171,7 +172,7 @@ def test_launch_without_wait_reports_the_accepted_record(cli):
 def test_launch_with_wait_reaches_running(cli):
     result = launch(cli)
     assert "Running" in result.stdout
-    assert "iaas ssh web-one" in result.stdout
+    assert "kurukuru ssh web-one" in result.stdout
 
 
 def test_ls_lists_the_instance(cli):
@@ -236,7 +237,7 @@ def test_isos_ls_on_an_empty_directory_explains_itself(cli):
     assert result.exit_code == 0
     assert "no boot media" in result.stdout
     # The remedy is placing files by hand; there is no upload endpoint.
-    assert "IAAS_ISO_DIR" in result.stderr
+    assert "KURUKURU_ISO_DIR" in result.stderr
 
 
 def test_images_ls_shows_the_builtin_catalog_entry(cli):
@@ -288,7 +289,7 @@ def test_version_reports_all_three(cli):
 def test_completion_prints_a_script_for_a_known_shell(cli):
     result = cli("completion", "bash")
     assert result.exit_code == 0
-    assert "_IAAS_COMPLETE" in result.stdout
+    assert "_KURUKURU_COMPLETE" in result.stdout
 
 
 def test_completion_rejects_an_unknown_shell(cli):
@@ -329,7 +330,7 @@ def test_unreachable_api_exits_three_without_a_traceback():
         )
     assert result.exit_code == ExitCode.UNREACHABLE
     assert "Cannot reach the API at http://127.0.0.1:9" in result.stderr
-    assert "iaas serve" in result.stderr
+    assert "kurukuru serve" in result.stderr
     assert "Traceback" not in result.output
     assert "httpx" not in result.output
 
@@ -430,7 +431,7 @@ def test_rm_refuses_to_prompt_when_stdout_is_not_a_terminal(cli):
 
 
 def test_no_color_env_disables_colour(monkeypatch):
-    from app.cli.config import color_disabled
+    from kurukuru.cli.config import color_disabled
 
     monkeypatch.delenv("NO_COLOR", raising=False)
     assert color_disabled() is False
@@ -466,7 +467,7 @@ def test_ssh_discards_host_keys_via_the_posix_null_device(cli):
     Win32 OpenSSH understands "/dev/null", so the POSIX spelling is the only
     one correct in all three environments. See NULL_DEVICE for the measurements.
     """
-    from app.cli.commands_instances import NULL_DEVICE
+    from kurukuru.cli.commands_instances import NULL_DEVICE
 
     launch(cli)
     with cli.http, use_client(cli.http):
@@ -494,7 +495,7 @@ def test_ssh_strict_keeps_openssh_defaults(cli):
 
 def test_ssh_refuses_console_only_instances_and_points_at_console(make_cli, tmp_path):
     """An ISO guest never receives a key, so ssh is refused with the way in."""
-    from app.cli.errors import CliError
+    from kurukuru.cli.errors import CliError
 
     iso_dir = tmp_path / "isos"
     iso_dir.mkdir(exist_ok=True)
@@ -516,7 +517,7 @@ def test_ssh_refuses_console_only_instances_and_points_at_console(make_cli, tmp_
             _ssh_command(api, instance)
 
     assert caught.value.code is ExitCode.CONFLICT
-    assert "iaas console installer" in (caught.value.hint or "")
+    assert "kurukuru console installer" in (caught.value.hint or "")
 
 
 def test_ssh_preflight_accepts_a_guest_that_sends_a_banner():
@@ -524,8 +525,8 @@ def test_ssh_preflight_accepts_a_guest_that_sends_a_banner():
     import socket
     import threading
 
-    from app.cli.commands_instances import wait_for_ssh_service
-    from app.cli.output import Output
+    from kurukuru.cli.commands_instances import wait_for_ssh_service
+    from kurukuru.cli.output import Output
 
     server = socket.socket()
     server.bind(("127.0.0.1", 0))
@@ -557,8 +558,8 @@ def test_ssh_preflight_rejects_a_port_that_answers_without_a_banner():
     import socket
     import threading
 
-    from app.cli.commands_instances import wait_for_ssh_service
-    from app.cli.output import Output
+    from kurukuru.cli.commands_instances import wait_for_ssh_service
+    from kurukuru.cli.output import Output
 
     server = socket.socket()
     server.bind(("127.0.0.1", 0))
@@ -595,7 +596,7 @@ def test_ssh_replaces_the_process_on_posix(monkeypatch):
     Ctrl-C, and report its own exit status instead of the remote command's.
     Buffers are flushed first because execvp never returns to do it.
     """
-    from app.cli import commands_instances as module
+    from kurukuru.cli import commands_instances as module
 
     flushed: list[str] = []
     execed: list[list[str]] = []
@@ -623,7 +624,7 @@ def test_ssh_replaces_the_process_on_posix(monkeypatch):
 @pytest.mark.skipif(sys.platform != "win32", reason="no execvp passthrough on Windows")
 def test_ssh_runs_a_child_and_propagates_its_status_on_windows(monkeypatch):
     """Windows has no execve that survives a shell, so the status is relayed."""
-    from app.cli import commands_instances as module
+    from kurukuru.cli import commands_instances as module
 
     class Completed:
         returncode = 42
@@ -696,7 +697,7 @@ def test_doctor_exits_three_when_the_api_is_unreachable():
         result = runner.invoke(cli_app, ["--api-url", "http://127.0.0.1:9", "doctor"])
     assert result.exit_code == ExitCode.UNREACHABLE
     assert "FAIL API" in result.stdout
-    assert "iaas serve" in result.stdout
+    assert "kurukuru serve" in result.stdout
 
 
 def test_doctor_json_is_a_list_of_checks(cli, monkeypatch):
@@ -732,22 +733,33 @@ def test_the_cli_never_reaches_past_the_api():
     *stronger* requirement — whoever has it can already read the orchestrator's
     SSH private key and every VM disk beside it (DECISIONS #47).
     """
-    exempt = {"host_admin.py"}
+    # Two files, each for a stated reason:
+    #
+    #   host_admin.py — creates the first account on the host, before any
+    #     credential exists to authenticate an API call with (decision 47).
+    #   serve.py      — does not call the backend, it *is* the backend, started
+    #     in this process. uvicorn binds the socket before the application
+    #     loads, so the bind address can never come from the application; the
+    #     launcher has to read the same configuration the backend will.
+    #
+    # Both are whole files rather than exempted lines, so the exception is
+    # visible in a directory listing rather than buried among client commands.
+    exempt = {"host_admin.py", "serve.py"}
     import ast
     from pathlib import Path
 
-    import app.cli as cli_package
+    import kurukuru.cli as cli_package
 
     forbidden = (
-        "app.models",
-        "app.database",
-        "app.engines",
-        "app.routers",
-        "app.host_capacity",
-        "app.image_store",
-        "app.isos",
-        "app.ssh_keys",
-        "app.config",
+        "kurukuru.models",
+        "kurukuru.database",
+        "kurukuru.engines",
+        "kurukuru.routers",
+        "kurukuru.host_capacity",
+        "kurukuru.image_store",
+        "kurukuru.isos",
+        "kurukuru.ssh_keys",
+        "kurukuru.config",
         "sqlmodel",
         "sqlalchemy",
     )
@@ -792,7 +804,7 @@ def test_disk_rounds_up_to_whole_gigabytes(value, expected):
 
 
 def test_a_size_that_is_not_a_size_is_a_usage_error():
-    from app.cli.errors import CliError
+    from kurukuru.cli.errors import CliError
 
     with pytest.raises(CliError) as caught:
         parse_memory_mb("plenty")
@@ -873,8 +885,8 @@ def test_a_terminated_instance_still_has_a_readable_history(cli):
 
 def test_the_cli_kind_list_matches_the_api_enum(cli):
     """Two copies of one vocabulary; this is what keeps them equal."""
-    from app.cli.commands_events import KNOWN_KINDS
-    from app.models import EventKind
+    from kurukuru.cli.commands_events import KNOWN_KINDS
+    from kurukuru.models import EventKind
 
     assert set(KNOWN_KINDS) == {k.value for k in EventKind}
 
@@ -918,7 +930,7 @@ def test_the_env_var_scopes_the_same_way(cli, monkeypatch):
     assert cli("--project", "client-a", "launch", "web-two", "--wait").exit_code == 0
     launch(cli, "web-one")
 
-    monkeypatch.setenv("IAAS_PROJECT", "client-a")
+    monkeypatch.setenv("KURUKURU_PROJECT", "client-a")
     scoped = json.loads(cli("ls", "--json").stdout)
 
     assert {i["name"] for i in scoped} == {"web-two"}
@@ -973,9 +985,9 @@ def vol_cli(cli, monkeypatch, tmp_path):
     """CLI harness whose volume creation writes a real (tiny) file."""
     from pathlib import Path
 
-    from app.config import Settings
-    from app.engines.qemu import QemuEngine
-    import app.routers.volumes as volumes_module
+    from kurukuru.config import Settings
+    from kurukuru.engines.qemu import QemuEngine
+    import kurukuru.routers.volumes as volumes_module
 
     def _fake_create(self, path, size_gb):  # noqa: ANN001
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -1117,7 +1129,7 @@ def test_a_colliding_forward_exits_invalid_with_the_reason(cli):
 
 
 # --------------------------------------------------------------------------- #
-# Volume snapshots — a separate command tree from `iaas snapshot`
+# Volume snapshots — a separate command tree from `kurukuru snapshot`
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
 def vol_snap_cli(vol_cli):
@@ -1199,7 +1211,7 @@ def test_an_unknown_volume_snapshot_exits_not_found(vol_snap_cli):
 
 
 # --------------------------------------------------------------------------- #
-# iaas auth — first run, sign in, tokens
+# kurukuru auth — first run, sign in, tokens
 # --------------------------------------------------------------------------- #
 @pytest.fixture()
 def auth_cli(cli, tmp_path, monkeypatch):
@@ -1209,14 +1221,14 @@ def auth_cli(cli, tmp_path, monkeypatch):
     these tests are about the credential the CLI resolves for itself, so the
     header is removed and the token file redirected somewhere disposable.
     """
-    from app.cli import auth_store
+    from kurukuru.cli import auth_store
 
     token_file = tmp_path / "cli-token"
     monkeypatch.setattr(auth_store, "token_path", lambda settings=None: token_file)
     # host_admin talks to the database directly (it is the one CLI module allowed
     # to). Point it at this test's engine, or `auth init` would read the real
-    # one — the developer's ~/.local-iaas/iaas.db — and answer from it.
-    import app.database as database_module
+    # one — the developer's ~/.kurukuru/kurukuru.db — and answer from it.
+    import kurukuru.database as database_module
 
     monkeypatch.setattr(database_module, "engine", cli.http.app_engine)  # type: ignore[attr-defined]
     monkeypatch.setattr(database_module, "init_db", lambda: None)
@@ -1231,7 +1243,7 @@ def _interactive(passwords):
 
     import typer as _typer
 
-    from app.cli.output import Output
+    from kurukuru.cli.output import Output
 
     values = list(passwords)
     return (
@@ -1269,7 +1281,7 @@ def test_the_stored_token_is_not_the_password(auth_cli):
 
     contents = auth_cli.token_file.read_text()
     assert "test-password-1234" not in contents
-    assert "iaas_" in contents
+    assert auth.TOKEN_PREFIX in contents
 
 
 def test_a_wrong_password_is_refused_generically(auth_cli):
@@ -1317,10 +1329,10 @@ def test_token_create_prints_the_secret_once(auth_cli):
     result = auth_cli("auth", "token", "create", "ci-runner")
 
     assert result.exit_code == 0
-    assert "iaas_" in result.output
+    assert auth.TOKEN_PREFIX in result.output
     # A second look never shows it again.
     listed = auth_cli("auth", "token", "ls")
-    assert "iaas_" in listed.output          # the prefix is shown
+    assert auth.TOKEN_PREFIX in listed.output   # the prefix is shown
     assert result.output.strip().splitlines()[0] not in listed.output
 
 
@@ -1348,19 +1360,19 @@ def test_init_refuses_when_an_account_already_exists(auth_cli):
 def test_the_cli_and_the_backend_agree_on_the_token_path(monkeypatch):
     """The one value duplicated across the CLI/backend boundary.
 
-    ``auth_store`` cannot import ``app.config`` — that is the boundary the test
+    ``auth_store`` cannot import ``kurukuru.config`` — that is the boundary the test
     above enforces — so the token file's default location is written down twice.
     Duplication is the right trade there, but only if something notices when the
     two drift, because the symptom otherwise is the CLI writing a token the
     backend never reads and a login that appears to succeed and changes nothing.
     """
-    from app.cli import auth_store
-    from app.config import Settings
+    from kurukuru.cli import auth_store
+    from kurukuru.config import Settings
 
     # The suite isolates this via the environment; the comparison is about the
     # built-in defaults, so the override has to come off first.
-    monkeypatch.delenv("IAAS_AUTH_TOKEN_FILE", raising=False)
-    monkeypatch.delenv("IAAS_STATE_DIR", raising=False)
+    monkeypatch.delenv("KURUKURU_AUTH_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("KURUKURU_STATE_DIR", raising=False)
 
     assert Settings().auth_token_file == (
         f"{auth_store.DEFAULT_STATE_DIR}/{auth_store.TOKEN_LEAF}"

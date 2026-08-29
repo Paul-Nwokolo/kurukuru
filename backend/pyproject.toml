@@ -3,11 +3,29 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "local-iaas"
-version = "0.1.0"
-description = "Local IaaS Orchestrator — a single-host cloud platform over QEMU"
+name = "kurukuru"
+# Read from kurukuru/product.py, which is the one place the version is
+# written. Repeating it here is how a wheel comes to disagree with the
+# /health endpoint inside it.
+dynamic = ["version"]
+description = "Kurukuru — local cloud infrastructure: a single-host cloud platform over QEMU"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Paul Nwokolo" }]
+keywords = ["qemu", "virtualization", "vm", "hypervisor", "iaas", "self-hosted"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Emulators",
+    "Topic :: System :: Systems Administration",
+]
 
 # Kept in step with requirements.txt, which still works on its own: the
 # requirements file is how the backend is installed for development
@@ -30,14 +48,23 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==8.3.5"]
+# What `tools/build_installer.py` needs and the application does not. Pinned
+# like everything else: a freezer is part of the toolchain that produces the
+# shipped artefact, so "whatever version was on the build machine" is not a
+# property a release should have.
+build = ["pyinstaller==6.22.2"]
 
 # The command name lives in exactly two places: here, and CLI_NAME in
-# app/cli/naming.py. Renaming the product is those two lines.
+# kurukuru/product.py. Renaming the product is those two lines — and, from Phase 16
+# on, the state-dir migration that carries an existing install across it.
 [project.scripts]
-iaas = "app.cli.main:main"
+kurukuru = "kurukuru.cli.main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "kurukuru.product.VERSION" }
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["kurukuru*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

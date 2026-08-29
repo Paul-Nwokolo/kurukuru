@@ -21,18 +21,18 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-import app.engines as engines_module
-from tests.conftest import authenticate_test_client, redirect_db_engines
-import app.events as events_module
-import app.routers.images as images_module
-import app.routers.instances as instances_module
-import app.routers.keypairs as keypairs_module
-from app.config import Settings, get_settings
-from app.database import get_session
-from app.engines import EngineRegistry, get_engine_registry
-from app.image_store import ImageError, probe_image
-from app.main import app
-from app.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
+import kurukuru.engines as engines_module
+from tests.conftest import api_client, authenticate_test_client, redirect_db_engines
+import kurukuru.events as events_module
+import kurukuru.routers.images as images_module
+import kurukuru.routers.instances as instances_module
+import kurukuru.routers.keypairs as keypairs_module
+from kurukuru.config import Settings, get_settings
+from kurukuru.database import get_session
+from kurukuru.engines import EngineRegistry, get_engine_registry
+from kurukuru.image_store import ImageError, probe_image
+from kurukuru.main import app
+from kurukuru.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
 
 from tests.test_instances_api import FakeQemuEngine
 
@@ -41,10 +41,10 @@ from tests.test_instances_api import FakeQemuEngine
 # other platform is not a path that could exist — it turned "qemu-img is
 # somewhere unusual" into a silent skip instead of pointing at the override
 # that fixes it.
-QEMU_IMG = os.environ.get("IAAS_QEMU_IMG_BINARY") or shutil.which("qemu-img")
+QEMU_IMG = os.environ.get("KURUKURU_QEMU_IMG_BINARY") or shutil.which("qemu-img")
 needs_qemu_img = pytest.mark.skipif(
     not (QEMU_IMG and Path(QEMU_IMG).exists()),
-    reason="qemu-img not on PATH (set IAAS_QEMU_IMG_BINARY to point at it)",
+    reason="qemu-img not on PATH (set KURUKURU_QEMU_IMG_BINARY to point at it)",
 )
 
 
@@ -96,7 +96,7 @@ def client(monkeypatch, settings: Settings, small_host):
     app.dependency_overrides[get_engine_registry] = lambda: registry
     app.dependency_overrides[get_settings] = lambda: settings
 
-    with TestClient(app) as c:
+    with api_client(app) as c:
         c.db_engine = test_engine  # type: ignore[attr-defined]
         authenticate_test_client(c, test_engine)
         yield c

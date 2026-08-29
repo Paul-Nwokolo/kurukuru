@@ -14,9 +14,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-import app.cloud_init as cloud_init
-from app.cloud_init import CloudInitError, build_cloud_init, build_config, cleanup
-from app.config import Settings
+import kurukuru.cloud_init as cloud_init
+from kurukuru.cloud_init import CloudInitError, build_cloud_init, build_config, cleanup
+from kurukuru.config import Settings
 
 FAKE_KEY = "ssh-ed25519 AAAAC3FakeKeyForTests test@orchestrator"
 
@@ -98,7 +98,7 @@ def test_cleanup_removes_file_and_is_idempotent(settings):
 
 
 def test_build_config_propagates_key_errors_as_cloud_init_error(settings, monkeypatch):
-    from app.ssh_keys import SSHKeyError
+    from kurukuru.ssh_keys import SSHKeyError
 
     def boom(*_a, **_k):
         raise SSHKeyError("ssh-keygen missing")

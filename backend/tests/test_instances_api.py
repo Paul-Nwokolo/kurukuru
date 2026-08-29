@@ -23,25 +23,25 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
-import app.engines as engines_module
-import app.events as events_module
-import app.routers.images as images_module
-import app.routers.instances as instances_module
-import app.routers.keypairs as keypairs_module
-import app.routers.snapshots as snapshots_module
-from app.config import Settings, get_settings
-from app.database import get_session
-from app.engines import (
+import kurukuru.engines as engines_module
+import kurukuru.events as events_module
+import kurukuru.routers.images as images_module
+import kurukuru.routers.instances as instances_module
+import kurukuru.routers.keypairs as keypairs_module
+import kurukuru.routers.snapshots as snapshots_module
+from kurukuru.config import Settings, get_settings
+from kurukuru.database import get_session
+from kurukuru.engines import (
     ComputeEngine,
     ComputeEngineError,
     EngineRegistry,
     InstanceInfo,
     get_engine_registry,
 )
-from app.main import app
-from app.host_capacity import invalidate_cache
-from app.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
-from tests.conftest import authenticate_test_client, redirect_db_engines
+from kurukuru.main import app
+from kurukuru.host_capacity import invalidate_cache
+from kurukuru.models import Image, ImageSource, ImageStatus, Instance, InstanceStatus
+from tests.conftest import api_client, authenticate_test_client, redirect_db_engines
 
 #: Address the fake hands out, matching QEMU's loopback port-forward model.
 FAKE_IP = "127.0.0.1"
@@ -158,13 +158,13 @@ class FakeQemuEngine(ComputeEngine):
         self.forwards[name] = [s for s in self.forwards.get(name, []) if s != spec]
 
     def create_volume_snapshot(self, volume_path, tag):
-        from app.engines.base import SnapshotInfo
+        from kurukuru.engines.base import SnapshotInfo
 
         self._volume_snaps.setdefault(str(volume_path), []).append(tag)
         return SnapshotInfo(tag=tag, size_bytes=0)
 
     def list_volume_snapshots(self, volume_path):
-        from app.engines.base import SnapshotInfo
+        from kurukuru.engines.base import SnapshotInfo
 
         return [SnapshotInfo(tag=t) for t in self._volume_snaps.get(str(volume_path), [])]
 
@@ -228,7 +228,7 @@ def client(monkeypatch, tmp_path, iso_dir, small_host):
     # are exercised in milliseconds.
     # `state_dir` re-roots every directory the settings own, which is the point:
     # `POST /keypairs/generate` writes a real keypair with real ssh-keygen, and
-    # without this it wrote it into the developer's `~/.local-iaas/keys`. Ten
+    # without this it wrote it into the developer's `~/.kurukuru/keys`. Ten
     # test runs left ten orphaned keypairs there before anyone noticed. A test
     # must not be able to touch the state directory of the machine running it.
     test_settings = Settings(
@@ -249,7 +249,7 @@ def client(monkeypatch, tmp_path, iso_dir, small_host):
 
     invalidate_cache()
 
-    with TestClient(app) as c:
+    with api_client(app) as c:
         c.fake = qemu_fake  # type: ignore[attr-defined]
         c.qemu_fake = qemu_fake  # type: ignore[attr-defined] - same object
         c.db_engine = test_engine  # type: ignore[attr-defined]
@@ -277,7 +277,7 @@ def anon_client(client):
     the lifespan; entering it again would re-run startup against the same
     database.
     """
-    c = TestClient(app)
+    c = api_client(app)
     c.db_engine = client.db_engine  # type: ignore[attr-defined]
     c.fake = client.fake            # type: ignore[attr-defined]
     return c
@@ -1037,7 +1037,7 @@ def test_capacity_endpoint_reports_totals_committed_and_allocatable(client, smal
 def test_a_degraded_capacity_probe_does_not_block_launches(client):
     """Refusing every launch because the *capacity check* broke would be a
     worse failure than the one it prevents."""
-    with patch("app.host_capacity.psutil", None):
+    with patch("kurukuru.host_capacity.psutil", None):
         invalidate_cache()
         r = client.post("/instances", json={"name": "permissive", "memory_mb": 4096})
     invalidate_cache()
@@ -1075,7 +1075,7 @@ def _aged_row(client, name, *, minutes, **kwargs):
     """A row whose last update was `minutes` ago, to age past the threshold."""
     from datetime import timedelta
 
-    from app.models import _utcnow
+    from kurukuru.models import _utcnow
 
     defaults = {
         "engine": "qemu",
@@ -1282,7 +1282,7 @@ def test_an_imported_image_still_has_to_be_available(client):
 # Diagnostics and force-terminate (Phase 8 — what the CLI needs from the API)
 # --------------------------------------------------------------------------- #
 def test_diagnostics_reports_the_host_facts_a_client_cannot_see(client):
-    """`iaas doctor` is only honest if these come from the backend's own host.
+    """`kurukuru doctor` is only honest if these come from the backend's own host.
 
     A CLI that probed its own filesystem for the instance store would describe
     the wrong machine the moment the two are not the same.
@@ -1301,7 +1301,7 @@ def test_diagnostics_reports_the_host_facts_a_client_cannot_see(client):
 def test_diagnostics_exposes_no_key_material(client):
     """Nothing here is authenticated, so the payload stays to the minimum.
 
-    `iaas doctor` needs to know a keypair *exists* and where it lives; it never
+    `kurukuru doctor` needs to know a keypair *exists* and where it lives; it never
     needs the key itself. Callers who want the public half ask /ssh-key, which
     is the endpoint that exists for it. Guarded because the natural way to
     write this endpoint is to paste the /ssh-key body in.
