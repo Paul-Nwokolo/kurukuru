@@ -44,6 +44,7 @@ _MARKS = {
     "port_forward_removed": ("-x", "dim"),
     "reconciled": ("=", "yellow"),
     "image_import": ("^", "cyan"),
+    "auto_restarted": ("^!", "yellow"),
 }
 
 #: Kinds accepted for --kind, kept in sync with the API's enum by the test that

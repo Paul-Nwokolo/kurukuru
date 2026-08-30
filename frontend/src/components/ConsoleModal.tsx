@@ -37,6 +37,15 @@ interface ConsoleModalProps {
  * for `close`, and can tell the user *why* the console went away instead of
  * showing a bare "disconnected".
  */
+/** How many *automatic* reconnects a dropped-but-still-Running console gets
+ *  before falling back to the manual "Reconnect" button. Covers the reboot
+ *  watchdog's auto-restart (kurukuru/reboot_watchdog.py) and an ordinary
+ *  manual restart alike — either way, the backend says the instance is
+ *  Running again and a fresh VNC socket is worth trying without the user
+ *  having to notice the drop and click something. */
+const AUTO_RECONNECT_LIMIT = 3
+const AUTO_RECONNECT_DELAY_MS = 1500
+
 export function ConsoleModal({ instance, onClose }: ConsoleModalProps) {
   const screenRef = useRef<HTMLDivElement>(null)
   const rfbRef = useRef<RFB | null>(null)
@@ -45,6 +54,14 @@ export function ConsoleModal({ instance, onClose }: ConsoleModalProps) {
   // a ref, not state, because the two fire in the same tick and the reason must
   // already be there when we render the disconnected panel.
   const closeInfoRef = useRef<{ code: number; reason: string } | null>(null)
+  // The effect below only re-runs on `instanceId`/`attempt` changing, so a
+  // `disconnect` handler closed over `instance` could read a stale status —
+  // one fetched minutes before the drop it is now reacting to. This ref is
+  // written on every render instead, so onDisconnect always reads the latest
+  // poll rather than whatever was current when the connection was opened.
+  const instanceRef = useRef(instance)
+  instanceRef.current = instance
+  const autoReconnectCountRef = useRef(0)
 
   const [phase, setPhase] = useState<Phase>('connecting')
   const [detail, setDetail] = useState<string | null>(null)
@@ -67,12 +84,28 @@ export function ConsoleModal({ instance, onClose }: ConsoleModalProps) {
     let cancelled = false
     let rfb: RFB | null = null
     let socket: WebSocket | null = null
+    let reconnectTimer: ReturnType<typeof window.setTimeout> | null = null
     const onConnect = () => {
       setPhase('connected')
       setDetail(null)
+      autoReconnectCountRef.current = 0 // a real connection earns a fresh budget
       rfb?.focus() // otherwise keystrokes go to the page, not the guest
     }
     const onDisconnect = () => {
+      // The backend agreeing the instance is still Running is what makes this
+      // worth retrying automatically rather than dumping the user on a manual
+      // button: a genuine stop/terminate/error already shows up as a status
+      // other than Running, and those should not auto-retry into a wall.
+      const stillRunning = instanceRef.current?.status === 'Running'
+      if (stillRunning && autoReconnectCountRef.current < AUTO_RECONNECT_LIMIT) {
+        autoReconnectCountRef.current += 1
+        setPhase('connecting')
+        setDetail('Reconnecting…')
+        reconnectTimer = window.setTimeout(() => {
+          if (!cancelled) setAttempt((n) => n + 1)
+        }, AUTO_RECONNECT_DELAY_MS)
+        return
+      }
       setPhase('disconnected')
       setDetail(explainClose(closeInfoRef.current))
     }
@@ -150,6 +183,7 @@ export function ConsoleModal({ instance, onClose }: ConsoleModalProps) {
 
     return () => {
       cancelled = true
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
       rfb?.removeEventListener('connect', onConnect)
       rfb?.removeEventListener('disconnect', onDisconnect)
       rfb?.removeEventListener('securityfailure', onSecurityFailure)
@@ -167,6 +201,12 @@ export function ConsoleModal({ instance, onClose }: ConsoleModalProps) {
       socketRef.current = null
     }
   }, [instanceId, attempt])
+
+  // A manual close/reopen of the modal should not carry a stale auto-retry
+  // budget into the next session's first disconnect.
+  useEffect(() => {
+    if (!instanceId) autoReconnectCountRef.current = 0
+  }, [instanceId])
 
   // Esc closes the console — but only when not fullscreen, where the browser
   // uses Esc to leave fullscreen first.
@@ -243,7 +283,7 @@ export function ConsoleModal({ instance, onClose }: ConsoleModalProps) {
               {phase === 'connecting' ? (
                 <div className="flex flex-col items-center gap-3 text-text-on-sunken/70">
                   <Loader2 className="h-5 w-5 animate-spin" />
-                  <span className="text-sm">Connecting to console…</span>
+                  <span className="text-sm">{detail ?? 'Connecting to console…'}</span>
                 </div>
               ) : (
                 <div className="flex max-w-md flex-col items-center gap-3 px-6 text-center">

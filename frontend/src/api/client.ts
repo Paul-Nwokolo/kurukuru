@@ -891,6 +891,7 @@ export type EventKind =
   | 'port_forward_removed'
   | 'reconciled'
   | 'image_import'
+  | 'auto_restarted'
 
 /** Who acted. There is no authentication, so this is never a person. */
 export type EventActor = 'api' | 'reconciler' | 'system'

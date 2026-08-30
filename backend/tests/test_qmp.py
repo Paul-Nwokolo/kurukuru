@@ -16,10 +16,18 @@ import json
 import socket
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
-from kurukuru.engines.qmp import QmpClient, QmpError, is_responsive, query_status, system_powerdown
+from kurukuru.engines.qmp import (
+    QmpClient,
+    QmpError,
+    is_responsive,
+    query_status,
+    screendump,
+    system_powerdown,
+)
 
 _GREETING = {"QMP": {"version": {"qemu": {"major": 10, "minor": 0}}, "capabilities": []}}
 
@@ -253,3 +261,50 @@ def test_is_responsive_false_when_nothing_listens():
     probe.close()
 
     assert is_responsive("127.0.0.1", port, timeout=1.0) is False
+
+
+# --------------------------------------------------------------------------- #
+# screendump: the reboot watchdog's only diagnostic (kurukuru/reboot_watchdog.py)
+# --------------------------------------------------------------------------- #
+def test_screendump_waits_for_the_file_qemu_writes(tmp_path: Path):
+    """The QMP reply says nothing about the write landing — real QEMU performs
+    it as a side effect. The fake mirrors that: it answers immediately and
+    writes the file itself, after a short delay, exactly like a real VM."""
+    target = tmp_path / "frame.ppm"
+
+    def responder(request: dict) -> list[bytes]:
+        if request["execute"] == "screendump":
+            threading.Timer(
+                0.2, lambda: target.write_bytes(b"P6\n1 1\n255\n\x00\x00\x00")
+            ).start()
+            return [_reply({"return": {}})]
+        return _ok(request)
+
+    with FakeQmpServer(responder) as server:
+        result = screendump("127.0.0.1", server.port, target, timeout=3.0)
+    assert result == target
+    assert target.read_bytes().startswith(b"P6")
+
+
+def test_screendump_raises_if_the_file_never_appears(tmp_path: Path):
+    with FakeQmpServer(_ok) as server:
+        with pytest.raises(QmpError, match="produced nothing"):
+            screendump("127.0.0.1", server.port, tmp_path / "never.ppm", timeout=0.5)
+
+
+def test_screendump_discards_a_stale_file_from_a_previous_call(tmp_path: Path):
+    """A leftover frame from an earlier sample must not be mistaken for a new
+    one if this call's write is slow — stale-frame risk is exactly what broke
+    an early version of the reboot watchdog's own diagnostic harness."""
+    target = tmp_path / "frame.ppm"
+    target.write_bytes(b"P6\n1 1\n255\n\xff\xff\xff")  # stale "old" frame
+
+    def responder(request: dict) -> list[bytes]:
+        if request["execute"] == "screendump":
+            return [_reply({"return": {}})]  # never actually writes
+        return _ok(request)
+
+    with FakeQmpServer(responder) as server:
+        with pytest.raises(QmpError, match="produced nothing"):
+            screendump("127.0.0.1", server.port, target, timeout=0.5)
+    assert not target.exists()  # the stale file was removed, not left to lie

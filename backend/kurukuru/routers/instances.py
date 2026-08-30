@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import logging
 import math
+import tempfile
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, WebSocket, status
 from sqlmodel import Session, select
@@ -40,11 +42,13 @@ from kurukuru.console import (
 from starlette.requests import HTTPConnection
 
 from kurukuru.engines.qemu import HOST_IP
+from kurukuru.engines.qmp import QmpError, screendump
 from kurukuru.database import engine as db_engine
 from kurukuru.database import get_session
 from kurukuru.auth import mint_console_ticket, redeem_console_ticket
 from kurukuru.security import current_principal
 from kurukuru.events import record_event
+from kurukuru.reboot_watchdog import Action, WatchdogRegistry, colour_count, utcnow
 from kurukuru.engines import (
     ComputeEngine,
     ComputeEngineError,
@@ -798,6 +802,119 @@ def reconcile_all(session: Session, registry: EngineRegistry) -> int:
 
     logger.info("Reconciliation complete: %d row(s) updated", updated)
     return updated
+
+
+# --------------------------------------------------------------------------- #
+# Windows guest-reboot watchdog — a heuristic workaround for an upstream
+# QEMU/WHPX defect (system_reset leaves a Windows guest stuck at SeaBIOS
+# forever; a fresh process against the same disk always works), NOT a general
+# health check. Everything this workaround touches is listed, and named
+# removable in one commit, in kurukuru/reboot_watchdog.py's module docstring —
+# read that before changing anything here. <UPSTREAM ISSUE URL>
+# --------------------------------------------------------------------------- #
+#: Process-lifetime only, by design — see reboot_watchdog.py on why that is an
+#: accepted gap rather than an oversight.
+_reboot_watchdog = WatchdogRegistry()
+
+
+def windows_reboot_watchdog_pass(session: Session, settings: Settings) -> int:
+    """Sample every running Windows guest's framebuffer; restart if stuck.
+
+    Scoped to ``guest_os == "windows"`` and ``engine == "qemu"`` only — see the
+    module docstring on why a static framebuffer is not a symptom for any
+    other guest. Returns the number of instances acted on (restarted or
+    marked Error), for the caller to log.
+    """
+    rows = session.exec(
+        select(Instance)
+        .where(Instance.status == InstanceStatus.RUNNING)
+        .where(Instance.guest_os == GuestOS.WINDOWS)
+        .where(Instance.engine == "qemu")
+    ).all()
+
+    live_ids = {row.id for row in rows}
+    for stale_id in _reboot_watchdog.known_ids() - live_ids:
+        _reboot_watchdog.discard(stale_id)
+
+    acted = 0
+    with tempfile.TemporaryDirectory(prefix="kurukuru-watchdog-") as tmp:
+        shot = Path(tmp) / "frame.ppm"
+        for instance in rows:
+            if not instance.qmp_port:
+                continue
+            try:
+                screendump(HOST_IP, instance.qmp_port, shot)
+                colours = colour_count(shot)
+            except (QmpError, OSError, ValueError) as exc:
+                # A busy or unreachable monitor is not this workaround's
+                # problem to solve — the reconciler already has an opinion
+                # about liveness, and this pass simply skips a sample rather
+                # than guessing.
+                logger.debug(
+                    "Watchdog: could not sample '%s': %s", instance.name, exc
+                )
+                continue
+
+            watch = _reboot_watchdog.get(instance.id)
+            action = watch.advance(
+                colours=colours,
+                now=utcnow(),
+                colour_threshold=settings.windows_reboot_watchdog_colour_threshold,
+                stuck_seconds=settings.windows_reboot_watchdog_stuck_seconds,
+                cooldown_seconds=settings.windows_reboot_watchdog_cooldown_seconds,
+            )
+            if action == Action.NOTHING:
+                continue
+
+            registry = get_engine_registry()
+            compute = _engine_for(registry, instance)
+            if action == Action.RESTART:
+                logger.warning(
+                    "Watchdog: '%s' looks stuck after a reboot (static %d-colour "
+                    "frame for %.0fs) — restarting the QEMU process",
+                    instance.name, colours, settings.windows_reboot_watchdog_stuck_seconds,
+                )
+                with _api_operation(instance.id):
+                    try:
+                        compute.restart_instance(instance.name)
+                    except (HypervisorUnavailableError, ComputeEngineError) as exc:
+                        _mark_error(
+                            session, instance,
+                            f"Auto-restart after an apparent stuck reboot failed: {exc}",
+                        )
+                        acted += 1
+                        continue
+                    _sync_instance(session, compute, instance)
+                record_event(
+                    EventKind.AUTO_RESTARTED,
+                    "Guest appeared hung after reboot; restarted automatically",
+                    instance=instance,
+                    actor=EventActor.SYSTEM,
+                    detail=(
+                        f"No graphical framebuffer change for "
+                        f"{settings.windows_reboot_watchdog_stuck_seconds:.0f}s "
+                        f"after an apparent guest reboot. This is a known "
+                        f"workaround for an upstream QEMU/WHPX defect — see "
+                        f"docs/WINDOWS.md."
+                    ),
+                )
+                acted += 1
+            elif action == Action.GIVE_UP:
+                logger.warning(
+                    "Watchdog: '%s' is stuck again within the cooldown window — "
+                    "giving up and marking it Error rather than restarting again",
+                    instance.name,
+                )
+                _mark_error(
+                    session, instance,
+                    "Guest appeared hung after reboot, was restarted automatically, "
+                    "and is stuck again. Not retried automatically a second time "
+                    "within the cooldown window — see docs/WINDOWS.md for the "
+                    "underlying QEMU/WHPX defect this works around.",
+                )
+                acted += 1
+
+    return acted
 
 
 # --------------------------------------------------------------------------- #

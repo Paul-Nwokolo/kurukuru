@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  AlertTriangle,
   Camera,
   CheckCircle2,
   Copy,
@@ -51,6 +52,12 @@ const ICONS: Record<EventKind, typeof Server> = {
   port_forward_removed: Network,
   reconciled: RefreshCw,
   image_import: HardDrive,
+  // The backend restarted this VM on its own, unasked — deliberately a
+  // different pictogram from `restarted` (a plain RotateCw), so a user
+  // scanning the feed can tell "you did this" from "the backend did this to
+  // your VM without being asked". A heuristic workaround for an upstream
+  // QEMU/WHPX defect; see docs/WINDOWS.md.
+  auto_restarted: AlertTriangle,
 }
 
 /** The only kinds that earn a colour: the ones that are a failure. */

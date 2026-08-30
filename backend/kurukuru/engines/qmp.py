@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import time
+from pathlib import Path
 
 logger = logging.getLogger("kurukuru.qemu.qmp")
 
@@ -177,6 +179,30 @@ def quit_vm(host: str, port: int, timeout: float = _DEFAULT_TIMEOUT) -> None:
             # 'quit' — that is success, not failure.
             if CONNECTION_CLOSED not in str(exc):
                 raise
+
+
+def screendump(
+    host: str, port: int, path: Path, timeout: float = _DEFAULT_TIMEOUT
+) -> Path:
+    """Ask QEMU to write the current framebuffer to ``path`` as a PPM.
+
+    ``screendump`` is a *file write QEMU performs itself*, not data returned
+    over the QMP socket — the command's own reply says nothing about whether
+    the write has landed yet. So this polls for the file to appear rather than
+    trusting the reply, the same way `kurukuru.reboot_watchdog` needs it to:
+    a frame read before QEMU has finished writing it would be truncated, and a
+    truncated PPM is indistinguishable from a genuinely blank one to a naive
+    parser.
+    """
+    path.unlink(missing_ok=True)
+    with QmpClient(host, port, timeout) as qmp:
+        qmp.execute("screendump", filename=str(path))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists() and path.stat().st_size:
+            return path
+        time.sleep(0.1)
+    raise QmpError(f"screendump to {path} produced nothing within {timeout}s")
 
 
 def hostfwd_add(host: str, port: int, netdev: str, spec: str,
