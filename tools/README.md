@@ -96,11 +96,14 @@ arm. It never emits a verdict — a human reads the distribution.
 ```
 python tools/ab_measure.py --runs 3 --cap 240 \
     --iso ~/.kurukuru/isos/Windows10.iso \
-    --arm "novnc:" --arm "vnc:-vnc,127.0.0.1:30"
+    --arm "novnc:" --arm "vnc:-vnc;127.0.0.1:30"
 ```
 
-Arm syntax is `name:arg,arg,arg` — a comma-separated argv fragment appended to the
-base command, empty for the control arm. The milestone is "the framebuffer shows
-a rich GUI screen" (more than `--colours` distinct colours, not predominantly
-black), which separates a Setup screen from a boot logo without reading the
-screen; adjust `--colours` for other guests.
+Arm syntax is `name:arg;arg;arg` — a semicolon-separated argv fragment appended
+to the base command, empty for the control arm. Semicolons rather than commas
+because QEMU's own flags use commas *inside* a single argv token (`-device
+qemu-xhci,id=xhci` is one token) — a comma-delimited arm spec cannot express
+that without shredding it into two bogus tokens, which QEMU then rejects. The
+milestone is "the framebuffer shows a rich GUI screen" (more than `--colours`
+distinct colours, not predominantly black), which separates a Setup screen from
+a boot logo without reading the screen; adjust `--colours` for other guests.
