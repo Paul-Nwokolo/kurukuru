@@ -810,7 +810,8 @@ def reconcile_all(session: Session, registry: EngineRegistry) -> int:
 # forever; a fresh process against the same disk always works), NOT a general
 # health check. Everything this workaround touches is listed, and named
 # removable in one commit, in kurukuru/reboot_watchdog.py's module docstring —
-# read that before changing anything here. <UPSTREAM ISSUE URL>
+# read that before changing anything here.
+# https://gitlab.com/qemu-project/qemu/-/issues/4410
 # --------------------------------------------------------------------------- #
 #: Process-lifetime only, by design — see reboot_watchdog.py on why that is an
 #: accepted gap rather than an oversight.

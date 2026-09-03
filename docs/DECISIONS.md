@@ -2473,7 +2473,7 @@ class exists in QEMU's own tracker (GitLab #2042, #2402) but neither is a
 match — both report a crash (`WHPX: Unexpected VP exit code 4`) this project's
 hang never produces, and both report workarounds (`-smp 1`,
 `kernel-irqchip=off`) that do not help here. Filed as its own report:
-**<UPSTREAM ISSUE URL>.** No released QEMU version fixes it, so there was
+**https://gitlab.com/qemu-project/qemu/-/issues/4410.** No released QEMU version fixes it, so there was
 nothing to pin to instead of a workaround.
 
 **What was built.** `kurukuru/reboot_watchdog.py` — a heuristic, explicitly

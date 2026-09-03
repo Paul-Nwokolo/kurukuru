@@ -110,8 +110,8 @@ a boot logo without reading the screen; adjust `--colours` for other guests.
 
 ## `reset_measure.py` / `qmp_driver.py` — the upstream `system_reset` hang
 
-Reproduces the QEMU/WHPX defect filed at <UPSTREAM ISSUE URL — fill in once
-filed>: an in-process QMP `system_reset` leaves a Windows guest stuck at
+Reproduces the QEMU/WHPX defect filed at
+https://gitlab.com/qemu-project/qemu/-/issues/4410: an in-process QMP `system_reset` leaves a Windows guest stuck at
 SeaBIOS's boot prompt forever, while a fresh QEMU process against the same
 disk always boots. See DECISIONS #55 and docs/WINDOWS.md for the full
 measurement history (36/36 across every configuration tried, on two separate

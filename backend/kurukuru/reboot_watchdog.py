@@ -8,7 +8,7 @@ process itself alive and its QMP socket fully responsive throughout. Measured
 at 36/36 across every chipset, RTC/HPET, Hyper-V-enlightenment, and CD-ejection
 combination tried, and reproduced identically on an officially tagged QEMU
 release, not just a development snapshot — see docs/WINDOWS.md for the
-measurements and <UPSTREAM ISSUE URL — fill in once filed> for the report. A
+measurements and https://gitlab.com/qemu-project/qemu/-/issues/4410 for the report. A
 fresh QEMU process against the same disk state always works, which is the
 entire mechanism this module leans on: restart the process, not the guest.
 

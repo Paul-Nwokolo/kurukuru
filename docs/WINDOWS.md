@@ -9,7 +9,7 @@ characterised (QEMU/WHPX's `system_reset` deterministically, 36/36 trials
 across every configuration and two separate QEMU builds, fails to bring the
 guest back up, while a fresh process against the same disk state always works)
 and confirmed as an unreported upstream defect, now filed
-(<UPSTREAM ISSUE URL>). Since no released version fixes it, kurukuru carries
+(https://gitlab.com/qemu-project/qemu/-/issues/4410). Since no released version fixes it, kurukuru carries
 `kurukuru/reboot_watchdog.py`: a Windows-only heuristic that detects a guest
 stuck at a static framebuffer and restarts the QEMU process, documented
 end-to-end (module docstring, settings, this file) as a workaround for a named
@@ -57,7 +57,7 @@ in-process QMP `system_reset` — the mechanism a guest-triggered reboot actuall
 uses — hangs the guest at SeaBIOS's boot prompt in 36 out of 36 trials, across
 every chipset/RTC/HPET/Hyper-V-enlightenment/CD-ejection combination tried and
 two separate QEMU builds; a fresh QEMU process against the identical disk state
-works every time instead. Filed upstream (<UPSTREAM ISSUE URL>) rather than
+works every time instead. Filed upstream (https://gitlab.com/qemu-project/qemu/-/issues/4410) rather than
 carried as a mystery — nothing there is fixed, so kurukuru now detects the
 symptom itself and restarts the process rather than letting QEMU reset in
 place (`kurukuru/reboot_watchdog.py`), a documented heuristic rather than
@@ -594,7 +594,7 @@ there is no released version to pin to instead of carrying a workaround.
 This looked related-but-distinct enough, and cleaner to reproduce than either
 linked report (deterministic, no special flags, plain `q35`, either vCPU
 count), to be worth its own report rather than a comment on either — **filed
-upstream: <UPSTREAM ISSUE URL — fill in once available>.**
+upstream: https://gitlab.com/qemu-project/qemu/-/issues/4410.**
 
 **Given no upstream fix exists at any tested version, kurukuru needed an
 engine-side workaround — not a QEMU-config change, and not a version pin.**
@@ -640,7 +640,7 @@ isolated, not a mysterious host property:
    SeaBIOS's boot prompt; a fresh process against the same disk state always
    works. A related, unresolved bug class exists upstream (#2042, #2402) but
    nothing matched closely enough to be the same report, so this was filed
-   separately: **<UPSTREAM ISSUE URL>.** No release fixes it — there was no
+   separately: **https://gitlab.com/qemu-project/qemu/-/issues/4410.** No release fixes it — there was no
    version to pin to instead of a workaround.
 
    **Built:** `kurukuru/reboot_watchdog.py` — a Windows-only (`guest_os ==

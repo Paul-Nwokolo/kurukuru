@@ -75,7 +75,7 @@ def _reboot_watchdog_once() -> None:
 
     A heuristic workaround for an upstream QEMU/WHPX defect, not a general
     health check — see kurukuru/reboot_watchdog.py's module docstring before
-    touching this. <UPSTREAM ISSUE URL>
+    touching this. https://gitlab.com/qemu-project/qemu/-/issues/4410
     """
     from sqlmodel import Session
 

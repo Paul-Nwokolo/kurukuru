@@ -342,7 +342,8 @@ class Settings(BaseSettings):
     # A heuristic workaround for an upstream QEMU/WHPX defect, not a general
     # feature — see kurukuru/reboot_watchdog.py's module docstring for the
     # measurements, the named misfire conditions, and the one-commit removal
-    # checklist before touching any of the values below. <UPSTREAM ISSUE URL>
+    # checklist before touching any of the values below.
+    # https://gitlab.com/qemu-project/qemu/-/issues/4410
     windows_reboot_watchdog_enabled: bool = True
     # How often a Windows/Running instance's framebuffer is sampled. Reuses the
     # reconciler's own interval by default (set independently below only if a

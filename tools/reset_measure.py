@@ -10,8 +10,8 @@ stays fully responsive. A *fresh* QEMU process against the identical disk
 state always boots cleanly instead. Measured at 36/36 across every chipset,
 RTC/HPET, Hyper-V-enlightenment and CD-ejection combination tried, on two
 separate QEMU builds (this project's dev snapshot and the officially tagged
-QEMU 11.1.1 release). Filed upstream as <UPSTREAM ISSUE URL — fill in once
-filed>; kurukuru's `reboot_watchdog.py` is the workaround for it. This is the
+QEMU 11.1.1 release). Filed upstream as
+https://gitlab.com/qemu-project/qemu/-/issues/4410; kurukuru's `reboot_watchdog.py` is the workaround for it. This is the
 tool that produced that reproduction — kept here, not in host-local scratch,
 because a filed upstream report should not depend on one machine still having
 the right one-off script lying around.
