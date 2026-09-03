@@ -27,12 +27,15 @@ USAGE
 -----
     python ab_measure.py --runs 3 \\
         --arm "novnc:" \\
-        --arm "vnc:-vnc,127.0.0.1:30" \\
+        --arm "vnc:-vnc;127.0.0.1:30" \\
         --iso ~/.kurukuru/isos/Windows10.iso
 
-Arm syntax is ``name:arg,arg,arg`` — a comma-separated argv fragment appended to
-the base command, empty for the control arm. Commas rather than spaces so a
-single shell word carries the whole arm.
+Arm syntax is ``name:arg;arg;arg`` — a semicolon-separated argv fragment
+appended to the base command, empty for the control arm. Semicolons rather
+than spaces so a single shell word carries the whole arm, and rather than
+commas because QEMU's own flags use commas *inside* a single argv token
+(``-device qemu-xhci,id=xhci`` is one token) — a comma-delimited arm spec
+cannot express that without shredding it.
 
 The milestone is "the framebuffer shows a rich GUI screen": more than
 ``--colours`` distinct colours and not predominantly black. That distinguishes a
@@ -277,15 +280,25 @@ def summarise(results: list[dict], arms: list[str], min_runs: int = MIN_RUNS) ->
 
 
 def parse_arm(spec: str) -> tuple[str, list[str]]:
+    """Split ``name:arg;arg;arg`` into a name and its argv fragment.
+
+    Semicolon-delimited, not comma: QEMU's own ``-device`` syntax uses commas
+    *inside* a single argv token (``-device qemu-xhci,id=xhci`` is one token,
+    not two), so a comma-delimited arm spec cannot express the single most
+    common QEMU flag shape without shredding it. It did exactly that here —
+    ``usb:-device,qemu-xhci,id=xhci`` split into three tokens instead of two,
+    QEMU rejected the malformed command line and exited at once, and that
+    looked like "NOT REACHED" data rather than the parse bug it was.
+    """
     name, _, rest = spec.partition(":")
-    extra = [piece for piece in rest.split(",") if piece]
+    extra = [piece for piece in rest.split(";") if piece]
     return name.strip(), extra
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--arm", action="append", required=True,
-                    help="name:arg,arg — repeatable; empty args for a control arm")
+                    help="name:arg;arg — repeatable; empty args for a control arm")
     ap.add_argument("--runs", type=int, default=MIN_RUNS,
                     help=f"runs per arm (default {MIN_RUNS})")
     ap.add_argument("--iso", required=True, type=pathlib.Path)

@@ -338,6 +338,39 @@ class Settings(BaseSettings):
     windows_min_memory_mb: int = 2048
     windows_min_disk_gb: int = 32
 
+    # --- Windows guest-reboot watchdog ---
+    # A heuristic workaround for an upstream QEMU/WHPX defect, not a general
+    # feature — see kurukuru/reboot_watchdog.py's module docstring for the
+    # measurements, the named misfire conditions, and the one-commit removal
+    # checklist before touching any of the values below.
+    # https://gitlab.com/qemu-project/qemu/-/issues/4410
+    windows_reboot_watchdog_enabled: bool = True
+    # How often a Windows/Running instance's framebuffer is sampled. Reuses the
+    # reconciler's own interval by default (set independently below only if a
+    # different cadence is actually needed) rather than adding a second timer
+    # nobody asked for.
+    windows_reboot_watchdog_interval_seconds: int = 30
+    # How long a static, low-colour framebuffer has to persist before it is
+    # treated as stuck rather than slow. Every successful boot measured during
+    # this project's Windows-guest investigation — dozens of runs, several
+    # device-profile variants — reached a graphical stage in under 40 seconds
+    # or never reached one at all; there was no slow-but-eventually-fine case
+    # in between. 300s is roughly 8x that ceiling: generous on purpose, because
+    # a false positive here restarts a healthy VM and destroys unsaved guest
+    # state, which is a worse outcome than a human having to notice a hang and
+    # restart it themselves.
+    windows_reboot_watchdog_stuck_seconds: float = 300.0
+    # Distinct RGB colours above which a frame counts as "graphical" rather
+    # than SeaBIOS's text-mode boot prompt. Measured: the stuck prompt itself
+    # renders as ~2 colours; every graphical stage observed (boot logo, Setup,
+    # a desktop) showed 12 or more. See colour_count() in reboot_watchdog.py.
+    windows_reboot_watchdog_colour_threshold: int = 8
+    # At most one automatic restart per instance in this many seconds. If the
+    # guest is stuck again once the cooldown allows another attempt, the
+    # instance is marked Error instead of being restarted again — this is a
+    # workaround for a hang, not a supervisor that will retry forever.
+    windows_reboot_watchdog_cooldown_seconds: float = 3600.0
+
     #: Directory settings that follow ``state_dir``, and the leaf each takes
     #: under it. Kept as data so adding a directory cannot forget to re-root it.
     _ROOTED_DIRS = {

@@ -2405,6 +2405,135 @@ reached Running; and installing 0.1.1 over a running 0.1.0 preserved the
 account, the instance, every database row and the VM's disk, with the version
 moving in `/health` and the CLI together.
 
+## 54. Windows guests need an i440fx-family machine, `hpet=off`, and `rtc base=localtime` — the copy-phase stall is fixed
+
+**Context.** Every Windows install attempted through this project's engine had
+stalled somewhere in Setup's copy phase — 2% on the first host, up to 30% on a
+second — and decision 39 (and the phase before it) treated this as inseparable
+from the host's `-vnc` finding and its general bimodality. A direct comparison
+against VirtualBox, which completes Windows installs on the same second host
+through the same underlying platform (`WHvPlatform`/NEM, the API `-accel whpx`
+also binds to), showed VirtualBox's stock Windows template differs from this
+project's engine on exactly four points: chipset (`piix3` vs `q35`), HPET
+(off vs QEMU's default on), RTC (local time vs QEMU's default UTC), and Hyper-V
+paravirtualization enlightenments (present vs absent). See docs/WINDOWS.md for
+the full comparison and measurements; this entry records the outcome only.
+
+**Fix, isolated one variable at a time with `tools/ab_measure.py` (Decision
+40's protocol) before ever touching a real install:**
+
+- Chipset alone (`q35` → an i440fx-family machine, e.g. QEMU's `pc` alias):
+  no measurable boot-phase effect — the boot phase was already 60-100%
+  reliable before any change, so this variable could not be discriminated
+  there. Carried forward as a base for the next test anyway, since it is at
+  worst neutral and matches VirtualBox.
+- `hpet=off` + `-rtc base=localtime`, layered on the i440fx base: **13/13
+  (100%) across two alternating sessions**, with perfectly reproducible timing
+  (36.3-36.4s every run) — the cleanest result measured anywhere in this
+  project's Windows-guest work.
+- The same three-part change (i440fx + `hpet=off` + `rtc=localtime`), with the
+  real product's exact Windows device profile otherwise unchanged (`-cpu
+  Westmere`, AHCI, `e1000e`, `std` VGA, `qemu-xhci`/`usb-kbd`/`usb-tablet`,
+  `-vnc` attached) and a real Windows 10 install: **the entire "Getting files
+  ready for installation" phase completed reliably** — 0% to "Windows needs to
+  restart to continue" in roughly nine minutes, reproduced across multiple full
+  runs, including with Hyper-V enlightenments added on top (no additional
+  effect either way — ruled out as relevant to *this* stall, though tested
+  further as a factor in the reboot investigation that followed).
+
+**CPU model is unchanged and stays `Westmere`.** `-cpu host`/`max` still crash
+WHPX outright (decision-adjacent finding, unrelated to this fix); VirtualBox's
+`host` CPU profile under its own NEM binding does not inform this, since NEM's
+CPUID virtualization is a different code path from QEMU's `-cpu host` under
+WHPX.
+
+**Status.** This fix is confirmed and ready to carry into
+`QemuEngine.build_launch_command` for Windows guests specifically (Linux
+guests are untouched — nothing here has been tested against or is claimed to
+apply to them). It has not been merged into the engine yet: a second,
+independent defect — QEMU/WHPX's `system_reset` hanging the guest on its first
+in-process reboot, unrelated to any of the above and root-caused separately —
+still blocks a Windows install from finishing end to end, and the two are kept
+distinct so the confirmed fix here does not get lost inside that ongoing
+investigation. See docs/WINDOWS.md for the reboot defect's status.
+
+## 55. A heuristic workaround for the guest-reboot hang, confirmed upstream and unfixed at any tested version
+
+**Context.** Decision 54 fixed the copy-phase stall but left a second,
+independent defect: QEMU/WHPX's `system_reset` deterministically fails to
+bring a Windows guest back up after its first in-process reboot, while a fresh
+QEMU process against the identical disk state always works. See docs/WINDOWS.md
+for the full measurement history — 36/36 across every chipset, RTC/HPET,
+Hyper-V-enlightenment, and CD-ejection combination tried, reproduced
+identically on the officially tagged QEMU 11.1.1 release and not just this
+project's dev snapshot.
+
+**Confirmed upstream before anything was built.** A related, unresolved bug
+class exists in QEMU's own tracker (GitLab #2042, #2402) but neither is a
+match — both report a crash (`WHPX: Unexpected VP exit code 4`) this project's
+hang never produces, and both report workarounds (`-smp 1`,
+`kernel-irqchip=off`) that do not help here. Filed as its own report:
+**https://gitlab.com/qemu-project/qemu/-/issues/4410.** No released QEMU version fixes it, so there was
+nothing to pin to instead of a workaround.
+
+**What was built.** `kurukuru/reboot_watchdog.py` — a heuristic, explicitly
+documented as one, not a general health check:
+
+- Scoped to `guest_os == "windows"` only. A static, low-colour framebuffer is
+  a *normal* steady state for a headless Linux console; treating it as a
+  symptom there would be a serious bug, not a recovery.
+- Samples a running Windows guest's QMP `screendump` on an interval
+  (`windows_reboot_watchdog_interval_seconds`) rather than holding a second,
+  persistent QMP connection open to watch for a `RESET` event — QEMU's QMP
+  chardev serves one client at a time, and `QemuEngine._liveness`'s own
+  docstring already records the incident a second permanent connection caused
+  once (a 40-minute Running/Stopped flap). Watching the symptom instead of the
+  event avoids reintroducing that class of bug.
+- A frame at or below `windows_reboot_watchdog_colour_threshold` (8; measured —
+  SeaBIOS's text-mode prompt renders as ~2 colours, every graphical stage
+  observed as 12+) held continuously for
+  `windows_reboot_watchdog_stuck_seconds` (300s default) is treated as stuck.
+  300s was chosen with margin, not tightness: every legitimate boot-to-
+  graphical transition measured anywhere in this project's Windows-guest work
+  landed under 40 seconds or never happened at all, so the default carries
+  roughly 8x headroom — a false positive here restarts a healthy VM and
+  destroys unsaved guest state, a materially worse outcome than a human
+  noticing a hang and restarting it themselves.
+- Recovery reuses `restart_instance()` unchanged — the same stop-then-start
+  path the manual `/restart` endpoint already uses, with its existing
+  90-second ACPI grace period and forced-kill backstop.
+- At most one automatic restart per `windows_reboot_watchdog_cooldown_seconds`
+  (1 hour default). Stuck again inside that window marks the instance `Error`
+  with an explanation instead of retrying — a bounded workaround, not a
+  supervisor that loops forever.
+- Its own event kind, `EventKind.AUTO_RESTARTED`, distinct from a
+  user-requested `RESTARTED` and from a routine `RECONCILED` correction. A
+  user has to be able to tell "the backend did this to your VM without being
+  asked" apart from both "you asked for this" and "a field was silently
+  corrected" — reusing either existing kind would have hidden that distinction.
+- The console auto-reconnects (`ConsoleModal.tsx`) up to three attempts when a
+  watched session drops and the backend still reports the instance Running,
+  rather than leaving whoever was watching stranded on a dead viewer with no
+  way back — the scenario the watchdog exists for is exactly the one where
+  someone is likely to be watching.
+
+**Removability is a design requirement, not an afterthought.** Every file this
+workaround touches — `reboot_watchdog.py` itself, the four
+`windows_reboot_watchdog_*` settings, `EventKind.AUTO_RESTARTED`,
+`windows_reboot_watchdog_pass` in `routers/instances.py`, its scheduling in
+`main.py`, and the frontend's auto-reconnect behaviour — is named in
+`reboot_watchdog.py`'s own module docstring as a checklist, so that if the
+upstream issue is fixed and this project's minimum QEMU version moves past it,
+removing the workaround is one commit against a checklist rather than an
+archaeology exercise.
+
+**Status.** Built, tested (pure state-machine and colour-classification unit
+tests, plus DB/engine integration tests for scoping, the restart action, the
+cooldown guard, and the give-up path), and documented in code and in
+docs/WINDOWS.md. Not yet validated against a real, complete Windows install —
+that requires the copy-phase fix (decision 54) to also be carried into
+`QemuEngine.build_launch_command`, which has not happened yet either.
+
 ## Known limitations
 
 - **The guest username is still `iaas`.** See decision 49; it needs a

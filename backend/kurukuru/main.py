@@ -70,6 +70,36 @@ async def _reconcile_loop(interval: int) -> None:
             logger.exception("Background reconciliation pass failed")
 
 
+def _reboot_watchdog_once() -> None:
+    """One watchdog pass, in its own DB session (blocking).
+
+    A heuristic workaround for an upstream QEMU/WHPX defect, not a general
+    health check — see kurukuru/reboot_watchdog.py's module docstring before
+    touching this. https://gitlab.com/qemu-project/qemu/-/issues/4410
+    """
+    from sqlmodel import Session
+
+    from kurukuru.database import engine as db_engine
+    from kurukuru.routers.instances import windows_reboot_watchdog_pass
+
+    with Session(db_engine) as session:
+        windows_reboot_watchdog_pass(session, get_settings())
+
+
+async def _reboot_watchdog_loop(interval: int) -> None:
+    """Periodically check every running Windows guest for the stuck-reboot
+    symptom this workaround exists for. Same shape as ``_reconcile_loop`` and
+    for the same reasons: sleep first, run blocking work off the event loop,
+    never let one bad pass end the loop.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.to_thread(_reboot_watchdog_once)
+        except Exception:  # noqa: BLE001 - the loop must outlive any single pass
+            logger.exception("Windows reboot-watchdog pass failed")
+
+
 def _warn_if_no_account() -> None:
     """Say what to run when the install has no owner yet.
 
@@ -158,6 +188,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Background reconciler every %ss", settings.reconcile_interval_seconds
         )
 
+    reboot_watchdog: asyncio.Task[None] | None = None
+    if settings.windows_reboot_watchdog_enabled:
+        reboot_watchdog = asyncio.create_task(
+            _reboot_watchdog_loop(settings.windows_reboot_watchdog_interval_seconds)
+        )
+        logger.info(
+            "Windows reboot watchdog every %ss (workaround for an upstream "
+            "QEMU/WHPX defect — see docs/WINDOWS.md)",
+            settings.windows_reboot_watchdog_interval_seconds,
+        )
+
     _warn_if_no_account()
     logger.info("%s v%s ready.", settings.app_name, settings.app_version)
     yield
@@ -166,6 +207,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         reconciler.cancel()
         with suppress(asyncio.CancelledError):
             await reconciler
+    if reboot_watchdog is not None:
+        reboot_watchdog.cancel()
+        with suppress(asyncio.CancelledError):
+            await reboot_watchdog
     logger.info("Shutting down.")
 
 

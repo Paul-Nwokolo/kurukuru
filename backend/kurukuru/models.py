@@ -962,6 +962,13 @@ class EventKind(str, Enum):
     PORT_FORWARD_REMOVED = "port_forward_removed"
     RECONCILED = "reconciled"
     IMAGE_IMPORT = "image_import"
+    #: A Windows guest looked stuck after an internal reboot and was restarted
+    #: automatically — the watchdog workaround in kurukuru/reboot_watchdog.py
+    #: for an upstream QEMU/WHPX defect, not a routine correction. Deliberately
+    #: its own kind rather than reusing RESTARTED or RECONCILED: a user must be
+    #: able to tell "the backend did something to your VM without being asked"
+    #: apart from both "you asked for this" and "a field was silently corrected".
+    AUTO_RESTARTED = "auto_restarted"
 
 
 class EventActor(str, Enum):

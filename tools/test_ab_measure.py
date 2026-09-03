@@ -79,6 +79,8 @@ def test_distribution_reports_min_median_max():
 
 def test_arm_spec_parsing():
     assert parse_arm("novnc:") == ("novnc", [])
-    assert parse_arm("vnc:-vnc,127.0.0.1:30") == ("vnc", ["-vnc", "127.0.0.1:30"])
-    assert parse_arm("usb:-device,qemu-xhci,id=xhci") == (
-        "usb", ["-device", "qemu-xhci", "id=xhci"])
+    assert parse_arm("vnc:-vnc;127.0.0.1:30") == ("vnc", ["-vnc", "127.0.0.1:30"])
+    # A single QEMU argv token can itself contain commas (`-device` properties);
+    # the delimiter is `;` precisely so this is not split apart.
+    assert parse_arm("usb:-device;qemu-xhci,id=xhci") == (
+        "usb", ["-device", "qemu-xhci,id=xhci"])
