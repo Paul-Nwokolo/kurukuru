@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import time
 from collections.abc import Iterable
 
 logger = logging.getLogger("kurukuru.qemu.ports")
@@ -40,6 +41,39 @@ def is_port_free(port: int, host: str = _BIND_HOST) -> bool:
         except OSError:
             return False
     return True
+
+
+def wait_for_port_free(
+    port: int,
+    host: str = _BIND_HOST,
+    *,
+    timeout: float = 5.0,
+    poll_interval: float = 0.05,
+) -> bool:
+    """Poll :func:`is_port_free` until it says yes, or ``timeout`` elapses.
+
+    Exists for one specific scenario, confirmed by forcing it directly (bind a
+    port in a child process, kill the child the same way
+    ``QemuEngine._force_off`` does, then hammer-rebind with no delay at all):
+    the OS can still refuse a bind for a short window *after* the killed
+    process is confirmed gone by ``pid_alive()`` — every forced trial saw the
+    first several rebind attempts fail before one finally succeeded. A single
+    :func:`is_port_free` check right after a forced kill cannot tell that
+    transient window apart from a genuinely different process now owning the
+    port. Retrying for a short, bounded window resolves the former without
+    meaningfully delaying detection of the latter: a real conflict still
+    reports not-free after ``timeout``.
+
+    Not a general "wait for anything" helper — it exists only to bridge this
+    one measured race, which is why the default timeout is short.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if is_port_free(port, host):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll_interval)
 
 
 def allocate_port(

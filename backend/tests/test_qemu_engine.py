@@ -13,7 +13,9 @@ real ``~/.kurukuru/qemu`` tree.
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,7 +29,12 @@ from kurukuru.engines.base import (
     HypervisorUnavailableError,
     LaunchOptions,
 )
-from kurukuru.engines.ports import PortAllocationError, allocate_port, is_port_free
+from kurukuru.engines.ports import (
+    PortAllocationError,
+    allocate_port,
+    is_port_free,
+    wait_for_port_free,
+)
 from kurukuru.engines.qemu import (
     HOST_IP,
     WINDOWS_WHPX_CPU,
@@ -209,6 +216,11 @@ def test_a_linux_guest_is_unchanged_by_the_windows_work(eng):
     assert any(d.startswith("virtio-net-pci,") for d in _devices(cmd))
     assert "ich9-ahci,id=ahci" not in _devices(cmd)
     assert eng.cpu_model("whpx", "linux") == "qemu64"
+    # DECISIONS #54 is a Windows-only fix. A Linux command line has to come out
+    # byte-for-byte what it always has — same machine string, no -rtc flag at
+    # all — the same bar the disk/NIC/display profile work was held to.
+    assert cmd[cmd.index("-machine") + 1] == "q35"
+    assert "-rtc" not in cmd
 
 
 def test_a_windows_guest_gets_hardware_setup_has_drivers_for(eng):
@@ -223,6 +235,18 @@ def test_a_windows_guest_gets_hardware_setup_has_drivers_for(eng):
     assert any(d.startswith("e1000e,") for d in devices)
     assert not any("virtio" in d for d in devices)
     assert not any("if=virtio" in d for d in _drives(cmd))
+
+
+def test_windows_gets_the_copy_phase_fix(eng):
+    """DECISIONS #54: q35 stalled Setup's copy phase below 30% on every
+    attempt; an i440fx-family machine with hpet=off, plus -rtc
+    base=localtime, took a real Windows 10 install through the entire copy
+    phase reliably. Gated on guest_os == "windows" — see the paired Linux
+    assertion in test_a_linux_guest_is_unchanged_by_the_windows_work."""
+    cmd = eng.build_launch_command("win", _runtime(guest_os="windows"))
+
+    assert cmd[cmd.index("-machine") + 1] == "pc,hpet=off"
+    assert cmd[cmd.index("-rtc") + 1] == "base=localtime"
 
 
 def test_the_ahci_controller_precedes_every_disk_that_names_it(eng):
@@ -685,6 +709,64 @@ def test_allocate_port_rejects_an_inverted_range():
         allocate_port(2300, 2200)
 
 
+# --------------------------------------------------------------------------- #
+# wait_for_port_free — the just-killed-our-own-process race
+#
+# Forced for real per CONTRIBUTING's rule ("prove a new guard fires. Break
+# something on purpose."): a mock proves the retry loop's arithmetic, not that
+# it survives the actual OS behaviour it exists for. A single is_port_free()
+# check right after TerminateProcess is empirically racy on this host — see
+# wait_for_port_free's docstring — so these bind a real port in a real child
+# process and kill it the same way QemuEngine._force_off does.
+# --------------------------------------------------------------------------- #
+def _spawn_port_holder() -> tuple[subprocess.Popen, int]:
+    """A child process that binds a port, prints it, and holds it until killed."""
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-c",
+            "import socket,time\n"
+            "s = socket.socket()\n"
+            "s.bind(('127.0.0.1', 0))\n"
+            "print(s.getsockname()[1], flush=True)\n"
+            "s.listen(1)\n"
+            "time.sleep(30)\n",
+        ],
+        stdout=subprocess.PIPE, text=True,
+    )
+    port = int(proc.stdout.readline())
+    return proc, port
+
+
+def test_wait_for_port_free_recovers_from_a_just_killed_processs_race():
+    """The race this function exists for, forced rather than hoped for: kill a
+    process holding a port and attempt the rebind immediately, with no delay
+    at all -- the worst case start_instance can actually hit after
+    stop_instance's forced-kill backstop."""
+    proc, port = _spawn_port_holder()
+    try:
+        # The premise: genuinely busy before anything happens.
+        with socket.socket() as probe, pytest.raises(OSError):
+            probe.bind(("127.0.0.1", port))
+
+        proc.kill()  # TerminateProcess on Windows -- what _force_off does
+        # No sleep here on purpose: this is the exact moment start_instance's
+        # retry has to survive.
+        assert wait_for_port_free(port, timeout=2.0) is True
+    finally:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_wait_for_port_free_still_refuses_a_port_someone_else_genuinely_holds():
+    """The other branch of the same guard: a port held for the *entire*
+    window is a real conflict, not the transient race above, and must still
+    be reported as not-free rather than the retry papering over it forever."""
+    with socket.socket() as held:
+        held.bind((HOST_IP, 0))
+        held.listen(1)
+        assert wait_for_port_free(held.getsockname()[1], timeout=0.2) is False
+
+
 def test_runtime_allocation_gives_three_distinct_ports_in_range(eng, settings):
     runtime = eng._allocate_runtime("web", cpus=1, memory="1G")
 
@@ -940,8 +1022,12 @@ def test_start_without_runtime_state_fails_loudly(eng):
 
 
 def test_start_refuses_when_a_pinned_port_was_taken(eng):
+    """A port held for the whole wait window is a genuine conflict, not the
+    transient just-killed-our-own-process race wait_for_port_free exists for
+    — it must still be refused, just after waiting rather than instantly."""
     import socket
 
+    eng._settings.qemu_port_release_timeout_seconds = 0.05
     with socket.socket() as held:
         held.bind((HOST_IP, 0))
         held.listen(1)
@@ -1014,6 +1100,57 @@ def test_windows_does_not_get_a_different_accelerator(eng):
 def test_an_explicit_accelerator_is_still_honoured(eng):
     assert eng.resolve_accel("tcg", "windows") == "tcg"
     assert eng.resolve_accel(eng.accel(), "windows") == eng.accel()
+
+
+# --------------------------------------------------------------------------- #
+# clone_disk's timeout-vs-completed race — measured directly (DECISIONS #58):
+# a real Windows disk's `qemu-img convert` can finish writing every byte and
+# only then be killed by Python's own subprocess timeout before it returns,
+# reporting a completed clone as failed. clone_disk must verify before
+# trusting that verdict.
+# --------------------------------------------------------------------------- #
+def _stage_source_disk(eng, name: str) -> Path:
+    disk = eng._disk_path(name)
+    disk.parent.mkdir(parents=True, exist_ok=True)
+    disk.write_bytes(b"not a real qcow2, just needs to exist")
+    return disk
+
+
+def test_clone_disk_treats_a_timed_out_but_intact_conversion_as_success(eng):
+    """The exact scenario measured: convert times out, but the file it wrote
+    is complete. clone_disk must not report failure for a clone that actually
+    finished."""
+    _stage_source_disk(eng, "web")
+
+    def fake_run(cmd, **kwargs):
+        if "convert" in cmd:
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout"))
+        # "check" -- report intact, as the real qemu-img did on the file this
+        # bug was found against.
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with patch("kurukuru.engines.qemu.subprocess.run", side_effect=fake_run):
+        eng.clone_disk("web", "webclone")  # must not raise
+
+
+def test_clone_disk_still_raises_when_the_timed_out_image_is_broken(eng):
+    """The other branch: a timeout whose file genuinely is not intact is a
+    real failure, not this timing artifact, and must still be reported --
+    naming the setting to change, per CONTRIBUTING's rule that a failure
+    message should tell the reader what to do, not just that something broke.
+    """
+    _stage_source_disk(eng, "web")
+
+    def fake_run(cmd, **kwargs):
+        if "convert" in cmd:
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout"))
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=1, stdout="", stderr="qcow2: Image is corrupt"
+        )
+
+    with patch("kurukuru.engines.qemu.subprocess.run", side_effect=fake_run):
+        with pytest.raises(ComputeTimeoutError, match="qemu_snapshot_timeout_seconds"):
+            eng.clone_disk("web", "webclone")
 
 
 # --------------------------------------------------------------------------- #

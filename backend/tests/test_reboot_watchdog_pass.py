@@ -161,3 +161,71 @@ def test_stuck_again_within_the_cooldown_marks_error_instead_of_looping(client):
     events = _events(client, instance_id)
     assert events[0]["kind"] == EventKind.ERRORED.value
     assert "cooldown" in events[0]["detail"].lower() or "stuck again" in events[0]["detail"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# _restart_with_retry — restart_instance() failing mechanically (e.g. a
+# just-force-killed process's own pinned port not yet released) is a
+# different axis from the stuck-again/cooldown path above. Giving up after
+# exactly one such failure would fail the watchdog at the one moment it
+# exists for; see reboot_watchdog.py and _restart_with_retry's docstring.
+# --------------------------------------------------------------------------- #
+def test_a_transient_restart_failure_is_retried_not_given_up_on(client):
+    """The fake's start_instance fails once, as QemuEngine's really did after
+    a forced kill — the watchdog must still complete the restart, not mark
+    the instance Error on the first hiccup."""
+    from datetime import timedelta
+
+    with Session(client.db_engine) as session:
+        instance = _add_instance(session)
+        instance_id = instance.id
+
+    with patch("kurukuru.routers.instances.time.sleep"), patch(
+        "kurukuru.routers.instances.screendump"
+    ), patch("kurukuru.routers.instances.colour_count", return_value=2):
+        with Session(client.db_engine) as session:
+            assert windows_reboot_watchdog_pass(session, _WATCHDOG_SETTINGS) == 0
+
+        watch = _reboot_watchdog.get(instance_id)
+        watch.low_since -= timedelta(seconds=301)
+
+        client.fake.fail_starts = 1  # type: ignore[attr-defined]
+        with Session(client.db_engine) as session:
+            acted = windows_reboot_watchdog_pass(session, _WATCHDOG_SETTINGS)
+
+    assert acted == 1
+    assert client.get(f"/instances/{instance_id}").json()["status"] == "Running"
+    events = _events(client, instance_id)
+    kinds = [e["kind"] for e in events]
+    assert EventKind.AUTO_RESTARTED.value in kinds
+    assert EventKind.ERRORED.value not in kinds
+
+
+def test_a_restart_failure_that_never_clears_is_still_given_up_on(client):
+    """The other branch of the same guard: a failure that outlasts every
+    retry attempt is a real problem, not a transient race, and must still be
+    reported rather than retried forever."""
+    from datetime import timedelta
+
+    with Session(client.db_engine) as session:
+        instance = _add_instance(session)
+        instance_id = instance.id
+
+    with patch("kurukuru.routers.instances.time.sleep"), patch(
+        "kurukuru.routers.instances.screendump"
+    ), patch("kurukuru.routers.instances.colour_count", return_value=2):
+        with Session(client.db_engine) as session:
+            assert windows_reboot_watchdog_pass(session, _WATCHDOG_SETTINGS) == 0
+
+        watch = _reboot_watchdog.get(instance_id)
+        watch.low_since -= timedelta(seconds=301)
+
+        client.fake.fail_starts = 1_000  # exceeds every retry attempt
+        with Session(client.db_engine) as session:
+            acted = windows_reboot_watchdog_pass(session, _WATCHDOG_SETTINGS)
+
+    assert acted == 1
+    assert client.get(f"/instances/{instance_id}").json()["status"] == "Error"
+    events = _events(client, instance_id)
+    assert events[0]["kind"] == EventKind.ERRORED.value
+    assert "attempt" in events[0]["detail"].lower()

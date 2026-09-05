@@ -65,6 +65,11 @@ class FakeQemuEngine(ComputeEngine):
         # Simulates an unreachable hypervisor for the next N reads.
         self.fail_reads = 0
         self.read_count = 0
+        # Simulates start_instance failing (e.g. a just-force-killed process's
+        # own pinned port not yet released) for the next N calls — see
+        # _restart_with_retry in routers/instances.py.
+        self.fail_starts = 0
+        self.start_count = 0
         # ISO guests get no key injection, so the real engine reports them with
         # no address and no SSH port — the console is their only way in.
         self.iso_mode = False
@@ -120,6 +125,12 @@ class FakeQemuEngine(ComputeEngine):
         self.state[name] = self._info(name, InstanceStatus.RUNNING, running=True)
 
     def start_instance(self, name):
+        self.start_count += 1
+        if self.fail_starts > 0:
+            self.fail_starts -= 1
+            raise ComputeEngineError(
+                f"Cannot start '{name}': its pinned port is in use by another process"
+            )
         self._record("start", name)
         self.state[name] = self._info(name, InstanceStatus.RUNNING, running=True)
 

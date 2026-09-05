@@ -43,7 +43,13 @@ gives that roughly 8x headroom). That is an inference, not a certainty.
   ``Settings.windows_reboot_watchdog_cooldown_seconds``). If the guest is
   stuck again when the cooldown allows another attempt, this does not loop
   indefinitely — the instance is marked ``Error`` with an explanation instead,
-  and a human has to look at it.
+  and a human has to look at it. This governs a guest that is *stuck again
+  after a successful restart* — a different axis from
+  ``routers.instances._restart_with_retry``, which bounds retries of the
+  restart *call itself* failing mechanically (e.g. a pinned port not yet
+  released by the process this same restart just force-killed). The two
+  are not layered into one budget: a mechanical failure retried and then
+  recovered does not count against this cooldown at all.
 
 **Removability.** Everything this defect's workaround touches is confined to:
 this file, the four `windows_reboot_watchdog_*` settings in `config.py`, the
