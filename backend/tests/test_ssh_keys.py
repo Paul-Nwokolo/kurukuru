@@ -25,7 +25,11 @@ from kurukuru.ssh_keys import (
 
 @pytest.fixture()
 def settings(tmp_path: Path) -> Settings:
-    return Settings(ssh_key_dir=str(tmp_path / "keys"))
+    # state_dir too, not just ssh_key_dir: every other _ROOTED_DIRS field this
+    # fixture doesn't name explicitly would otherwise fall back to the real
+    # ~/.kurukuru default (DECISIONS #59 found exactly this shape of bug, in
+    # a different fixture, leaking a real directory).
+    return Settings(state_dir=str(tmp_path / "state"), ssh_key_dir=str(tmp_path / "keys"))
 
 
 def _fake_keygen_factory(pub_contents: str = "ssh-ed25519 AAAAFAKE test"):
