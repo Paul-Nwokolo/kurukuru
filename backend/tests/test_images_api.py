@@ -66,7 +66,13 @@ def store(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def settings(tmp_path: Path, store: Path) -> Settings:
+    # state_dir, so every _ROOTED_DIRS field this fixture doesn't name
+    # explicitly (ssh_key_dir, cloud_init_dir, db_backup_dir, database_url,
+    # auth_token_file) roots under tmp_path too, rather than falling back to
+    # the real ~/.kurukuru default — DECISIONS #59 found this exact shape of
+    # bug in two other fixtures already.
     return Settings(
+        state_dir=str(tmp_path / "state"),
         qemu_dir=str(tmp_path / "qemu"),
         iso_dir=str(tmp_path / "isos"),
         post_launch_ip_timeout_seconds=1,

@@ -231,12 +231,25 @@ def _run_pytest(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
     )
 
 
+@pytest.mark.real_state
 def test_a_test_that_writes_to_the_real_state_fails_the_run(tmp_path):
     """The whole point, end to end.
 
     Without this, the guard is a claim. With it, the guard has been observed
     turning a leak into a red test naming the file that caused it.
+
+    Marked ``real_state`` because this outer test has to guarantee
+    ``REAL_STATE_DIR / "keys"`` exists before the generated subprocess test
+    can write a stray file *into* it — it used to rely on that directory
+    already being there from ordinary use of a developer's own install, which
+    silently stopped being true the moment DECISIONS #59's leaks were fixed.
+    The generated subprocess test itself is not marked: it is what the guard
+    has to catch, running under its own, separate, non-exempt pytest process.
     """
+    keys_dir = REAL_STATE_DIR / "keys"
+    pre_existing = keys_dir.exists()
+    keys_dir.mkdir(parents=True, exist_ok=True)
+
     result = _run_pytest(
         tmp_path,
         f"""
@@ -249,13 +262,15 @@ def test_a_test_that_writes_to_the_real_state_fails_the_run(tmp_path):
         """,
     )
 
-    stray = REAL_STATE_DIR / "keys" / "leaked-by-test.tmp"
+    stray = keys_dir / "leaked-by-test.tmp"
     try:
         assert result.returncode != 0, result.stdout
         assert "wrote to the real install" in result.stdout
         assert "test_leaks" in result.stdout
     finally:
         stray.unlink(missing_ok=True)
+        if not pre_existing:
+            keys_dir.rmdir()
 
 
 def test_an_ordinary_test_passes_under_the_same_harness(tmp_path):
@@ -271,21 +286,36 @@ def test_an_ordinary_test_passes_under_the_same_harness(tmp_path):
     assert result.returncode == 0, result.stdout
 
 
+@pytest.mark.real_state
 def test_the_real_state_marker_opts_out(tmp_path):
     """The escape hatch exists and works, so a future need is not a reason to
-    weaken the default for everyone."""
-    result = _run_pytest(
-        tmp_path,
-        f"""
-        import pytest
-        from pathlib import Path
+    weaken the default for everyone.
 
-        @pytest.mark.real_state
-        def test_allowed_to_touch_it():
-            stray = Path({str(REAL_STATE_DIR / "keys")!r}) / "marked-opt-in.tmp"
-            stray.write_text("permitted")
-            stray.unlink()
-        """,
-    )
+    Marked ``real_state`` for the same reason as the test above: the
+    generated subprocess test's own opt-out only covers the guard, not the
+    filesystem, so this outer test has to guarantee the directory it writes
+    into actually exists first.
+    """
+    keys_dir = REAL_STATE_DIR / "keys"
+    pre_existing = keys_dir.exists()
+    keys_dir.mkdir(parents=True, exist_ok=True)
 
-    assert result.returncode == 0, result.stdout
+    try:
+        result = _run_pytest(
+            tmp_path,
+            f"""
+            import pytest
+            from pathlib import Path
+
+            @pytest.mark.real_state
+            def test_allowed_to_touch_it():
+                stray = Path({str(REAL_STATE_DIR / "keys")!r}) / "marked-opt-in.tmp"
+                stray.write_text("permitted")
+                stray.unlink()
+            """,
+        )
+
+        assert result.returncode == 0, result.stdout
+    finally:
+        if not pre_existing:
+            keys_dir.rmdir()

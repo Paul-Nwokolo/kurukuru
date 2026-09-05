@@ -131,6 +131,17 @@ def _warn_if_no_account() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup/shutdown hooks."""
+    # Read fresh, not the module-level `settings` above — that one is bound
+    # once at import time, and every test's `isolated_state` fixture patches
+    # the *function* `get_settings` (discovered on already-imported modules,
+    # including this one), not a value some module already cached from
+    # calling it before the patch existed. In production `get_settings()` is
+    # lru_cache'd, so this returns the identical object the module-level name
+    # does — no behaviour change there. In tests, this is what actually picks
+    # up the patched, tmp_path-rooted settings: real state directory
+    # (DECISIONS #59), so it matters.
+    settings = get_settings()
+
     # The resolved URL, not the configured one: "~/.kurukuru/kurukuru.db" and the
     # absolute path it expands to are the same setting, but only one of them is
     # a path you can go and look at.
@@ -712,7 +723,7 @@ def list_flavors() -> dict[str, dict[str, int]]:
 
 
 @system.get("/ssh-key", tags=["system"])
-def ssh_key() -> dict[str, str]:
+def ssh_key(request_settings: Settings = Depends(get_settings)) -> dict[str, str]:
     """Return the orchestrator's public key so the UI/user can inspect it.
 
     The keypair is generated on first access. ``private_key_path`` is what the
@@ -724,13 +735,13 @@ def ssh_key() -> dict[str, str]:
     from kurukuru.ssh_keys import SSHKeyError, get_private_key_path, get_public_key
 
     try:
-        private_key_path = str(get_private_key_path(settings))
+        private_key_path = str(get_private_key_path(request_settings))
         return {
-            "public_key": get_public_key(settings),
+            "public_key": get_public_key(request_settings),
             "private_key_path": private_key_path,
             # Retained under its original name for pre-existing consumers.
             "key_path": private_key_path,
-            "ssh_user": settings.default_vm_user,
+            "ssh_user": request_settings.default_vm_user,
         }
     except SSHKeyError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

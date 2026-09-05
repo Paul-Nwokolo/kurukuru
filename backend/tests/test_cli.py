@@ -108,7 +108,20 @@ def make_cli(monkeypatch, tmp_path, small_host):
 
         iso_dir = tmp_path / "isos"
         iso_dir.mkdir(exist_ok=True)
+        # state_dir is the one that matters: every _ROOTED_DIRS field this
+        # fixture does NOT name explicitly (cloud_init_dir, db_backup_dir,
+        # database_url, auth_token_file) is otherwise left at its default —
+        # the real ~/.kurukuru — since Settings() with no state_dir override
+        # resolves everything else against DEFAULT_STATE_DIR. Found leaking a
+        # real, empty ~/.kurukuru/cloud-init directory (DECISIONS #59) because
+        # this fixture named only the three fields the tests at the time
+        # happened to touch, the exact hand-maintained-list mistake
+        # conftest.py's own docstring warns isolated_state was built to
+        # replace. iso_dir/qemu_dir/ssh_key_dir stay explicit below anyway —
+        # _apply_state_dir only re-roots a field still at its default, so an
+        # explicit value here is never overridden by adding state_dir.
         test_settings = Settings(
+            state_dir=str(tmp_path / "state"),
             post_launch_ip_timeout_seconds=1,
             post_launch_poll_seconds=0.001,
             iso_dir=str(iso_dir),

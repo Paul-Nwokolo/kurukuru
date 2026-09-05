@@ -2719,6 +2719,103 @@ re-run clean: 949 backend tests.
 `create_blank_disk` and a clone's `resize` step are metadata-scale operations
 regardless of disk size and were never observed near this timeout.
 
+## 59. The `~/.kurukuru/keys`/`cloud-init` test-isolation leak, root-caused and fixed
+
+**Context.** Decision 58's own note recorded this as a real, reproducible,
+unsolved leak — surfaced only because `~/.kurukuru` had just been deleted
+from this machine as part of unrelated disk-space work, previously masked by
+a real, already-existing directory the isolation guard
+(`conftest.no_real_state_writes`) saw no diff against. Asked to fix it
+properly rather than leave it recorded.
+
+**Root-caused by forcing the actual call to appear, not by reasoning about
+the fixture code.** Reasoning about `_app_modules_with`'s discovery loop and
+import ordering kept concluding the patches *should* work; they did not.
+What actually found it: patching `subprocess.Popen.__init__`/`subprocess.run`
+at the lowest level, writing every matching call's full stack trace to a
+file (bypassing pytest's own output capture, which swallowed print-based
+attempts), and reading the trace. Two distinct, independently-introduced
+bugs, both in `kurukuru/main.py`:
+
+1. **`lifespan()` used the module-level `settings = get_settings()`
+   (bound once at import time, before any test's patch exists) instead of a
+   fresh call.** `conftest.isolated_state` patches the `get_settings`
+   *function* on every already-imported module — including `main.py`, which
+   gets imported at pytest *collection* time (before any fixture runs) by
+   `test_auth_coverage.py`'s own module-level `from kurukuru.main import
+   app`. Patching the function does nothing for a *value* `main.py` already
+   computed by calling it once, before the patch existed. `lifespan()`
+   passed that stale, real settings object straight into
+   `ensure_orchestrator_keypair(settings)`, which reached
+   `ssh_keys.ensure_keypair()` and ran real `ssh-keygen` against the real
+   `~/.kurukuru/keys` the first time any test entered `TestClient` as a
+   context manager (triggering a real ASGI lifespan startup) — which is
+   also why the blamed test varied by run: whichever test was first to do
+   that, in whatever order/subset was executing, generated the (only ever
+   generated once per real, un-isolated state directory) real keypair, and
+   every later reuse of it produced no *new* diff to catch.
+2. **`GET /ssh-key` took no settings dependency at all**, reading the same
+   stale module-level `settings` directly rather than the
+   `request_settings: Settings = Depends(get_settings)` pattern every other
+   route in this file already uses correctly.
+
+**Fixed by making both read `get_settings()` at call time** — `settings =
+get_settings()` as the first line of `lifespan()`'s body (shadowing the
+module-level name for that function only), and `Depends(get_settings)` added
+to `ssh_key()`, matching the established pattern. `get_settings()` is
+`lru_cache`d, so in production this returns the identical object either way
+— zero behaviour change there; the fix only matters where something
+replaces what `get_settings()` returns after import, which today is only
+ever a test.
+
+**A third, unrelated bug of the same *shape*, in the tests themselves, once
+the first two stopped covering for it.** `test_cli.py`'s `make_cli` and
+`test_images_api.py`'s `settings` fixtures each built a `Settings(...)` by
+naming a hand-picked subset of directory fields (`qemu_dir`, `ssh_key_dir`,
+`iso_dir`) without ever setting `state_dir` itself — so every field *not*
+named (`cloud_init_dir` foremost) silently fell back to
+`DEFAULT_STATE_DIR`, the real `~/.kurukuru`, per `_apply_state_dir`'s
+"only re-root a field still at its default" rule. Harmless as long as
+nothing the test exercised touched one of the un-named fields; `lifespan()`
+calling `ensure_builtin_image(settings)` (cloud-init) is exactly such a
+touch. This is the identical mistake `conftest.py`'s own docstring already
+names as the reason `isolated_state` exists — an opt-in, hand-maintained
+list of what to redirect, the same shape as Phase 10 and Phase 11's
+incidents — just recurring inside individual test fixtures rather than in
+the shared harness this time. Fixed by adding `state_dir=str(tmp_path /
+"state")` alongside the existing explicit overrides in both fixtures (which
+`_apply_state_dir`'s explicit-wins rule leaves untouched), and in
+`test_ssh_keys.py`'s `settings` fixture, which had the same latent shape but
+hadn't yet been caught touching an affected field.
+
+**`test_isolation.py`'s own two "prove the guard fires" tests were
+inadvertently relying on the very leak being fixed.** Both wrote a stray
+file directly into `REAL_STATE_DIR / "keys"` without creating the directory
+first, silently depending on it already existing from ordinary use (or, on
+this machine, from the bugs above) — once those stopped leaving it behind,
+these tests failed with a bare `FileNotFoundError` instead of exercising
+what they were written to prove. Fixed by having each outer test
+`mkdir(parents=True, exist_ok=True)` the directory itself (recording
+whether it pre-existed) before running its generated subprocess test, and
+`rmdir()`-ing it afterward if this test was the one that created it. Marked
+`@pytest.mark.real_state` — the same exemption the module docstring says
+any test that "genuinely needs the real paths" should carry, with the
+explanation living in this commit as that rule asks.
+
+**Verified clean, not just plausible.** Three consecutive full-suite runs
+from a freshly-deleted `~/.kurukuru`: 949 passed, 4 skipped, 0 errors every
+time — the same suite that, before this fix, reliably left real key or
+cloud-init files behind on at least one of `test_auth_coverage.py`,
+`test_cli.py`, or `test_images_api.py` depending on run order.
+
+**Status.** Fixed. `conftest.isolated_state`'s discovery-based redirect
+mechanism itself was never wrong — every instance of this bug was either
+code that bypassed it entirely (a value cached before the patch existed,
+same as decision 58's dismissed-then-vindicated `database.py` suspicion) or
+a test fixture that reinvented a narrower, hand-maintained version of what
+it already does comprehensively. No change to `conftest.py` itself was
+needed or made.
+
 ## Known limitations
 
 - **The guest username is still `iaas`.** See decision 49; it needs a
@@ -2729,29 +2826,5 @@ regardless of disk size and were never observed near this timeout.
   a TLS-terminating proxy in front of it. See docs/SECURITY.md.
 - **SQLite, single writer.** Fine now; a multi-process deployment would need
   more.
-- **A test-isolation gap lets `~/.kurukuru/keys` leak onto the real machine.**
-  Observed twice in one session (2026-09-05), on different tests each time
-  (`test_reboot_watchdog_pass.py::test_a_healthy_windows_guest_is_left_alone`
-  alone on one run; `test_auth_coverage.py::test_every_route_is_closed_or_deliberately_public[/api/openapi.json-GET]`
-  and `test_cli.py::test_launch_without_wait_reports_the_accepted_record`
-  together on another) — always whichever test happens to run first in that
-  particular invocation, which stops recurring once the directory exists
-  because the isolation guard (`conftest.no_real_state_writes`) only fails on
-  a before/after *difference*, not on the directory's mere presence. Only
-  surfaced because `~/.kurukuru` had just been deleted from this machine's C:
-  drive as part of unrelated disk-space work — previously masked by a
-  real, already-existing directory the guard saw no diff against.
-  `conftest.isolated_state` is supposed to have closed this whole class (see
-  its own docstring and `redirect_db_engines`'s note on Phase 11/12's
-  db_engine-redirect gap being the same shape of bug); this is a third
-  instance of state escaping to a real path despite that fixture existing.
-  Ruled out without finding the actual source: every explicit call site of
-  `ssh_keys.ensure_keypair()`/`get_public_key()`/`get_private_key_path()`
-  passes a `settings` argument through rather than relying on the
-  implicit `get_settings()` default, and `database.py`'s module-level
-  `settings = get_settings()` (bound once at import time, before any test's
-  patch) only ever feeds the already-correctly-redirected `db_engine`, not
-  anything key-related. Not fixed — recorded so the next person does not
-  start this investigation from zero.
 - **Concurrent-launch name race.** See decision 6 — closable with a partial
   unique index if it ever matters.
