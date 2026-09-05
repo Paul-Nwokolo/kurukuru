@@ -271,12 +271,35 @@ class Settings(BaseSettings):
     qemu_guest_nameservers: list[str] = ["1.1.1.1", "8.8.8.8"]
     # How long provision/start wait for the guest's SSH port to answer.
     qemu_boot_timeout_seconds: int = 600
-    # How long a snapshot create/restore may take. Independent of the boot
-    # timeout: these are disk operations whose cost scales with how much the
-    # overlay has diverged, not with how long a guest takes to start.
-    qemu_snapshot_timeout_seconds: int = 900
+    # How long a snapshot create/restore, or a clone's `qemu-img convert`, may
+    # take. Independent of the boot timeout: these are disk operations whose
+    # cost scales with how much data actually has to move, not with how long
+    # a guest takes to start. Measured, not guessed: cloning a real Windows
+    # install (~14 GB actually used) took ~17 minutes on ordinary disk
+    # throughput and hit the previous 900s (15 min) default right at the
+    # finish line — DECISIONS #58. At roughly 1.2 min/GB, this project's own
+    # `windows` flavor preset (40 GB) could plausibly use the full disk over
+    # time, which alone is ~48 minutes; 5400s (90 min) leaves real headroom
+    # above that, not just above the one measurement.
+    qemu_snapshot_timeout_seconds: int = 5400
     # Grace period for system_powerdown before the process is killed.
     qemu_shutdown_timeout_seconds: int = 90
+    # How long start_instance waits for a just-force-killed process's own
+    # pinned ports to actually become bindable again. Measured, not guessed:
+    # forcing the exact race (bind a port in a child process, TerminateProcess
+    # it, then hammer-rebind with no delay) shows the OS can still refuse a
+    # bind for a short window after the process is confirmed dead by
+    # pid_alive() — a lightweight test process cleared it within ~2ms every
+    # time tried, and a real QEMU process (many more sockets and handles to
+    # tear down) was observed taking noticeably longer during a live restart.
+    # A single is_port_free() check right after `_force_off` cannot tell that
+    # transient window apart from a genuinely different process now owning the
+    # port, and restart_instance() failing on the former is exactly the
+    # scenario reboot_watchdog.py exists to recover from — see its module
+    # docstring. Retrying for a short, bounded window resolves the transient
+    # case without meaningfully delaying detection of a real conflict, which
+    # still fails after this many seconds.
+    qemu_port_release_timeout_seconds: float = 5.0
     # Host port pools. Ports are bind-probed and then pinned to the instance for
     # its whole life so "Copy SSH" keeps working across stop/start.
     qemu_ssh_port_min: int = 2200

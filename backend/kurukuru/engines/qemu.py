@@ -48,7 +48,12 @@ from kurukuru.engines.base import (
 )
 from kurukuru.engines.capabilities import QemuSupport, cached_support
 from kurukuru.engines.images import BaseImageError, ensure_base_image
-from kurukuru.engines.ports import PortAllocationError, allocate_port, is_port_free
+from kurukuru.engines.ports import (
+    PortAllocationError,
+    allocate_port,
+    is_port_free,
+    wait_for_port_free,
+)
 from kurukuru.engines.process import ProcessError, pid_alive, spawn_detached, terminate_pid
 from kurukuru.engines.qmp import (
     QmpError,
@@ -205,6 +210,20 @@ class GuestProfile:
     #: accurately, which makes Setup and the Windows desktop painful to drive.
     #: Absolute coordinates remove that entirely.
     usb_input: bool
+    #: QEMU ``-machine`` value. DECISIONS #54: Windows Setup's copy phase
+    #: stalled below 30% on q35 on every attempt, and switching to an
+    #: i440fx-family machine (QEMU's ``pc`` alias) with ``hpet=off`` — nothing
+    #: else — took a real Windows 10 install through the entire copy phase
+    #: reliably (13/13 at the boot phase, then a full install run: 0% to
+    #: "needs to restart" in ~9 minutes, zero stalling). Linux keeps q35
+    #: unchanged; nothing here was tested against, or is claimed to apply to,
+    #: Linux guests.
+    machine: str
+    #: ``-rtc`` argument, or None to omit the flag entirely. DECISIONS #54
+    #: measured this together with ``machine``'s ``hpet=off``, never
+    #: separately — the two are one fix, not two independent ones, so they
+    #: are not exposed as settings a guest could pick apart.
+    rtc: str | None
 
     @property
     def default_display(self) -> str:
@@ -227,6 +246,9 @@ GUEST_PROFILES: dict[str, GuestProfile] = {
         # fallback, and adding devices would change the hardware under every
         # instance already on disk for no measured gain.
         usb_input=False,
+        # Unchanged from what every existing Linux instance already boots on.
+        machine="q35",
+        rtc=None,
     ),
     "windows": GuestProfile(
         disk_bus="ahci",
@@ -237,6 +259,9 @@ GUEST_PROFILES: dict[str, GuestProfile] = {
         # and without USB HID it is not actually usable. Windows carries inbox
         # drivers for xHCI and USB HID, so this costs nothing at install time.
         usb_input=True,
+        # DECISIONS #54's copy-phase fix.
+        machine="pc,hpet=off",
+        rtc="base=localtime",
     ),
 }
 
@@ -421,6 +446,22 @@ class QemuEngine(ComputeEngine):
                 returncode=proc.returncode,
             )
         return proc
+
+    def _image_is_intact(self, path: Path) -> bool:
+        """``qemu-img check`` a qcow2 file. False on any doubt, never raises.
+
+        Used only to tell a genuinely incomplete conversion apart from one
+        that finished writing and was merely killed too slowly to report it —
+        see :meth:`clone_disk`. A fixed, short timeout: checking a file's
+        own internal consistency is metadata work, not a bulk copy, so it
+        does not scale with the disk the way the conversion it is verifying
+        does.
+        """
+        try:
+            self._run([self._img_binary, "check", str(path)], timeout=120)
+            return True
+        except (ComputeEngineError, ComputeTimeoutError):
+            return False
 
     # ------------------------------------------------------------------ #
     # Acceleration probe
@@ -705,7 +746,7 @@ class QemuEngine(ComputeEngine):
         cmd = [
             self._system_binary,
             "-name", name,
-            "-machine", "q35",
+            "-machine", profile.machine,
             "-accel", self._accel_arg(runtime.accel),
             "-cpu", self.cpu_model(runtime.accel, runtime.guest_os),
             # -vga virtio is the single-device form: virtio-gpu for the
@@ -715,6 +756,8 @@ class QemuEngine(ComputeEngine):
             "-smp", str(runtime.cpus),
             "-m", runtime.memory,
         ]
+        if profile.rtc is not None:
+            cmd += ["-rtc", profile.rtc]
 
         if profile.disk_bus == "ahci":
             # Windows: one ICH9 SATA controller, then every disk as a numbered
@@ -957,8 +1000,20 @@ class QemuEngine(ComputeEngine):
         # The pinned ports are part of the instance's identity; if the host has
         # given one away while the VM was stopped, say so rather than silently
         # moving the SSH endpoint out from under a copied command.
+        #
+        # Waited for, not checked once: immediately after this same instance
+        # was force-killed (stop_instance's backstop, or a caller retrying a
+        # restart), the OS can still refuse a bind to one of its own
+        # just-vacated ports for a short window even though pid_alive() already
+        # confirms the process gone — see wait_for_port_free's docstring for
+        # how that was measured. A single is_port_free() check cannot tell
+        # that transient window apart from a different process genuinely
+        # owning the port now; this can, because a real conflict still fails
+        # after qemu_port_release_timeout_seconds.
         for label, port in (("SSH", runtime.ssh_port), ("QMP", runtime.qmp_port), ("VNC", runtime.vnc_port)):
-            if not is_port_free(port):
+            if not wait_for_port_free(
+                port, timeout=self._settings.qemu_port_release_timeout_seconds
+            ):
                 raise ComputeEngineError(
                     f"Cannot start '{name}': its pinned {label} port {port} is "
                     "in use by another process"
@@ -998,21 +1053,47 @@ class QemuEngine(ComputeEngine):
 
         target_dir = self._dir(target)
         target_dir.mkdir(parents=True, exist_ok=True)
-        self._run(
-            [
-                self._img_binary, "convert",
-                "-O", "qcow2",
-                str(source_disk),
-                str(target_dir / _DISK_FILE),
-            ],
-            timeout=self._settings.qemu_snapshot_timeout_seconds,
-        )
+        target_disk = target_dir / _DISK_FILE
+        try:
+            self._run(
+                [
+                    self._img_binary, "convert",
+                    "-O", "qcow2",
+                    str(source_disk),
+                    str(target_disk),
+                ],
+                timeout=self._settings.qemu_snapshot_timeout_seconds,
+            )
+        except ComputeTimeoutError:
+            # Measured directly (DECISIONS #58): a real Windows disk's
+            # conversion can finish writing every byte and only then have
+            # Python's own subprocess timeout kill `qemu-img` before it
+            # returns — the file was complete and passed `qemu-img check`
+            # clean, yet this timeout reported the clone as failed. Verify
+            # before trusting that verdict: a genuinely incomplete or
+            # corrupt conversion still fails the check and still raises.
+            if not self._image_is_intact(target_disk):
+                raise ComputeTimeoutError(
+                    f"'qemu-img convert' for '{source}' -> '{target}' exceeded "
+                    f"qemu_snapshot_timeout_seconds "
+                    f"({self._settings.qemu_snapshot_timeout_seconds}s) and the "
+                    f"resulting image is not intact. Raise "
+                    f"qemu_snapshot_timeout_seconds if the source disk is large."
+                ) from None
+            logger.warning(
+                "'qemu-img convert' for '%s' -> '%s' exceeded "
+                "qemu_snapshot_timeout_seconds (%ss), but the resulting image "
+                "is intact (qemu-img check passed) -- treating the clone as "
+                "successful rather than failing on a timing artifact. Raise "
+                "qemu_snapshot_timeout_seconds if this happens often.",
+                source, target, self._settings.qemu_snapshot_timeout_seconds,
+            )
         if disk_gb:
             # A clone inherits the source's virtual size; growing it here keeps
             # "the size I asked for" true. Shrinking is never attempted — it
             # would truncate a filesystem.
             self._run(
-                [self._img_binary, "resize", str(target_dir / _DISK_FILE), f"{disk_gb}G"],
+                [self._img_binary, "resize", str(target_disk), f"{disk_gb}G"],
                 timeout=self._settings.qemu_snapshot_timeout_seconds,
             )
         logger.info("Cloned '%s' disk -> '%s' (flattened)", source, target)

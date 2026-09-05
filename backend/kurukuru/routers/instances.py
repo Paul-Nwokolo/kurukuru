@@ -817,6 +817,55 @@ def reconcile_all(session: Session, registry: EngineRegistry) -> int:
 #: accepted gap rather than an oversight.
 _reboot_watchdog = WatchdogRegistry()
 
+#: How many times the watchdog attempts `restart_instance()` before giving up
+#: on *this* stuck episode and marking the instance Error. 2, not more: this
+#: is a backstop for a `start_instance()` failure right after this same
+#: restart's own forced kill — QemuEngine.start_instance already retries the
+#: pinned ports' own bind check for qemu_port_release_timeout_seconds before
+#: raising, so a second `ComputeEngineError` here means that retry genuinely
+#: wasn't enough, not that nothing was tried.
+_RESTART_ATTEMPTS = 2
+#: Pause between attempts. Short on purpose: by the time a retry is needed,
+#: stop_instance() inside the failed attempt already ran to completion (the
+#: process is confirmed dead, `pid=None` is already on disk), so
+#: restart_instance() calling it again returns immediately — see
+#: QemuEngine.stop_instance's "already stopped" short-circuit. This pause is
+#: only insurance against a second immediate collision, not a wait for a slow
+#: shutdown.
+_RESTART_RETRY_DELAY_SECONDS = 2.0
+
+
+def _restart_with_retry(compute: ComputeEngine, name: str) -> None:
+    """`compute.restart_instance(name)`, retried a bounded number of times.
+
+    Exists because giving up after exactly one `ComputeEngineError` spends the
+    watchdog's one shot at automatic recovery (see
+    ``Settings.windows_reboot_watchdog_cooldown_seconds``) on a failure that a
+    second attempt could plausibly clear — a guest stuck after a reboot is
+    *exactly* the moment a transient port-release race is most likely to
+    matter, because this restart is itself racing a process this workaround
+    just force-killed. Marking the instance Error on the first hiccup after
+    that kill would fail the watchdog at the one moment it exists for. Only
+    ``ComputeEngineError`` is retried — a ``HypervisorUnavailableError`` means
+    the accelerator itself is gone, which a second attempt cannot fix.
+    """
+    last_error: ComputeEngineError | None = None
+    for attempt in range(1, _RESTART_ATTEMPTS + 1):
+        try:
+            compute.restart_instance(name)
+            return
+        except ComputeEngineError as exc:
+            last_error = exc
+            if attempt < _RESTART_ATTEMPTS:
+                logger.warning(
+                    "Watchdog: restart attempt %d/%d for '%s' failed (%s) — "
+                    "retrying once before giving up",
+                    attempt, _RESTART_ATTEMPTS, name, exc,
+                )
+                time.sleep(_RESTART_RETRY_DELAY_SECONDS)
+    assert last_error is not None
+    raise last_error
+
 
 def windows_reboot_watchdog_pass(session: Session, settings: Settings) -> int:
     """Sample every running Windows guest's framebuffer; restart if stuck.
@@ -877,11 +926,12 @@ def windows_reboot_watchdog_pass(session: Session, settings: Settings) -> int:
                 )
                 with _api_operation(instance.id):
                     try:
-                        compute.restart_instance(instance.name)
+                        _restart_with_retry(compute, instance.name)
                     except (HypervisorUnavailableError, ComputeEngineError) as exc:
                         _mark_error(
                             session, instance,
-                            f"Auto-restart after an apparent stuck reboot failed: {exc}",
+                            f"Auto-restart after an apparent stuck reboot failed "
+                            f"after {_RESTART_ATTEMPTS} attempt(s): {exc}",
                         )
                         acted += 1
                         continue

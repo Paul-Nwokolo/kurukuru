@@ -2534,6 +2534,191 @@ docs/WINDOWS.md. Not yet validated against a real, complete Windows install —
 that requires the copy-phase fix (decision 54) to also be carried into
 `QemuEngine.build_launch_command`, which has not happened yet either.
 
+## 56. Decision 54 carried into the engine; i440fx confirmed fine for volumes and the NIC
+
+**Context.** Decision 54 fixed the copy-phase stall but was never wired into
+`QemuEngine.build_launch_command` — it stayed a manually-reproduced command
+line. Wiring it also opened a question nothing had tested: every other
+Windows measurement in this project (disk, NIC, volumes, USB HID) was run on
+`q35`, and decision 54 changes the chipset itself, to an i440fx-family
+machine. Nothing established that i440fx carries the rest of the scorecard.
+
+**Wired in, gated on `guest_os == "windows"`.** `GuestProfile` gained two
+fields, `machine` and `rtc`, following the same per-guest-family data pattern
+`disk_bus`/`nic_model`/`usb_input` already use rather than an `if guest_os ==`
+scattered into the command builder. Linux's `machine="q35"`/`rtc=None` is
+what the command builder already emitted, so a Linux launch command is
+byte-for-byte unchanged — pinned by
+`test_a_linux_guest_is_unchanged_by_the_windows_work`, the same test decision
+54's predecessor work extended for exactly this regression. Windows gets
+`machine="pc,hpet=off"` and `rtc="base=localtime"`, pinned by
+`test_windows_gets_the_copy_phase_fix`. Full suite re-run clean after the
+change: 943 backend tests, tools tests, and the frontend's `npm run verify`.
+
+**i440fx validated for volumes and the NIC, using the real engine code and
+Alpine as the fast measurement vehicle** — the same substitution decision
+"Eliminated, with evidence" used originally ("Alpine on identical hardware
+boots, sees disk and NIC"). `QemuEngine.build_launch_command` was called
+directly (not reconstructed) for a `guest_os="windows"` runtime — AHCI root
+disk, one attached volume, e1000e NIC, i440fx + hpet=off + rtc=localtime —
+booting Alpine's ISO instead of Windows media, driven over QMP `send-key`
+(as blind, deterministic keystrokes — the same technique Setup was driven
+with) with screendumps read back as real text, not colour-fingerprinted:
+
+- **Volumes:** `/proc/partitions` showed `sda` (root, 4 GB) and `sdb` (the
+  attached volume, 2 GB) on the first boot. A marker written to `/dev/sdb`
+  survived a full stop (QMP `quit`) and fresh-process restart — the same
+  fresh-process mechanism `restart_instance()` uses, not an in-place
+  `system_reset` — and read back correctly from `/dev/sdb` again on a third
+  boot after a second restart. Naming stayed stable across both restarts.
+- **NIC:** `eth0` (e1000e) came up and `udhcpc` obtained a lease
+  (`10.0.2.15` from QEMU's SLIRP gateway `10.0.2.2`) on the first boot,
+  identical to how the NIC has always been expected to behave — chipset made
+  no difference.
+
+Neither result is surprising in hindsight — AHCI and e1000e are both PCI
+devices, and a chipset change does not usually alter PCI enumeration or
+guest-visible block/network naming — but "usually" is not "measured", and
+nothing had measured it against this specific chipset before. Both are now
+confirmed rather than assumed.
+
+**Status.** DECISIONS #54 is fully carried into the product. Nothing found
+here changes the plan; it closes the one open question standing between the
+copy-phase fix and a real, full Windows install attempt with both fixes
+(this one and the reboot watchdog) in place.
+
+## 57. First completed Windows install, the scorecard validated against it, and a real bug the attempt surfaced
+
+**Context.** Decision 56 closed the last open question standing between the
+copy-phase fix and a real, full Windows install attempt with both fixes in
+place. Nobody had run one yet.
+
+**The install.** A real Windows 10 install, through
+`QemuEngine.provision_instance` (not a manual command line) with
+`guest_os="windows"`: the copy phase completed 0% → 41% → 86% → done in the
+same ~9 minutes decision 54 originally measured, with no stalling. Setup's own
+internal reboot then hit the `system_reset` hang exactly as decision 55
+predicted — a static SeaBIOS-prompt framebuffer, indefinitely. Calling
+`restart_instance()` (the same fresh-process path `reboot_watchdog.py` uses in
+production) recovered it, landing on Windows' first-boot "Getting ready"
+screen. **That finalisation sequence then hit the identical hang a second
+time** — Windows' own OOBE reboot, completely independent of Setup — and a
+second `restart_instance()` call recovered it the same way, reaching OOBE
+proper (region, keyboard, network, local account — the network step forced
+offline via QMP `set_link ... up=false` to reach the local-account path
+without a Microsoft account) and finally a normal, logged-in Windows 10
+desktop. **This is the first Windows install this project has completed
+end to end.** It also confirms something decision 55 could not have shown on
+its own: the `system_reset` defect fires on the reboot mechanism itself, not
+on anything specific to what Setup does before triggering one — the watchdog
+has to stay scoped to *every* Windows reboot, not just the installer's.
+
+**The validation scorecard, run against the completed install, all five
+items:**
+
+- **Network.** `ipconfig`/`ping` from inside the guest: DHCP lease from
+  QEMU's SLIRP gateway, 4/4 ping, 0% loss. The NIC identified as Intel 82574L
+  (e1000e) with its inbox driver bound, no install step.
+- **Volumes.** Attached via `set_volumes()`, appeared as a fresh disk in
+  Windows, partitioned/formatted/lettered (`E:`, NTFS) through `diskpart`,
+  survived a `restart_instance()` with the same letter and an intact marker
+  file.
+- **Restart.** `restart_instance()` round-tripped in ~27s with a graceful ACPI
+  stop when the guest was idle at a desktop — the first time this project has
+  measured the *graceful* path's timing rather than only the
+  ACPI-ignored-then-killed one.
+- **Clone.** `clone_disk()` + `boot_cloned_instance()` produced an
+  independently-running Windows guest on its own ports, booting cleanly to its
+  own lock screen with no shared state against the source.
+- **ACPI stop timing.** Both branches observed: a fast graceful stop (~27s)
+  and, separately, a full 90s-timeout-then-forced-kill — both are the designed
+  behaviour, not a bug.
+
+**A real bug the attempt surfaced, now fixed:** `restart_instance()` failed
+twice with "port in use" immediately after `stop_instance`'s forced-kill
+backstop, because Windows had not released a pinned port (SSH once, VNC once)
+yet even though the process was already confirmed dead — the exact moment
+`reboot_watchdog.py` exists to recover automatically, mechanically failing at
+it. Forced directly rather than waited for, per CONTRIBUTING's rule on
+proving a guard fires: bind a port in a child process, kill it the way
+`_force_off` does, and hammer-rebind with no delay at all. Every trial saw
+several rebind attempts fail before one finally succeeded — confirmed, not
+theorised. Fixed two ways:
+
+1. `wait_for_port_free()` (`kurukuru/engines/ports.py`) replaces the single
+   `is_port_free()` check in `start_instance` with a bounded poll
+   (`Settings.qemu_port_release_timeout_seconds`, 5s default) — a real
+   conflict still fails after the timeout; only the transient just-freed
+   window is absorbed.
+2. `_restart_with_retry()` (`routers/instances.py`) gives the watchdog's call
+   to `restart_instance` one bounded retry before marking the instance
+   `Error`, on a different axis from the existing stuck-again/cooldown budget
+   (`InstanceWatch`'s `Action.GIVE_UP`): a mechanical failure of the restart
+   *call itself*, retried and recovered, does not count against that budget
+   at all.
+
+Both are tested by forcing the real condition, not by mocking the retry's own
+arithmetic: `test_wait_for_port_free_recovers_from_a_just_killed_processs_race`
+spawns a real child process, kills it, and asserts the rebind succeeds with no
+delay inserted by the test; `test_a_transient_restart_failure_is_retried_not_given_up_on`
+and its sibling `..._is_still_given_up_on` exercise
+`_restart_with_retry`'s two branches (recovers within the budget; still
+fails, and is still reported, if it never clears) via a fault-injecting fake
+engine. 4 new tests, full suite re-run clean: 947 backend tests, tools tests.
+
+**Status.** Both defects this document tracks are proven fixed together, on a
+real install, with the scorecard fully validated against it and one bug found
+along the way already closed. What remains — fresh Server 2025 media, and the
+smaller unexplained boot-phase failure rate — are the two items still open
+below.
+
+## 58. `qemu_snapshot_timeout_seconds` was too tight for a real Windows disk, and could report a completed clone as failed
+
+**Context.** Decision 57's clone step converted a real Windows install's disk
+(~14 GB actually used) and hit the then-default `qemu_snapshot_timeout_seconds`
+(900s / 15 min) right at the finish line — the `qemu-img convert` had been
+running roughly 17 minutes. Checked before assuming the clone was lost:
+`qemu-img check` on the resulting file passed clean. The clone had actually
+succeeded; only the timeout's own bookkeeping called it a failure.
+
+**Root cause.** `subprocess.run(..., timeout=...)` kills the child process the
+moment the timeout elapses, whatever the child was doing. A `qemu-img convert`
+can finish writing every byte of a large file and be moments from returning
+exit code 0 when the timeout fires — the file is complete, but the process
+never gets to say so before it is killed. `_run` then raises
+`ComputeTimeoutError`, and `clone_disk` had no way to tell that apart from a
+conversion that is genuinely stuck or corrupt.
+
+**Fixed two ways:**
+
+1. **The default raised, with the arithmetic shown rather than a bare
+   number.** At the measured ~1.2 min/GB, this project's own `windows` flavor
+   preset (40 GB) could plausibly use the whole disk over time — call that
+   worst case ~48 minutes — and `qemu_snapshot_timeout_seconds` now defaults
+   to 5400s (90 min), real headroom above that ceiling rather than just above
+   the one measurement.
+2. **`clone_disk` verifies before trusting a timeout's verdict.** On
+   `ComputeTimeoutError` from the `convert` step, a new `_image_is_intact()`
+   helper runs `qemu-img check` (a fixed 120s budget — checking an image's own
+   metadata is not a bulk copy and does not scale with the disk the way
+   conversion does) against the partially-timed-out target file. Intact: log a
+   warning and treat the clone as successful. Not intact, or the check itself
+   fails: re-raise, now naming the setting in the message
+   (`qemu_snapshot_timeout_seconds`) so whoever hits this on a larger disk
+   knows what to change rather than assuming the clone mechanism is broken.
+
+**Tested by forcing both branches**, not by trusting the arithmetic:
+`test_clone_disk_treats_a_timed_out_but_intact_conversion_as_success` and
+`test_clone_disk_still_raises_when_the_timed_out_image_is_broken` patch
+`subprocess.run` to raise `TimeoutExpired` on the `convert` call and control
+what the follow-up `check` call reports, proving `clone_disk` reads the
+verification result rather than the timeout alone. 2 new tests, full suite
+re-run clean: 949 backend tests.
+
+**Status.** Fixed and tested. Only `clone_disk`'s `convert` step is wrapped —
+`create_blank_disk` and a clone's `resize` step are metadata-scale operations
+regardless of disk size and were never observed near this timeout.
+
 ## Known limitations
 
 - **The guest username is still `iaas`.** See decision 49; it needs a
@@ -2544,5 +2729,29 @@ that requires the copy-phase fix (decision 54) to also be carried into
   a TLS-terminating proxy in front of it. See docs/SECURITY.md.
 - **SQLite, single writer.** Fine now; a multi-process deployment would need
   more.
+- **A test-isolation gap lets `~/.kurukuru/keys` leak onto the real machine.**
+  Observed twice in one session (2026-09-05), on different tests each time
+  (`test_reboot_watchdog_pass.py::test_a_healthy_windows_guest_is_left_alone`
+  alone on one run; `test_auth_coverage.py::test_every_route_is_closed_or_deliberately_public[/api/openapi.json-GET]`
+  and `test_cli.py::test_launch_without_wait_reports_the_accepted_record`
+  together on another) — always whichever test happens to run first in that
+  particular invocation, which stops recurring once the directory exists
+  because the isolation guard (`conftest.no_real_state_writes`) only fails on
+  a before/after *difference*, not on the directory's mere presence. Only
+  surfaced because `~/.kurukuru` had just been deleted from this machine's C:
+  drive as part of unrelated disk-space work — previously masked by a
+  real, already-existing directory the guard saw no diff against.
+  `conftest.isolated_state` is supposed to have closed this whole class (see
+  its own docstring and `redirect_db_engines`'s note on Phase 11/12's
+  db_engine-redirect gap being the same shape of bug); this is a third
+  instance of state escaping to a real path despite that fixture existing.
+  Ruled out without finding the actual source: every explicit call site of
+  `ssh_keys.ensure_keypair()`/`get_public_key()`/`get_private_key_path()`
+  passes a `settings` argument through rather than relying on the
+  implicit `get_settings()` default, and `database.py`'s module-level
+  `settings = get_settings()` (bound once at import time, before any test's
+  patch) only ever feeds the already-correctly-redirected `db_engine`, not
+  anything key-related. Not fixed — recorded so the next person does not
+  start this investigation from zero.
 - **Concurrent-launch name race.** See decision 6 — closable with a partial
   unique index if it ever matters.

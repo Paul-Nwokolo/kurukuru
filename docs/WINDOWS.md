@@ -1,32 +1,37 @@
 # Windows guests — status
 
-**No Windows install has completed *through this project's engine* yet, but
-both defects standing between here and a finished install are now root-caused,
-and both have a fix.** The copy-phase stall that killed every attempt is fixed
-(`hpet=off` + `-rtc base=localtime` on an i440fx-family machine). The
-remaining blocker — a hang on the guest's first internal reboot — is fully
-characterised (QEMU/WHPX's `system_reset` deterministically, 36/36 trials
-across every configuration and two separate QEMU builds, fails to bring the
-guest back up, while a fresh process against the same disk state always works)
-and confirmed as an unreported upstream defect, now filed
-(https://gitlab.com/qemu-project/qemu/-/issues/4410). Since no released version fixes it, kurukuru carries
-`kurukuru/reboot_watchdog.py`: a Windows-only heuristic that detects a guest
-stuck at a static framebuffer and restarts the QEMU process, documented
-end-to-end (module docstring, settings, this file) as a workaround for a named
-upstream defect, not a general feature — see its own docstring for the full
-design and named misfire conditions. Neither defect is a host property; see
-below. This is still a status document rather than a walkthrough, because
-nobody has yet run a full install end to end with the workaround in place to
-confirm it actually reaches a desktop. It records what is established, what is
-eliminated, what is merely suspected, and — most importantly — what any
-measurement here has to do to be believed.
+**A Windows install has completed *through this project's engine*, end to
+end, to a booted desktop.** Both defects that stood between here and a
+finished install were root-caused and fixed, then proven together on a real
+install: the copy-phase stall (`hpet=off` + `-rtc base=localtime` on an
+i440fx-family machine, now wired into `QemuEngine.build_launch_command` for
+Windows guests — DECISIONS #56) took a real Windows 10 install through the
+entire copy phase in the same ~9 minutes measured beforehand, with no
+stalling; and the guest-reboot hang (QEMU/WHPX's `system_reset`
+deterministically, 36/36 trials across every configuration and two separate
+QEMU builds, fails to bring the guest back up, while a fresh process against
+the same disk state always works — confirmed as an unreported upstream
+defect, filed at https://gitlab.com/qemu-project/qemu/-/issues/4410) was hit
+twice on this one install and recovered both times by
+`kurukuru/reboot_watchdog.py`'s fresh-process restart. **Both hangs were on
+the exact same disk state, one right after Setup's own internal reboot and a
+second, independent one triggered by Windows' first-boot OOBE finalisation
+reboot — proof the defect fires on the mechanism (`system_reset`) rather than
+on anything specific to Setup**, which matters because it means the workaround
+has to stay scoped to every Windows reboot, not just the installer's.
+Everything below records the measurements and the workaround's design; see
+DECISIONS #56 for the full account of the completed install and the
+post-install validation scorecard run against it.
 
-Last updated after a second host's first Windows-guest session: a correction
-that overturned this document's standing assumption (the failure was never the
-host, WHPX, or the media — see [It is not the host: VirtualBox completes this
-exact install on this exact
+Last updated after the first completed install. Earlier revisions of this
+document correctly established both root causes but had not yet proven them
+together end to end — that gap is closed. A correction from a second host's
+first Windows-guest session (below) had already overturned this document's
+original standing assumption (the failure was never the host, WHPX, or the
+media — see [It is not the host: VirtualBox completes this exact install on
+this exact
 machine](#it-is-not-the-host-virtualbox-completes-this-exact-install-on-this-exact-machine)),
-the resulting copy-phase fix, and the root cause of the reboot hang (see
+producing the copy-phase fix and the reboot hang's root cause (see
 [Confirmed: the reboot hang is `system_reset` itself, deterministic, and
 independent of everything tested so
 far](#confirmed-the-reboot-hang-is-system_reset-itself-deterministic-and-independent-of-everything-tested-so-far)).
@@ -70,6 +75,18 @@ machine with no visible failure across many boot transitions — but it is a
 separate, lower-priority question from the two defects above. Read [Measuring
 anything here](#measuring-anything-here) before trusting any single number from
 that part.
+
+**Both fixes above have now been proven together, not just separately.** A
+real Windows 10 install went through `provision_instance` with the copy-phase
+fix wired into the launch command and the watchdog running: the copy phase
+completed in the same ~9 minutes with zero stalling, the guest hit the
+`system_reset` reboot hang immediately afterward exactly as predicted, and
+`restart_instance()`'s fresh-process recovery brought it back every time —
+twice, in fact, since Windows' own OOBE finalisation triggers a second,
+independent internal reboot that hit the identical hang. The install then
+reached a normal, logged-in Windows 10 desktop. See DECISIONS #56 for the
+full account, including the post-install validation scorecard (network,
+volumes, restart, clone, ACPI stop) run against the completed guest.
 
 ---
 
@@ -626,12 +643,14 @@ completes this exact install, on this exact machine, through the same platform
 layer WHPX uses. Two concrete, deterministic defects have been found and
 isolated, not a mysterious host property:
 
-1. **The copy-phase stall — fixed.** `hpet=off` + `-rtc base=localtime` on an
-   i440fx-family machine takes a real Windows 10 install through the entire
-   copy phase reliably, reproduced across multiple full runs. This is ready to
-   carry into `QemuEngine.build_launch_command` for Windows guests once the
-   reboot defect below no longer blocks reaching a finished install to validate
-   against.
+1. **The copy-phase stall — fixed and carried into the engine.** `hpet=off` +
+   `-rtc base=localtime` on an i440fx-family machine takes a real Windows 10
+   install through the entire copy phase reliably, reproduced across multiple
+   full runs including through `QemuEngine.build_launch_command` itself
+   (gated on `guest_os == "windows"`; Linux's launch command is unchanged —
+   DECISIONS #56). i440fx was also confirmed to carry the rest of the
+   hardware profile correctly: volumes and the NIC, previously only measured
+   on `q35`, behave identically on i440fx (DECISIONS #56).
 2. **The guest-reboot hang — root-caused, confirmed upstream and unfixed at
    any tested version, workaround built.** QEMU/WHPX's `system_reset`
    deterministically (36/36 across every chipset/RTC/HPET/enlightenment/eject
@@ -669,16 +688,23 @@ isolated, not a mysterious host property:
    and carries a one-commit removal checklist naming every file this
    workaround touches, for the day the upstream issue is fixed and this
    project's minimum QEMU version moves past it.
-3. **Now that the reboot hang has a workaround**, run a full install end to
-   end to confirm it actually reaches a desktop, then decide whether the
-   copy-phase fix is Windows-specific or worth reconsidering more broadly —
-   Linux guests have shown no evidence of either defect and should stay on
-   their current profile unless a reason appears.
+3. **Done: a full install run end to end, reaching a desktop.** Both fixes
+   above, together, on a real Windows 10 install: the copy phase completed
+   with zero stalling, the reboot hang fired exactly as predicted — twice, in
+   fact, since Windows' own OOBE finalisation triggers a second, independent
+   internal reboot that hit it too — and `restart_instance()`'s fresh-process
+   recovery cleared it both times, reaching a normal desktop. This also
+   confirms the copy-phase fix is safe as a Windows-only change: nothing
+   about it depends on the disk still being mid-install, and Linux guests
+   remain untouched. See DECISIONS #56.
 4. **Fresh Server 2025 media**, since the only copy on hand is confirmed dead
    independent of everything above (VirtualBox's own `WinSvr2025` VM installs
    from a *different* Server 2025 ISO than the dead one this project has) and
    blocks validating this project's most likely real-world target guest.
-5. Finish the validation scorecard (network, volumes, restart, clone, ACPI
-   stop) — "restart" is no longer a hypothetical scorecard item but the exact
-   defect above, so it will be validated as a side effect of confirming the
-   workaround holds under a real install.
+5. **Done: the validation scorecard** (network, volumes
+   attach/initialise/assign-letter/survive-restart, restart, clone, and
+   graceful ACPI stop timing) — run against the completed install in
+   DECISIONS #56. A `restart_instance()` port-release race surfaced twice
+   during that run and is now fixed (bounded retry in
+   `wait_for_port_free`, plus a bounded retry in the watchdog's own call to
+   `restart_instance` — see DECISIONS #57).
