@@ -163,7 +163,7 @@ were found by accident, weeks after they started lying.
 | `npx tsc \| head && echo CLEAN`, and later `kurukuru launch x \| tail; echo $?` | `$?` is the *last* command in a pipeline — `head`'s status, `tail`'s status. A failing command with a successful pager reads as success |
 | `npm run verify` → exit 0 across typecheck, lint, colour, contrast and build | The dev server was serving a stale module graph. The app rendered a blank page. The build output was accurate and irrelevant |
 
-Three rules follow, and they are cheap:
+The rules that follow are cheap:
 
 **1. Prove a new guard fires. Break something on purpose.** When you add a
 check — a lint rule, a contrast script, a test-isolation fixture — make it fail
@@ -224,6 +224,69 @@ pkill -f qemu-system-x86_64                   # WRONG: matches this shell too
 on Linux — `pgrep` will even warn you about this — so anchor the pattern at the
 start and keep it short rather than spelling out a long binary name that will
 never match.
+
+**5. A module-level value captured at import cannot be redirected
+afterwards.** `settings = get_settings()` at the top of a module binds a
+*value*, once, the first time Python imports the file. Nothing that happens
+later moves it — not an environment change, not a fixture, not a reload.
+Patching the `get_settings` *function*, which is exactly what
+`conftest.isolated_state` does to every already-imported module, leaves a value
+some module already computed sitting precisely where it was.
+
+The symptom is never an exception. It is **isolation that does not isolate, and
+configuration that ignores its own settings**: a suite that writes into the
+developer's real `~/.kurukuru` and blames a different test each run, depending
+on which one first triggered the import path; an endpoint that answers from the
+defaults no matter what the environment says. Both report green.
+
+This shape has now produced four separate bugs — the Phase 14 reconcile
+snapshot (DECISIONS #44), the `auth_store` token path, the test-isolation leaks,
+and `main.py`'s `lifespan()` and `GET /ssh-key` (DECISIONS #59). The last is the
+clearest: `lifespan()` read the module-level `settings`, which `main.py` had
+computed at pytest *collection* time, and handed it to
+`ensure_orchestrator_keypair()` — running real `ssh-keygen` against the real
+`~/.kurukuru/keys` the first time any test entered `TestClient` as a context
+manager. `GET /ssh-key` read the same stale value instead of taking the
+dependency every other route in the file already took.
+
+Take settings as a dependency where something can inject one, and call
+`get_settings()` at call time everywhere else:
+
+```python
+@app.get("/ssh-key")                                        # right
+def ssh_key(settings: Settings = Depends(get_settings)):
+    ...
+
+async def lifespan(app: FastAPI):                           # right
+    settings = get_settings()
+
+@app.get("/ssh-key")                                        # WRONG
+def ssh_key():
+    return settings.ssh_key_dir      # the import-time value, forever
+```
+
+The same applies to any mutable module attribute, the database engine in
+particular. Import the *module* and read the attribute at call time — see
+`cli/host_admin.py`'s `_session()`:
+
+```python
+import kurukuru.database as database
+Session(database.engine)                  # right: the current engine
+
+from kurukuru.database import engine      # WRONG: the engine at import
+```
+
+`get_settings()` is `lru_cache`d, so in production every correct form returns
+the identical object — the fix costs nothing and only ever shows up where
+something replaces what `get_settings()` returns, which today is only ever a
+test. That is not a reason to skip it; it is the reason the bug survives review.
+
+DECISIONS #44 is the same shape one level up. `_row_snapshot` was a hand-written
+tuple that had stopped tracking the fields `_apply_info` actually assigns, so a
+write to `monitor_reachable` compared equal to itself, no commit was issued, and
+the change was discarded at the next rollback. A captured copy is worth only as
+much as whatever keeps it in step with what it copied — which is why
+`_SNAPSHOT_FIELDS` is now the single definition both are built from.
 
 The general shape: **prefer a check that can distinguish "working" from
 "not running at all".** Most false greens in this project were not wrong
