@@ -96,6 +96,13 @@ export function Skeleton({ className = '' }: { className?: string }) {
  *
  * The check mark replaces the icon for two seconds — no toast, because the
  * confirmation belongs where the action was, not in the corner of the screen.
+ *
+ * That confirmation is visual, so it is also *said*. The swapped `aria-label`
+ * alone was not enough: renaming the control a user is already focused on is
+ * announced by some screen readers and silently ignored by others, which makes
+ * "did that copy?" unanswerable for exactly the people who cannot see the tick.
+ * The live region below is the part that is guaranteed to speak, and it is
+ * `polite` so it waits its turn rather than interrupting.
  */
 export function CopyButton({
   value,
@@ -130,19 +137,27 @@ export function CopyButton({
   }
 
   return (
-    <button
-      type="button"
-      onClick={copy}
-      title={copied ? 'Copied' : title}
-      aria-label={copied ? 'Copied' : title}
-      className={[
-        'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors',
-        copied ? 'text-healthy' : 'text-text-subtle hover:bg-surface-overlay hover:text-text',
-        className,
-      ].join(' ')}
-    >
-      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={copy}
+        title={copied ? 'Copied' : title}
+        aria-label={copied ? 'Copied' : title}
+        className={[
+          'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors',
+          copied ? 'text-healthy' : 'text-text-subtle hover:bg-surface-overlay hover:text-text',
+          className,
+        ].join(' ')}
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+      {/* Empty until it has something to say: a live region that already holds
+          text when it is inserted announces nothing, so the message has to
+          *arrive* in a region that was there and empty beforehand. */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {copied ? 'Copied to clipboard' : ''}
+      </span>
+    </>
   )
 }
 

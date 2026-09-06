@@ -13,11 +13,24 @@ import type { ReactNode } from 'react'
  * size-like is right-aligned and set in mono, because columns of figures are
  * read by comparing them vertically.
  */
+/**
+ * `min-w` is what makes a narrow window survivable.
+ *
+ * The scroll container was always here; the table inside it was `w-full` with
+ * no floor, so it never had anything to scroll — it just squeezed. Six columns
+ * sharing 700px does not fail loudly, it fails as an address column reading
+ * `127.0.0…` and a size column wrapped over three lines, which looks like a
+ * data problem rather than a width one.
+ *
+ * With a floor, the table keeps its designed proportions and the card scrolls
+ * sideways instead. Sideways scroll is a real cost, so the floor is set at the
+ * width the columns actually need and not a round number above it.
+ */
 export function Table({ children }: { children: ReactNode }) {
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-surface-raised">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">{children}</table>
+        <table className="w-full min-w-[52rem] text-sm">{children}</table>
       </div>
     </div>
   )

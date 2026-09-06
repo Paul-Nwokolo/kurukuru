@@ -135,15 +135,22 @@ export function InstancesTable({
               return (
                 <Fragment key={instance.id}>
                   <TR className={dimmed ? 'opacity-50' : ''}>
+                    {/* Name on its own line, badges on a second one beneath it.
+                        Clustered horizontally they competed with the name for
+                        the same scan — three of them on a long name pushed the
+                        column wide and wrapped raggedly, and the one thing the
+                        eye is actually running down the column for is the name.
+                        Stacked, the names left-align into a single column and
+                        the badges read as annotation on it. */}
                     <TD>
-                      <div className="flex items-center gap-2">
-                        {/* A real anchor, so ctrl/middle-click opens a tab. */}
-                        <Link
-                          to={`/instances/${instance.id}`}
-                          className="font-medium text-text hover:text-accent-text hover:underline"
-                        >
-                          {instance.name}
-                        </Link>
+                      {/* A real anchor, so ctrl/middle-click opens a tab. */}
+                      <Link
+                        to={`/instances/${instance.id}`}
+                        className="font-medium text-text hover:text-accent-text hover:underline"
+                      >
+                        {instance.name}
+                      </Link>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         <EngineBadge engine={instance.engine} />
                         {/* Guest OS on the row, because almost every piece of
                             advice elsewhere in the UI — how to reach it, how a
@@ -192,7 +199,14 @@ export function InstancesTable({
                             onClick={() => setExpandedId(expanded ? null : instance.id)}
                             title={instance.error_message}
                             className="text-text-subtle hover:text-text"
-                            aria-label="Show error details"
+                            // The chevron rotates to say which way this goes;
+                            // `aria-expanded` is that same fact for anyone not
+                            // reading the rotation, and the label follows it so
+                            // the control is never named for the state it is
+                            // already in.
+                            aria-expanded={expanded}
+                            aria-controls={expanded ? `${instance.id}-error` : undefined}
+                            aria-label={expanded ? 'Hide error details' : 'Show error details'}
                           >
                             <ChevronDown
                               className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
@@ -306,7 +320,10 @@ export function InstancesTable({
                     <tr>
                       <TD colSpan={6} className="bg-surface pt-0">
                         <Alert tone="danger">
-                          <pre className="whitespace-pre-wrap break-words data text-xs">
+                          <pre
+                            id={`${instance.id}-error`}
+                            className="whitespace-pre-wrap break-words data text-xs"
+                          >
                             {instance.error_message}
                           </pre>
                         </Alert>

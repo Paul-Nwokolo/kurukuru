@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { Link } from './Link'
 import type { EventKind, InstanceEvent } from '../api/client'
 import { useEvents } from '../hooks/queries'
@@ -60,53 +60,91 @@ export function ActivityView() {
   )
 }
 
+/**
+ * One event, expandable when it carries detail.
+ *
+ * The expander is a real `<button>` with `aria-expanded`, not a `<div>` with an
+ * `onClick` — which is what this was, and it made the whole log unreachable by
+ * keyboard. `tabIndex={0}` plus a key handler would have restored the traversal
+ * and still left a screen reader with no way to know the thing was a control,
+ * or whether it was currently open.
+ *
+ * The button cannot simply wrap the row, because the row contains a link to the
+ * instance and a link inside a button is neither valid nor operable. So the two
+ * are siblings, and the button's `::after` is stretched over the row to keep the
+ * whole strip clickable — the link sits above it on the z-axis and goes on being
+ * a link. That also retires the `stopPropagation` this needed when the handler
+ * was on an ancestor: nothing is nested any more, so nothing has to be stopped.
+ */
 function Row({ event }: { event: InstanceEvent }) {
   const [open, setOpen] = useState(false)
   const { Icon, tone } = eventStyle(event.kind)
   const hasDetail = Boolean(event.detail)
+  const detailId = useId()
+
+  const label = (
+    <>
+      {event.summary}
+      {event.actor === 'reconciler' && (
+        <span
+          className="ml-2 rounded bg-surface-overlay px-1.5 py-0.5 text-2xs uppercase tracking-wide text-text-muted"
+          title="Nobody asked for this — the reconciler found the hypervisor disagreeing with the record and corrected it."
+        >
+          auto
+        </span>
+      )}
+      {hasDetail && <span className="ml-2 text-xs text-text-subtle">{open ? '−' : '+'}</span>}
+    </>
+  )
 
   return (
-    <li>
+    <li className="relative">
       <div
         className={`flex items-start gap-3 px-4 py-2.5 text-sm ${
           hasDetail ? 'cursor-pointer hover:bg-surface-overlay' : ''
         }`}
-        onClick={hasDetail ? () => setOpen(!open) : undefined}
       >
         <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${tone}`} />
         <span className="w-40 shrink-0 truncate text-text-muted">
           {event.instance_id ? (
-            // Stops the row's expand toggle from firing on the way out.
-            <span onClick={(e) => e.stopPropagation()}>
-              <Link
-                to={`/instances/${event.instance_id}`}
-                className="hover:text-text hover:underline"
-              >
-                {event.instance_name || event.instance_id}
-              </Link>
-            </span>
+            // Raised above the expander's stretched overlay so it stays a link.
+            <Link
+              to={`/instances/${event.instance_id}`}
+              className="relative z-10 hover:text-text hover:underline"
+            >
+              {event.instance_name || event.instance_id}
+            </Link>
           ) : (
             <span className="text-text-subtle">—</span>
           )}
         </span>
         <span className="min-w-0 flex-1 text-text">
-          {event.summary}
-          {event.actor === 'reconciler' && (
-            <span
-              className="ml-2 rounded bg-surface-overlay px-1.5 py-0.5 text-2xs uppercase tracking-wide text-text-muted"
-              title="Nobody asked for this — the reconciler found the hypervisor disagreeing with the record and corrected it."
+          {hasDetail ? (
+            <button
+              type="button"
+              aria-expanded={open}
+              // Only while the panel exists: the detail is not rendered when
+              // collapsed, and `aria-controls` pointing at a missing id is a
+              // dangling reference. `aria-expanded` is what carries the state.
+              aria-controls={open ? detailId : undefined}
+              onClick={() => setOpen(!open)}
+              className="w-full text-left after:absolute after:inset-0 after:content-['']"
             >
-              auto
-            </span>
+              {label}
+            </button>
+          ) : (
+            label
           )}
-          {hasDetail && <span className="ml-2 text-xs text-text-subtle">{open ? '−' : '+'}</span>}
         </span>
         <span className="shrink-0 text-xs text-text-subtle" title={absoluteTime(event.occurred_at)}>
           {relativeTime(event.occurred_at)}
         </span>
       </div>
       {open && event.detail && (
-        <pre className="overflow-x-auto whitespace-pre-wrap bg-surface px-4 py-2.5 pl-11 font-mono text-xs leading-relaxed text-text-muted">
+        <pre
+          id={detailId}
+          className="overflow-x-auto whitespace-pre-wrap bg-surface px-4 py-2.5 pl-11 font-mono text-xs leading-relaxed text-text-muted"
+        >
           {event.detail}
         </pre>
       )}
