@@ -91,6 +91,69 @@ export function Skeleton({ className = '' }: { className?: string }) {
 /* ------------------------------------------------------------------ */
 /* Copy to clipboard                                                   */
 /* ------------------------------------------------------------------ */
+/** How long to wait for the Clipboard API before giving up on it. */
+const CLIPBOARD_TIMEOUT_MS = 3000
+
+/**
+ * Ask the Clipboard API, but never wait on it indefinitely.
+ *
+ * `navigator.clipboard.writeText` does not always settle. Where the permission
+ * is neither granted nor refused — a prompt nothing answers, an automation
+ * context, an embedding that silently withholds it — the promise simply hangs.
+ * Awaited bare, that is the worst of the three outcomes: no confirmation, no
+ * failure, no fallback, and no way for the user to find out which. The button
+ * sits there having apparently done nothing, forever.
+ *
+ * So it races a timer. Losing the race is treated exactly like rejecting,
+ * because from the caller's position they are the same event: the clipboard
+ * did not take the value, and it is time to try the other way.
+ */
+async function writeViaClipboardApi(value: string): Promise<boolean> {
+  if (!navigator.clipboard?.writeText) return false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      navigator.clipboard.writeText(value),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('clipboard timed out')), CLIPBOARD_TIMEOUT_MS)
+      }),
+    ])
+    return true
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * The pre-Clipboard-API route: a scratch textarea and `execCommand`.
+ *
+ * Deprecated, synchronous, and still the only thing that works in a few places
+ * the modern API does not. It reports whether it worked, which the previous
+ * version of this discarded — so a failed copy and a successful one both ended
+ * up showing a tick.
+ */
+function writeViaScratchTextarea(value: string): boolean {
+  try {
+    const scratch = document.createElement('textarea')
+    scratch.value = value
+    scratch.setAttribute('readonly', '')
+    // Kept out of the layout and off screen, so nothing shifts and the page
+    // does not scroll to it when it takes selection.
+    scratch.style.position = 'fixed'
+    scratch.style.top = '0'
+    scratch.style.opacity = '0'
+    document.body.appendChild(scratch)
+    scratch.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(scratch)
+    return ok
+  } catch {
+    return false
+  }
+}
+
 /**
  * One copy control, one confirmation.
  *
@@ -103,6 +166,12 @@ export function Skeleton({ className = '' }: { className?: string }) {
  * "did that copy?" unanswerable for exactly the people who cannot see the tick.
  * The live region below is the part that is guaranteed to speak, and it is
  * `polite` so it waits its turn rather than interrupting.
+ *
+ * **And it can say no.** Both routes to the clipboard can fail, and this used
+ * to report a tick either way — the one outcome worse than a failed copy is a
+ * failed copy that claims to have worked, because the user pastes whatever was
+ * on the clipboard before. A failure now says so, and says what to do instead:
+ * the value is on screen next to this button, so it can be selected by hand.
  */
 export function CopyButton({
   value,
@@ -113,49 +182,68 @@ export function CopyButton({
   title?: string
   className?: string
 }) {
-  const [copied, setCopied] = useState(false)
+  const [result, setResult] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const copied = result === 'copied'
+  const failed = result === 'failed'
 
   useEffect(() => {
-    if (!copied) return
-    const timer = setTimeout(() => setCopied(false), 2000)
+    if (result === 'idle') return
+    // A failure is left up longer than a success. Elsewhere in this app errors
+    // do not self-dismiss at all (see Header's reconcile result), but that one
+    // has a dismiss button and room for a sentence; this is a 28px icon in a
+    // table row, where a permanently red control would read as broken state
+    // rather than as one thing that went wrong a moment ago.
+    const timer = setTimeout(() => setResult('idle'), failed ? 6000 : 2000)
     return () => clearTimeout(timer)
-  }, [copied])
+  }, [result, failed])
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value)
-    } catch {
-      // Older browsers, and any context where the clipboard API is blocked.
-      const scratch = document.createElement('textarea')
-      scratch.value = value
-      document.body.appendChild(scratch)
-      scratch.select()
-      document.execCommand('copy')
-      document.body.removeChild(scratch)
-    }
-    setCopied(true)
+    // The modern API first, the legacy route only if it declines or hangs.
+    const ok = (await writeViaClipboardApi(value)) || writeViaScratchTextarea(value)
+    setResult(ok ? 'copied' : 'failed')
   }
+
+  const label = copied
+    ? 'Copied'
+    : failed
+      ? 'Copy failed — select the text and copy it manually'
+      : title
 
   return (
     <>
       <button
         type="button"
         onClick={copy}
-        title={copied ? 'Copied' : title}
-        aria-label={copied ? 'Copied' : title}
+        title={label}
+        aria-label={label}
         className={[
           'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors',
-          copied ? 'text-healthy' : 'text-text-subtle hover:bg-surface-overlay hover:text-text',
+          copied ? 'text-healthy' : '',
+          failed ? 'text-danger' : '',
+          result === 'idle' ? 'text-text-subtle hover:bg-surface-overlay hover:text-text' : '',
           className,
         ].join(' ')}
       >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        {copied ? (
+          <Check className="h-3.5 w-3.5" />
+        ) : failed ? (
+          <AlertCircle className="h-3.5 w-3.5" />
+        ) : (
+          <Copy className="h-3.5 w-3.5" />
+        )}
       </button>
       {/* Empty until it has something to say: a live region that already holds
           text when it is inserted announces nothing, so the message has to
-          *arrive* in a region that was there and empty beforehand. */}
-      <span role="status" aria-live="polite" className="sr-only">
-        {copied ? 'Copied to clipboard' : ''}
+          *arrive* in a region that was there and empty beforehand.
+          `assertive` for the failure — it is telling the user that the thing
+          they just asked for did not happen, which should not queue behind
+          whatever else is being read. */}
+      <span
+        role="status"
+        aria-live={failed ? 'assertive' : 'polite'}
+        className="sr-only"
+      >
+        {copied ? 'Copied to clipboard' : failed ? 'Copy failed' : ''}
       </span>
     </>
   )

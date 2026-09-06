@@ -2878,6 +2878,55 @@ React's handler, not because the wiring failed.
 not `ConfirmDialog` — and read reason 2 first. This is a deliberate deviation
 from the review that recommended the opposite.
 
+## 61. The host capacity bar is a meter, not a progress bar
+
+**Context.** The same frontend review that produced decision 60 found the
+capacity bar in `LaunchModal` — the little two-segment strip beside "15 GB RAM
+· 13 GB free · 14 CPUs" — had no ARIA at all, so assistive technology saw two
+anonymous `<span>`s and read only the text. That much is correct and is fixed.
+The review recommended `role="progressbar"`. This is `role="meter"` instead.
+
+**`progressbar` means a task advancing towards completion.** That is what the
+role is defined for and what a screen reader will say about it: progress, of
+something, that will at some point be finished. Host memory commitment is not
+advancing towards anything. It goes up when an instance launches and down when
+one is terminated, and there is no completion state at the top — a host at
+100% committed has not finished, it is full. Announcing "43%" as *progress*
+tells the user something that is not true about their machine.
+
+`role="meter"` is the role for a measurement inside a known range: a gauge, a
+fuel level, a disk that is some fraction full. That is exactly what this is.
+
+**The bar is not decorative, which is why it needs a role at all.** The obvious
+alternative — `aria-hidden`, on the grounds that the text beside it says the
+same thing — was rejected on inspection: the text gives *total* and *free*, and
+the bar's first segment is *committed*, which appears nowhere else in the UI.
+Committed is not total minus free either; the host's own memory use is the
+difference between them. Hiding the bar would have silently dropped a number.
+
+**`aria-valuetext` carries the reading, in the units the label uses.** A bare
+`aria-valuenow` of 6144 says nothing about what was measured or against what,
+so the value is also spelled out: "6 GB of 15 GB committed, 9 GB free". It is
+rounded to GB the same way the visible line is, and deliberately *not* through
+`formatMemory`, which only reaches GB on exact multiples of 1024 — true of
+every flavour size and of no host total. Left on `formatMemory` it read
+"15828 MB" beside a label saying "15 GB", which is the kind of disagreement
+that makes a user distrust both numbers.
+
+The two coloured segments are `aria-hidden`. They are how the one value is
+drawn, not two more values.
+
+**Status.** Implemented and verified in a browser: the element exposes
+`role="meter"`, `aria-valuemin="0"`, `aria-valuemax` at the host total,
+`aria-valuenow` at committed, and an `aria-valuetext` that agrees with the
+visible text beside it.
+
+**A note on support**, since it is the one real argument for `progressbar`:
+`meter` has thinner screen-reader support than `progressbar` does. That is why
+`aria-label` and `aria-valuetext` both carry the full reading in words — where
+the role is not understood, the name and value still are, and the fallback is
+a correct sentence rather than a wrong one about progress.
+
 ## Known limitations
 
 - **The guest username is still `iaas`.** See decision 49; it needs a
