@@ -3,9 +3,7 @@ import {
   AlertCircle,
   ArrowLeft,
   Camera,
-  Check,
   Database,
-  Copy,
   KeyRound,
   Monitor,
   Network as NetworkIcon,
@@ -39,7 +37,7 @@ import { navigate } from '../lib/router'
 import { deviceHint, formatMemory, relativeTime } from '../lib/format'
 import { displayAddress, sshCommand } from '../lib/ssh'
 import { eventStyle } from '../lib/events'
-import { TimeAgo } from '../ui/Feedback'
+import { CopyButton, TimeAgo } from '../ui/Feedback'
 import { StatusBadge } from '../ui/Status'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ConsoleModal } from './ConsoleModal'
@@ -62,7 +60,6 @@ export function InstanceDetail({ instanceId }: InstanceDetailProps) {
   const deleteSnapMut = useDeleteSnapshot(instanceId)
 
   const [actionError, setActionError] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [snapshotOpen, setSnapshotOpen] = useState(false)
   const [confirmTerminate, setConfirmTerminate] = useState(false)
@@ -100,21 +97,6 @@ export function InstanceDetail({ instanceId }: InstanceDetailProps) {
     } catch (err) {
       setActionError(apiErrorMessage(err))
     }
-  }
-
-  const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-    }
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
   }
 
   return (
@@ -234,18 +216,14 @@ export function InstanceDetail({ instanceId }: InstanceDetailProps) {
                 <code className="min-w-0 flex-1 truncate rounded border border-border bg-surface px-2.5 py-1.5 data text-xs text-text-muted">
                   {ssh}
                 </code>
-                <button
-                  type="button"
-                  onClick={() => copy(ssh)}
-                  title="Copy"
-                  className="shrink-0 rounded p-1.5 text-text-subtle hover:bg-surface-overlay hover:text-text"
-                >
-                  {copied ? (
-                    <Check className="h-3.5 w-3.5 text-healthy" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )}
-                </button>
+                {/* The shared control, not a local reimplementation of it.
+                    This was a hand-rolled copy of CopyButton — same state,
+                    same two-second timer, same icon swap — that had drifted
+                    into having a static title and no accessible name change,
+                    so the confirmation existed only for people who could see
+                    the tick. Using the real one fixes that here and anywhere
+                    else it is used, rather than in this file only. */}
+                <CopyButton value={ssh} title="Copy SSH command" />
               </div>
               {!keyIsOurs && (
                 <p className="mt-1.5 text-xs text-transitional/90">
@@ -556,37 +534,55 @@ function Activity({ instanceId }: { instanceId: string }) {
           const { Icon, tone } = eventStyle(event.kind)
           const open = expanded === event.id
           const hasDetail = Boolean(event.detail)
+          const body = (
+            <>
+              <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone}`} />
+              <span className="min-w-0 flex-1">
+                <span className="text-text">{event.summary}</span>
+                {event.actor === 'reconciler' && (
+                  <span
+                    className="ml-2 rounded bg-surface-overlay px-1.5 py-0.5 text-2xs uppercase tracking-wide text-text-muted"
+                    title="Nobody asked for this — the background reconciler found the hypervisor disagreeing with the record and corrected it."
+                  >
+                    auto
+                  </span>
+                )}
+                {hasDetail && (
+                  <span className="ml-2 text-xs text-text-subtle">{open ? '−' : '+'}</span>
+                )}
+              </span>
+              <span className="shrink-0 text-xs text-text-subtle">
+                <TimeAgo value={event.occurred_at} />
+              </span>
+            </>
+          )
+          const row = 'flex w-full items-start gap-3 rounded-md py-1.5 text-left text-sm'
           return (
             <li key={event.id}>
-              <div
-                className={`flex items-start gap-3 rounded-md py-1.5 text-sm ${
-                  hasDetail ? 'cursor-pointer hover:bg-surface-overlay' : ''
-                }`}
-                onClick={hasDetail ? () => setExpanded(open ? null : event.id) : undefined}
-              >
-                <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone}`} />
-                <span className="min-w-0 flex-1">
-                  <span className="text-text">{event.summary}</span>
-                  {event.actor === 'reconciler' && (
-                    <span
-                      className="ml-2 rounded bg-surface-overlay px-1.5 py-0.5 text-2xs uppercase tracking-wide text-text-muted"
-                      title="Nobody asked for this — the background reconciler found the hypervisor disagreeing with the record and corrected it."
-                    >
-                      auto
-                    </span>
-                  )}
-                  {hasDetail && (
-                    <span className="ml-2 text-xs text-text-subtle">{open ? '−' : '+'}</span>
-                  )}
-                </span>
-                <span
-                  className="shrink-0 text-xs text-text-subtle"
+              {/* A real button when it toggles something, a plain row when it
+                  does not — rather than a div with an onClick, which no
+                  keyboard could reach and no screen reader could describe.
+                  Nothing here contains a link, so unlike the global Activity
+                  view the button can simply be the row. */}
+              {hasDetail ? (
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  // Only while the panel exists — see ActivityView's Row.
+                  aria-controls={open ? `${event.id}-detail` : undefined}
+                  onClick={() => setExpanded(open ? null : event.id)}
+                  className={`${row} cursor-pointer hover:bg-surface-overlay`}
                 >
-                  <TimeAgo value={event.occurred_at} />
-                </span>
-              </div>
+                  {body}
+                </button>
+              ) : (
+                <div className={row}>{body}</div>
+              )}
               {open && event.detail && (
-                <pre className="mb-1 ml-7 overflow-x-auto whitespace-pre-wrap rounded bg-surface px-3 py-2 data text-xs leading-relaxed text-text-muted">
+                <pre
+                  id={`${event.id}-detail`}
+                  className="mb-1 ml-7 overflow-x-auto whitespace-pre-wrap rounded bg-surface px-3 py-2 data text-xs leading-relaxed text-text-muted"
+                >
                   {event.detail}
                 </pre>
               )}
@@ -631,6 +627,17 @@ function InstanceForwards({
 
   return (
     <div className="px-4 py-3">
+      {/* Said rather than left blank, so an empty list reads as a state the
+          page understands instead of a section that failed to render. The
+          wording carries the one thing that is not guessable from an empty
+          list: a Linux guest normally has an SSH forward here, so *none at
+          all* means this instance was booted without one. */}
+      {(forwards ?? []).length === 0 ? (
+        <p className="text-sm text-text-subtle">
+          No forwards. Add one below to reach a port inside this guest — an instance booted
+          from an ISO, or with SSH disabled, starts with none.
+        </p>
+      ) : (
       <ul className="space-y-1.5">
         {(forwards ?? []).map((forward) => (
           <li key={forward.id} className="flex items-center gap-3 text-sm">
@@ -674,6 +681,7 @@ function InstanceForwards({
           </li>
         ))}
       </ul>
+      )}
 
       {/* Presets. One click fills the form in; it does not create the forward,
           so the host port stays visible and editable and the collision check

@@ -14,6 +14,7 @@ import { VolumesTable } from './components/VolumesTable'
 import { NetworksView } from './components/NetworksView'
 import { InstanceDetail } from './components/InstanceDetail'
 import { VIEWS, instanceIdFromPath, usePath, viewFromPath } from './lib/router'
+import { useIsDesktop } from './lib/breakpoint'
 import { Button } from './ui/Button'
 import { Checkbox } from './ui/Field'
 import { LaunchModal } from './components/LaunchModal'
@@ -35,6 +36,32 @@ export default function App() {
   const view = viewFromPath(path)
 
   const { data: instances, isLoading } = useInstances(includeTerminated)
+
+  /*
+   * The navigation drawer, below `lg` only.
+   *
+   * Three things close it, and all three are the bug you get from omitting
+   * them: navigating (otherwise you tap Volumes and the drawer stays parked
+   * over the page you asked for), Escape (the same key that dismisses every
+   * other overlay in the app), and crossing back up over the breakpoint —
+   * without which, widening the window leaves `open` true, and narrowing it
+   * again re-opens a drawer nobody asked for.
+   */
+  const isDesktop = useIsDesktop()
+  const [navOpen, setNavOpen] = useState(false)
+
+  useEffect(() => setNavOpen(false), [path])
+  useEffect(() => {
+    if (isDesktop) setNavOpen(false)
+  }, [isDesktop])
+  useEffect(() => {
+    if (!navOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNavOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navOpen])
 
   // `?console=<id>` opens straight into that instance's console. This is the
   // deep link `iaas console <name>` hands to the browser: the CLI knows the id
@@ -61,10 +88,28 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-surface text-text">
-      <Sidebar active={detailId ? null : view} />
+      <Sidebar
+        active={detailId ? null : view}
+        open={navOpen}
+        onClose={() => setNavOpen(false)}
+        isDesktop={isDesktop}
+      />
+
+      {/* Backdrop for the drawer. Rendered only when it can be seen, so there
+          is never an invisible element sitting over a desktop layout. */}
+      {!isDesktop && navOpen && (
+        <div
+          className="animate-backdrop fixed inset-0 z-30 bg-surface/80 backdrop-blur-sm"
+          onMouseDown={() => setNavOpen(false)}
+          aria-hidden
+        />
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header title={detailId ? 'Instance' : VIEWS[view].title} />
+        <Header
+          title={detailId ? 'Instance' : VIEWS[view].title}
+          onOpenNav={isDesktop ? undefined : () => setNavOpen(true)}
+        />
 
         <BackendBanner />
 

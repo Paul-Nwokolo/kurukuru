@@ -2816,6 +2816,68 @@ a test fixture that reinvented a narrower, hand-maintained version of what
 it already does comprehensively. No change to `conftest.py` itself was
 needed or made.
 
+## 60. A destructive dialog opens focused on Cancel, and Enter does not confirm
+
+**Context.** An external frontend review found that `ConfirmDialog`'s footer
+buttons were not wrapped in a `<form>`, so pressing Enter did not submit the
+dialog, and recommended wiring the confirm button up as a real submit. The
+form was the right call and was made. Where this decision departs from the
+review is *which control holds focus when the dialog opens*.
+
+**What was actually wrong was worse, and is fixed.** `Modal` focused "the
+first control" with a single `querySelector` over a selector list, which
+returns the first match in **document order** — and the header, with its close
+button, precedes the body. So every dialog in the application opened with
+focus parked on the X: Enter dismissed rather than confirmed, the first Tab
+went to a control nobody wants, and a body input marked `autoFocus` had focus
+stolen back off it by the effect running after React applied it. The initial
+focus pick is now scoped body-then-footer-then-header, so a dialog with fields
+opens on its first field and `ConfirmDialog`, which has no body controls,
+opens on Cancel.
+
+**And it stays on Cancel.** With focus on a button, Enter activates *that*
+button rather than submitting the form, so this is the decision that settles
+what Enter does in a confirmation dialog. It cancels.
+
+Three reasons, in order of weight:
+
+1. **Every use of this component is irreversible.** The confirm button is
+   hard-wired to `intent="danger"` and the component's own docstring says that
+   anything not destructive should be a plain form instead. Terminate an
+   instance, delete a volume, restore a snapshot over a running disk — none of
+   these have an undo, and the dialog exists precisely because the action does
+   not deserve a single click.
+2. **These dialogs open in response to a click, and Enter may still be held
+   down from it.** A user who activates `Terminate` from the keyboard is
+   pressing Enter at the moment the dialog appears. Focusing the confirm
+   button means a key that is already down can carry through the dialog that
+   was put there to interrupt it — the failure mode is the dialog appearing
+   and being dismissed-by-confirming in the same keystroke, which is
+   indistinguishable to the user from the confirmation never having appeared.
+3. **Nothing is lost.** Tab once and Enter confirms. The dialog is fully
+   keyboard-operable either way; the trade is one keystroke against an
+   unrecoverable misfire, and the keystroke is the cheaper of the two by a
+   wide margin.
+
+**So the form is not decoration.** It is what makes the confirm button the
+document's default action for that dialog, and it is what will make Enter work
+correctly if a body control is ever added — a "type the instance name to
+confirm" field being the obvious one, and the case where implicit submission
+genuinely matters.
+
+**Status.** Decided and implemented. `ConfirmDialog` wraps its message in a
+form, wired across the pinned footer with the `form` attribute the way
+`LaunchModal` already does it, with `useId()` so two mounted dialogs cannot
+collide on the id. Verified in a browser rather than asserted: with the delete
+dialog open, focus lands on Cancel, and a real keyboard traversal (Tab to
+Cancel, Tab to Delete, Enter) fires the form's submit event — the volume
+survived the test because the submit was blocked in the capture phase before
+React's handler, not because the wiring failed.
+
+**If this is ever revisited**, change the initial-focus pick in `ui/Modal.tsx`,
+not `ConfirmDialog` — and read reason 2 first. This is a deliberate deviation
+from the review that recommended the opposite.
+
 ## Known limitations
 
 - **The guest username is still `iaas`.** See decision 49; it needs a

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, X } from 'lucide-react'
+import { Menu, RefreshCw, X } from 'lucide-react'
 import { AccountMenu } from './AccountMenu'
 import { HealthIndicator } from './HealthIndicator'
 import { ProjectSelector } from './ProjectSelector'
@@ -21,7 +21,15 @@ import { apiErrorMessage } from '../api/client'
  * button, which is exactly the wrong lesson to teach about the one control
  * people press when something already looks wrong.
  */
-export function Header({ title }: { title: string }) {
+export function Header({
+  title,
+  /** Opens the navigation drawer. Undefined at `lg` and above, where the
+   *  sidebar is a permanent column and a menu button would be a lie. */
+  onOpenNav,
+}: {
+  title: string
+  onOpenNav?: () => void
+}) {
   const refresh = useRefreshInstances()
   const [result, setResult] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
 
@@ -77,9 +85,20 @@ export function Header({ title }: { title: string }) {
   }
 
   return (
-    <header className="flex items-center justify-between gap-4 border-b border-border bg-surface px-6 py-3">
-      <h1 className="text-xl font-semibold tracking-tight text-text">{title}</h1>
-      <div className="flex items-center gap-3">
+    // `min-w-0` on the title so it truncates, `shrink-0` on the controls so it
+    // is the title that gives way. Without the pair, the reconcile result — the
+    // one item here with unbounded text — pushed the account menu off the right
+    // edge rather than either side yielding.
+    <header className="flex items-center justify-between gap-3 border-b border-border bg-surface px-4 py-3 lg:px-6">
+      <div className="flex min-w-0 items-center gap-2">
+        {onOpenNav && (
+          <IconButton icon={Menu} title="Open navigation" onClick={onOpenNav} size="sm" />
+        )}
+        <h1 className="truncate text-lg font-semibold tracking-tight text-text lg:text-xl">
+          {title}
+        </h1>
+      </div>
+      <div className="flex shrink-0 items-center gap-2 lg:gap-3">
         {/* In progress, said in words.
           *
           * The spinning icon alone was the whole affordance, and at 16px next
@@ -92,8 +111,15 @@ export function Header({ title }: { title: string }) {
           *
           * It occupies the same slot as the result, so the sequence reads as
           * one message changing rather than two things appearing. */}
+        {/* The in-progress label is the first thing to go when width runs out:
+            it is the one item here with no control attached, and the refresh
+            button spins beside it saying the same thing. The *result* stays at
+            every width — an error is the reason someone is looking. */}
         {refresh.isPending && (
-          <span role="status" className="flex items-center gap-1.5 text-xs text-text-muted">
+          <span
+            role="status"
+            className="hidden items-center gap-1.5 text-xs text-text-muted lg:flex"
+          >
             <RefreshCw className="h-3 w-3 animate-spin" aria-hidden />
             Reconciling with the hypervisor…
           </span>
@@ -106,7 +132,7 @@ export function Header({ title }: { title: string }) {
               result.tone === 'error' ? 'text-danger' : 'text-text-muted'
             }`}
           >
-            <span className="max-w-md truncate">{result.text}</span>
+            <span className="max-w-[9rem] truncate lg:max-w-md">{result.text}</span>
             {result.tone === 'error' && (
               <button
                 type="button"
@@ -120,7 +146,7 @@ export function Header({ title }: { title: string }) {
           </span>
         )}
         <ProjectSelector />
-        <div className="h-4 w-px bg-border" aria-hidden />
+        <div className="hidden h-4 w-px bg-border lg:block" aria-hidden />
         <ThemeToggle />
         <IconButton
           icon={RefreshCw}
@@ -133,9 +159,9 @@ export function Header({ title }: { title: string }) {
           disabled={refresh.isPending}
           className={refresh.isPending ? '[&_svg]:animate-spin' : ''}
         />
-        <div className="h-4 w-px bg-border" aria-hidden />
+        <div className="hidden h-4 w-px bg-border lg:block" aria-hidden />
         <HealthIndicator />
-        <div className="h-4 w-px bg-border" aria-hidden />
+        <div className="hidden h-4 w-px bg-border lg:block" aria-hidden />
         <AccountMenu />
       </div>
     </header>

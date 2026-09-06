@@ -8,7 +8,9 @@ import {
   Network,
   Server,
   Settings,
+  X,
 } from 'lucide-react'
+import { IconButton } from '../ui/Button'
 import { Wordmark } from '../ui/Wordmark'
 import { Link } from './Link'
 import { VIEWS, type NavKey } from '../lib/router'
@@ -62,6 +64,12 @@ const SECTIONS: {
 interface SidebarProps {
   /** null while a detail page is open — no tab is the current one. */
   active: NavKey | null
+  /** Drawer state. Ignored at `lg` and above, where this is always a column. */
+  open: boolean
+  onClose: () => void
+  /** From `useIsDesktop`. Decides whether this is a column or a drawer — the
+   *  parts CSS cannot do on its own, namely `inert` and the close button. */
+  isDesktop: boolean
 }
 
 /**
@@ -74,11 +82,29 @@ interface SidebarProps {
  * true: every tab was the same URL, a reload dropped you back on Instances,
  * and Back left the app.
  */
-export function Sidebar({ active }: SidebarProps) {
+export function Sidebar({ active, open, onClose, isDesktop }: SidebarProps) {
+  const hidden = !isDesktop && !open
+
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-surface">
-      <div className="px-4 py-4">
+    <aside
+      // `inert` takes a real boolean in React 19; `undefined` removes it.
+      inert={hidden || undefined}
+      aria-label="Main"
+      className={[
+        'flex w-56 shrink-0 flex-col border-r border-border bg-surface',
+        // Drawer below lg: fixed, over the content, slid out when closed.
+        'fixed inset-y-0 left-0 z-40 transition-transform duration-200',
+        open ? 'translate-x-0' : '-translate-x-full',
+        // Column at lg: back into flow, and the transform undone.
+        'lg:static lg:z-auto lg:translate-x-0',
+      ].join(' ')}
+    >
+      <div className="flex items-center justify-between px-4 py-4">
         <Wordmark />
+        {/* Only in the drawer. At lg there is nothing to close. */}
+        {!isDesktop && (
+          <IconButton icon={X} title="Close navigation" onClick={onClose} size="sm" />
+        )}
       </div>
 
       <nav className="mt-1 flex flex-1 flex-col gap-5 overflow-y-auto px-2 pb-4">

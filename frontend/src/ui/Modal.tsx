@@ -29,6 +29,13 @@ interface ModalProps {
 
 const SIZES = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl' }
 
+/** Everything a keyboard can reach. Shared by the initial-focus pick and the
+ *  Tab trap so the two cannot disagree about what counts as a control. */
+const FOCUSABLE =
+  'input:not([type="hidden"]):not([disabled]), select:not([disabled]), ' +
+  'textarea:not([disabled]), button:not([disabled]), [href], ' +
+  '[tabindex]:not([tabindex="-1"])'
+
 export function Modal({
   open,
   onClose,
@@ -49,10 +56,22 @@ export function Modal({
     // Focus the first control rather than the panel itself, so a keyboard user
     // lands on something they can act on instead of having to tab past the
     // heading every time.
-    const focusable = panel.current?.querySelector<HTMLElement>(
-      'input:not([type="hidden"]), select, textarea, button, [href], [tabindex]:not([tabindex="-1"])',
-    )
-    focusable?.focus()
+    //
+    // Searched body-then-footer rather than across the whole panel, which is
+    // the bug this replaces: `querySelector` with a selector list returns the
+    // first match in *document order*, and the header — with its close button —
+    // comes first in the DOM. So every dialog in the app opened with focus
+    // parked on the X, Enter dismissed instead of submitting, and a body input
+    // marked `autoFocus` had focus stolen back off it by this effect running
+    // after React had applied it. The close button stays as the last resort,
+    // for a dialog whose body and footer have no controls at all.
+    const first = (root: Element | null | undefined) =>
+      root?.querySelector<HTMLElement>(FOCUSABLE) ?? null
+    const target =
+      first(panel.current?.querySelector('[data-modal-body]')) ??
+      first(panel.current?.querySelector('[data-modal-footer]')) ??
+      first(panel.current)
+    target?.focus()
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -63,11 +82,7 @@ export function Modal({
       // Keep Tab inside the dialog: a focus ring that wanders onto the page
       // behind a modal is a keyboard user losing their place entirely.
       const items = Array.from(
-        panel.current.querySelectorAll<HTMLElement>(
-          'input:not([type="hidden"]):not([disabled]), select:not([disabled]), ' +
-            'textarea:not([disabled]), button:not([disabled]), [href], ' +
-            '[tabindex]:not([tabindex="-1"])',
-        ),
+        panel.current.querySelectorAll<HTMLElement>(FOCUSABLE),
       ).filter((el) => el.offsetParent !== null)
       if (items.length === 0) return
       const first = items[0]
@@ -118,10 +133,15 @@ export function Modal({
           <IconButton icon={X} title="Close" onClick={onClose} size="sm" />
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">{children}</div>
+        <div data-modal-body className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          {children}
+        </div>
 
         {footer && (
-          <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-surface/40 px-4 py-3">
+          <footer
+            data-modal-footer
+            className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border bg-surface/40 px-4 py-3"
+          >
             {footer}
           </footer>
         )}

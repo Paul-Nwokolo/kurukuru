@@ -1225,9 +1225,40 @@ function CapacityStrip({ capacity }: { capacity: HostCapacity }) {
         {Math.round(mem.total / 1024)} GB RAM · {Math.round(mem.allocatable / 1024)} GB free
         · {cpu.total} CPUs
       </span>
-      <span className="flex h-1.5 w-14 overflow-hidden rounded-full bg-surface-overlay">
-        <span className="bg-transitional/70" style={{ width: `${usedPct}%` }} />
-        <span className="bg-healthy/60" style={{ width: `${freePct}%` }} />
+      {/*
+        A meter, not a progress bar.
+
+        `role="progressbar"` describes a task advancing towards completion, and
+        nothing here is advancing — this is a measurement inside a known range,
+        which is exactly what `role="meter"` is for. Calling it progress would
+        tell a screen reader the host is 43% of the way through something.
+
+        The bar is also not decorative, which is why it needs a role at all:
+        the text beside it gives total and free, but *committed* appears
+        nowhere else, and committed is not total minus free — the host's own
+        usage is the difference. `aria-valuetext` carries the reading in the
+        units a person thinks in, because "43" on its own says nothing about
+        what was measured. The segments are hidden: they are how the value is
+        drawn, not two more values.
+      */}
+      <span
+        role="meter"
+        aria-label="Host memory committed to instances"
+        aria-valuemin={0}
+        aria-valuemax={mem.total}
+        aria-valuenow={mem.committed}
+        // Rounded to GB the same way the visible line beside it is, not with
+        // `formatMemory` — that only reaches GB on exact multiples of 1024,
+        // which flavour sizes always are and host totals never are, so it
+        // would have read "15828 MB" next to a label saying "15 GB RAM".
+        aria-valuetext={
+          `${Math.round(mem.committed / 1024)} GB of ${Math.round(mem.total / 1024)} GB ` +
+          `committed, ${Math.round(mem.allocatable / 1024)} GB free`
+        }
+        className="flex h-1.5 w-14 overflow-hidden rounded-full bg-surface-overlay"
+      >
+        <span aria-hidden className="bg-transitional/70" style={{ width: `${usedPct}%` }} />
+        <span aria-hidden className="bg-healthy/60" style={{ width: `${freePct}%` }} />
       </span>
     </span>
   )
