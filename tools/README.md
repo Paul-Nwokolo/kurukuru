@@ -45,6 +45,40 @@ Tests for both:
 backend/.venv/Scripts/python.exe -m pytest tools/ -q
 ```
 
+## `make_icons.py` — the favicon and the installer icon
+
+Rasterises the product mark to the formats a browser tab and Windows need:
+`frontend/public/icons/icon-{16,32,48,128,256}.png`, `frontend/public/favicon.ico`,
+and a copy at `packaging/windows/kurukuru.ico` where Inno Setup can find it.
+
+```
+python tools/make_icons.py            # regenerate
+python tools/make_icons.py --check    # fail if regenerating would change anything
+```
+
+**Needs Pillow, which is deliberately not a project dependency.** Nothing at
+runtime draws these — they are build artefacts, committed, and regenerated only
+when the artwork changes. Install it just for the run:
+
+```
+backend/.venv/Scripts/python.exe -m pip install --target <scratch> Pillow
+PYTHONPATH=<scratch> backend/.venv/Scripts/python.exe tools/make_icons.py
+```
+
+`tools/test_icons.py` needs none of that: it reads PNG and ICO headers with
+`struct` so the guards still run in a checkout that has never seen Pillow.
+
+Two things it checks that are easy to get wrong:
+
+- **The artwork exists three times** — in the React component, in the SVG
+  favicon, and as coordinates here — and nothing but a test can keep the three
+  in agreement.
+- **The raster ink is a mid grey, not the near-black the dashboard uses.** A
+  `.ico` cannot follow a theme, and near-black measures 1.15:1 against the dark
+  surface: invisible. The test enforces 3:1 against light, dark, and Explorer's
+  dark grey at once. The *SVG* favicon has no such compromise — it carries a
+  `prefers-color-scheme` rule and gets full-contrast ink either way.
+
 ## `verify_media.py` — is this install ISO sound?
 
 Checks a Windows ISO **along the boot path that will actually execute**, rather

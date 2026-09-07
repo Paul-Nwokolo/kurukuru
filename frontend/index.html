@@ -2,7 +2,15 @@
 <html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      SVG first, because it is the only one that follows the browser's theme —
+      it carries its own prefers-color-scheme rule. The .ico is the fallback for
+      anything that will not take an SVG, and is a mid grey rather than the
+      theme ink for exactly that reason: one file, both themes.
+    -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/icons/icon-256.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kurukuru</title>
     <!--
