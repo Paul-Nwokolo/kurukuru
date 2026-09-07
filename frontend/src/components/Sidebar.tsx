@@ -100,7 +100,11 @@ export function Sidebar({ active, open, onClose, isDesktop }: SidebarProps) {
       ].join(' ')}
     >
       <div className="flex items-center justify-between px-4 py-4">
-        <Wordmark />
+        {/* No descriptor here: at this size the spec's ratio puts it at 5.5px.
+            See product.ts — the descriptor is owed where the product introduces
+            itself, not in the chrome of an app already installed and signed
+            into. */}
+        <Wordmark size={40} descriptor={false} />
         {/* Only in the drawer. At lg there is nothing to close. */}
         {!isDesktop && (
           <IconButton icon={X} title="Close navigation" onClick={onClose} size="sm" />
