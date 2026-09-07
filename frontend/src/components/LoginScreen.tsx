@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { LogIn, ShieldCheck } from 'lucide-react'
+import { LogIn } from 'lucide-react'
 import {
   apiErrorMessage,
   cliCommand,
@@ -11,7 +11,7 @@ import type { FirstRunStatus } from '../api/client'
 import { Button } from '../ui/Button'
 import { Field, Input } from '../ui/Field'
 import { Alert } from '../ui/Feedback'
-import { PRODUCT_NAME, PRODUCT_TAGLINE } from '../ui/product'
+import { Wordmark } from '../ui/Wordmark'
 
 /** Mirrors MIN_PASSWORD_LENGTH in backend/kurukuru/models.py, which is what
  *  actually enforces it — this only makes the form say what is missing. */
@@ -107,16 +107,13 @@ export function LoginScreen({
   return (
     <div className="flex min-h-screen items-center justify-center bg-bg px-4">
       <div className="w-full max-w-sm space-y-6">
-        <div className="space-y-2 text-center">
-          <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-surface ring-1 ring-border">
-            <ShieldCheck className="h-5 w-5 text-text-muted" aria-hidden />
+        <div className="space-y-4 text-center">
+          {/* The one place with room for the full lockup at the size the design
+              spec's own ratios were drawn for — the descriptor is legible here
+              and nowhere else in the app. See Wordmark for the measurements. */}
+          <div className="flex justify-center">
+            <Wordmark size={72} />
           </div>
-          <h1 className="text-lg font-semibold tracking-tight text-text">
-            {PRODUCT_NAME}
-          </h1>
-          <p className="text-2xs uppercase tracking-wide text-text-subtle">
-            {PRODUCT_TAGLINE}
-          </p>
           <p className="text-sm text-text-muted">
             {configured === false
               ? 'Create the owner account for this install.'

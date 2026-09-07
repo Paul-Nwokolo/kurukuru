@@ -1,6 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-  <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-  <line x1="6" y1="6" x2="6.01" y2="6"/>
-  <line x1="6" y1="18" x2="6.01" y2="18"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!--
+    The mark, at tab size.
+
+    A favicon has nothing to inherit from, so `currentColor` is not available
+    here the way it is in the dashboard: an SVG favicon renders standalone and
+    would fall back to black, which is invisible on a dark tab strip. It carries
+    its own theme switch instead, and gets the same near-black and near-white
+    the interface uses (grey-900 and grey-100) rather than a compromise grey.
+    Those token names are written without their leading dashes on purpose: a
+    double hyphen is not legal inside an XML comment, and an SVG that fails to
+    parse is a favicon that silently renders as a broken image.
+
+    The .ico beside this file cannot do that — one set of bytes serves both
+    themes — so it is rendered in a mid grey that clears 3:1 against either.
+    See tools/make_icons.py for the measurements.
+  -->
+  <style>
+    .ink { fill: #18181b; }
+    @media (prefers-color-scheme: dark) {
+      .ink { fill: #f4f4f5; }
+    }
+  </style>
+  <g class="ink" transform="translate(12, 12)">
+    <rect x="0" y="0" width="30" height="24" />
+    <rect x="0" y="30" width="30" height="10" />
+    <rect x="0" y="46" width="30" height="30" />
+    <rect x="36" y="0" width="40" height="16" />
+    <rect x="36" y="22" width="20" height="14" />
+    <path d="M36 42 h20 l20 34 h-30 Z" />
+  </g>
 </svg>
