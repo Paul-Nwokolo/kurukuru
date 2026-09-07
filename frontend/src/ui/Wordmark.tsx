@@ -6,9 +6,15 @@
  * changing the identity is those two files rather than a hunt through a
  * sidebar, a header and a favicon.
  *
- * **Plain is a requirement here, not a taste.** The descriptor is rendered with
- * the name rather than under an optional prop, and the mark stays abstract —
- * see `product.ts` for the trademark reasoning behind both.
+ * **Plain is a requirement here, not a taste**, and the mark stays abstract —
+ * see `product.ts` for the trademark reasoning.
+ *
+ * The descriptor is on by default and switched off in one place: the in-app
+ * sidebar, where the spec's own ratio puts it at 5.5px. That is not a small
+ * descriptor, it is noise shaped like information — legible enough to draw the
+ * eye and not enough to reward it. `product.ts` says where the descriptor is
+ * actually owed, and a 40px lockup inside an app someone has already installed
+ * and signed into is not one of those places.
  *
  * The mark is monochrome on purpose. It used to be green, which was also the
  * colour of a healthy instance and of the primary button; a brand that shares
@@ -51,10 +57,13 @@ const DESCRIPTOR_DROP = 26 / 76
  *
  * The spec says "the upper edge of the mark's lowest blocks". The two shapes
  * that reach the bottom start at different heights — the left column's third
- * block at y=46, the wedge at y=42 — so there is no single edge to read it
- * off. This takes 46: the left column is three flat-topped rectangles whose
- * edges are unambiguous, while the wedge's "upper edge" is a 20-wide stub on a
- * diagonal. The difference is 4 of 76 units, about 1px at sidebar size.
+ * block at y=46, the wedge at y=42 — so there is no single edge to read it off.
+ *
+ * Settled at 46, by the design owner: the flat-topped rectangles are the
+ * structural line, and the wedge's upper edge is a diagonal stub rather than an
+ * edge you could align anything to. Not a coin toss to be re-flipped — the
+ * difference is 4 of 76 units, about 1px at sidebar size, and small enough that
+ * someone could "correct" it later without noticing they had changed anything.
  */
 const BASELINE = 46 / 76
 
@@ -104,11 +113,18 @@ function Mark({ size }: { size: number }) {
 export function Wordmark({
   /** Rendered size of the mark's viewBox, in px. Everything else follows. */
   size = 40,
-  /** Mark only. The name is not shown, so the descriptor is not owed one. */
-  compact = false,
+  /**
+   * Whether to show the descriptor under the name.
+   *
+   * On everywhere the lockup introduces the product to someone who has not met
+   * it — that is the presentation `product.ts` is about, and it is also the
+   * only context rendered large enough for the spec's ratio to be readable.
+   * Off in the sidebar, and only there.
+   */
+  descriptor: showDescriptor = true,
 }: {
   size?: number
-  compact?: boolean
+  descriptor?: boolean
 }) {
   const mark = size * INTERIOR
   const wordmark = mark * WORDMARK
@@ -146,19 +162,19 @@ export function Wordmark({
         <Mark size={size} />
       </div>
 
-      {!compact && (
-        <div className="min-w-0">
-          <div
-            className="text-text"
-            style={{
-              fontSize: `${wordmark}px`,
-              lineHeight: 1,
-              fontWeight: 700,
-              letterSpacing: '-0.025em',
-            }}
-          >
-            {PRODUCT_NAME}
-          </div>
+      <div className="min-w-0">
+        <div
+          className="text-text"
+          style={{
+            fontSize: `${wordmark}px`,
+            lineHeight: 1,
+            fontWeight: 700,
+            letterSpacing: '-0.025em',
+          }}
+        >
+          {PRODUCT_NAME}
+        </div>
+        {showDescriptor && (
           <div
             className="uppercase text-text-subtle"
             style={{
@@ -171,8 +187,8 @@ export function Wordmark({
           >
             {PRODUCT_TAGLINE}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }
