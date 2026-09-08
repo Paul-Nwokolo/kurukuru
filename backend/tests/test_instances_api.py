@@ -1317,7 +1317,14 @@ def test_diagnostics_exposes_no_key_material(client):
     is the endpoint that exists for it. Guarded because the natural way to
     write this endpoint is to paste the /ssh-key body in.
     """
-    body = client.get("/diagnostics").json()
+    response = client.get("/diagnostics")
+
+    # The status first: every assertion below is an *absence*, and absence is
+    # what an error body has plenty of. Indexing `body["ssh_key"]` would raise
+    # on a 500 rather than pass, so this was not vacuous — but a security
+    # assertion should not rely on a KeyError to stay honest.
+    assert response.status_code == 200, response.text
+    body = response.json()
 
     assert "public_key" not in body["ssh_key"]
     assert "ssh-ed25519" not in json.dumps(body)

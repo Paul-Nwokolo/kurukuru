@@ -232,11 +232,27 @@ def test_traversal_out_of_the_bundle_is_refused(built: Path):
 
 
 def test_a_traversal_over_http_falls_through_to_the_app(served: TestClient, built: Path):
-    """And end to end, nothing leaks — whatever the client does to the path."""
+    """And end to end, nothing leaks — whatever the client does to the path.
+
+    Asserting only that the secret is absent is not enough, and this test used
+    to do exactly that. "The response does not contain the secret" is satisfied
+    by a 500, by a 404, by an empty body, and by a client that never sent the
+    request — every way of *failing* passes it. The check has to say what
+    happened, not only what did not.
+
+    So: the request succeeds, and what comes back is the SPA fallback — the
+    same index.html any unmatched path gets — which is the documented behaviour
+    the refusal is supposed to produce. A traversal that 500s would be a leak
+    of a different kind (it confirms the path resolved to something) and is now
+    a failure rather than a pass.
+    """
     (built.parent / "secret.txt").write_text("do not serve me", encoding="utf-8")
 
     for attempt in ("/../secret.txt", "/..%2fsecret.txt", "/assets/../../secret.txt"):
-        assert "do not serve me" not in served.get(attempt).text
+        response = served.get(attempt)
+        assert response.status_code == 200, f"{attempt} -> {response.status_code}"
+        assert "<!doctype html>" in response.text.lower(), attempt
+        assert "do not serve me" not in response.text, attempt
 
 
 # --------------------------------------------------------------------------- #

@@ -172,9 +172,15 @@ def test_a_refused_remote_call_creates_nothing(anon_client):  # noqa: F811
     from kurukuru.models import User
 
     c = _fresh(anon_client)
-    _from_peer(c, "10.0.0.5").post(
+    response = _from_peer(c, "10.0.0.5").post(
         SETUP, json={"username": "owner", "password": GOOD_PASSWORD}
     )
+
+    # The refusal is asserted, not just its effect. "No user was created" is
+    # equally true of a 500 — so without this, a crash on the setup route would
+    # read as the route correctly refusing a remote caller, which is the one
+    # outcome this test exists to distinguish it from.
+    assert response.status_code == 403, response.text
 
     with Session(c.db_engine) as db:  # type: ignore[attr-defined]
         assert db.exec(select(User)).first() is None

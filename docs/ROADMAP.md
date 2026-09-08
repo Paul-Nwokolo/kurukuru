@@ -1,0 +1,129 @@
+# Roadmap
+
+What is next, and what has been considered and set aside. Forward-looking —
+`docs/history/ROADMAP_v2.md` is the archived plan from the phase work and is
+kept for the record rather than followed.
+
+Nothing here is a commitment to a date. The ordering is by what unblocks what.
+
+---
+
+## 0.2.0
+
+### 1. Upgrade FastAPI, and Starlette with it
+
+**The first task, before features.** FastAPI 0.115.12 requires
+`starlette<0.47.0`, and every open Starlette advisory is fixed at 0.47.2 or
+later — several only in 1.x. So the fixes are all on the far side of a major
+upgrade, and 0.1.0 shipped pinned with that written down rather than attempted
+in a release week.
+
+What it closes: a quadratic `Range`-header parse in `FileResponse`
+(PYSEC-2026-1942), reachable unauthenticated through the dashboard's asset
+route. The worst case is CPU burn on the machine already running the server,
+triggered by a page the user visited — see the browser-as-client threat model
+in [SECURITY.md](SECURITY.md).
+
+What it will cost: 961 backend tests to re-validate against a major version of
+the framework the whole API is built on. That is the work, and it is why it is
+first rather than squeezed in beside something else.
+
+Two other Starlette advisories were assessed and do not apply: the
+`HTTPEndpoint` method-lookup issue (FastAPI does not use `HTTPEndpoint`) and the
+`StaticFiles` UNC SSRF on Windows (the dashboard is served by this project's own
+handler). The second is worth reading anyway — the same mistake *was* present
+here, in `dashboard` and `isos`, and is fixed in `kurukuru.safe_paths`.
+
+### 2. Roles, and audit by actor
+
+Not for their own sake: they are the two things standing between this and being
+runnable anywhere other than loopback. Today every account is a full
+administrator of every VM, and the event log records that a thing happened
+rather than who did it. Until both exist there is no honest way to expose this
+beyond a reverse proxy on a trusted network, which is what SECURITY.md says.
+
+---
+
+## Considered, not scheduled
+
+Suggestions from an external backend review. Logged with what they would be
+worth so the reasoning is not re-derived, and so a "no" does not read as
+"nobody thought about it".
+
+### Cloud-init dry-run and validation
+
+**The idea.** `POST /cloud-init/validate` — accept `user-data`, merge it with
+the system defaults, and validate the result before anything is provisioned.
+
+**Why it is worth doing.** The debugging loop for `user-data` is genuinely
+awful and it is the sharpest edge left in the launch flow: you launch, wait for
+a boot, SSH in, and read `/var/log/cloud-init-output.log` to discover a typo in
+`write_files`. Minutes per iteration for a mistake a schema check catches
+instantly. Of the three suggestions this is the one with the clearest value,
+because it removes a wait rather than adding a capability.
+
+**What makes it non-trivial.** Validating properly means the `cloud-init`
+schema, and `cloud-init` is a Linux package — it is not present on a Windows
+host and cannot be assumed on any host. So this is either a vendored copy of
+the schema that will drift from whatever the guest actually runs, or a
+best-effort YAML-and-shape check that risks passing something the guest then
+rejects. A validator that says "fine" and is wrong is worse than no validator,
+because it moves the same failure later while adding confidence. Worth doing
+once there is an answer to which schema is being validated against.
+
+### An event stream for CI
+
+**The idea.** SSE or a WebSocket at `/events/stream`, broadcasting what
+`record_event()` already writes, so a script can block on "instance is Running"
+instead of polling every few seconds.
+
+**Why it is worth doing.** Provisioning from a script is a real use of this, and
+`while true; sleep 5` is the current answer. A stream would make integration
+tests react the moment a VM is ready rather than up to a poll interval later.
+
+**What it needs first.** The events table is the natural source, and the
+plumbing largely exists — `record_event()` is already the single writer. The
+open question is what happens to a subscriber that stops reading: a local tool
+with one user is exactly where an unbounded buffer goes unnoticed until it is a
+memory leak. Not hard, but not free either, and polling loopback every three
+seconds costs approximately nothing today, which is why this is behind
+cloud-init validation.
+
+### Linked clones
+
+**The idea.** `qemu-img create -b base.qcow2 overlay.qcow2` so a clone is an
+overlay rather than a copy — instant, and nearly free on disk.
+
+**The appeal is real.** Ten VMs from a template in the time it takes to write
+ten qcow2 headers, and a five-node environment that can be torn down and rebuilt
+in seconds rather than minutes. For anyone testing a playbook against a cluster
+that is a qualitative difference, not a saving.
+
+**And it is still refused, for the reason it was refused in Phase 11.** A
+backing chain means the clone does not own its own disk. Delete or terminate the
+source and every clone built on it is silently corrupted — not refused, not
+warned about: corrupted, discovered later, at a moment of the filesystem's
+choosing. The qcow2 header records the backing file as *the absolute path it was
+created with*, which is why the state-directory rename needed a repair pass at
+all (DECISIONS #54's neighbourhood), and it is why a chain is a durable
+commitment rather than an implementation detail.
+
+`test_the_clone_disk_is_flattened_not_chained` exists to keep that decision from
+being quietly reversed by someone who notices the copy is slow. The copy *is*
+slow. That is the price of a clone that survives its parent.
+
+**What would change the answer.** Not performance — a safety story. Reference
+counting that refuses to terminate a source with live descendants, or a
+promote-on-delete pass that flattens dependants before the parent goes, plus a
+UI that shows the relationship so "delete" is never a surprise. That is a
+feature with a data-loss failure mode, so it needs designing rather than
+enabling, and it should arrive with roles and audit rather than before them.
+
+---
+
+## Not planned
+
+See the README's non-goals. In short: not a VirtualBox replacement, not a
+container runtime, not multi-tenant. The target is one machine with
+cloud-shaped ergonomics, and most requests that do not fit are requests for a
+different product.
