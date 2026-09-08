@@ -79,6 +79,33 @@ Two things it checks that are easy to get wrong:
   dark grey at once. The *SVG* favicon has no such compromise — it carries a
   `prefers-color-scheme` rule and gets full-contrast ink either way.
 
+## `find_vacuous_tests.py` — which tests would a failure also satisfy?
+
+Reports tests whose assertions are all satisfied by nothing having happened, so
+a crash reads as a pass.
+
+```
+python tools/find_vacuous_tests.py
+python tools/find_vacuous_tests.py --path backend/tests --quiet
+```
+
+**Run deliberately, not in CI.** It always exits 0 and it reports a shape, not
+a verdict — a test genuinely *about* absence looks identical from here. Gating
+on it would need an allowlist of known-acceptable findings, which is the
+hand-maintained list this project has twice been bitten by.
+
+It exists because `test_a_traversal_over_http_falls_through_to_the_app`
+asserted only that a secret string was absent from the body. A 500, a 404, an
+empty body and a request that was never sent all satisfy that. It was green for
+months. What the script then found was more useful than a second test: the same
+hole in a *helper*, `test_networks._add`, which returned its response unchecked
+so everything built on it inherited the problem.
+
+The judgement it encodes, and the reason its output is short enough to read: a
+test that subscripts `response.json()` cannot pass by failing, because an error
+body decodes fine and then raises `KeyError` on the index. Without that rule it
+reported 15 tests, 7 of them correct.
+
 ## `verify_media.py` — is this install ISO sound?
 
 Checks a Windows ISO **along the boot path that will actually execute**, rather
