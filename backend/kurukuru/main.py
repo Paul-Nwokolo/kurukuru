@@ -707,7 +707,9 @@ def list_boot_isos(
 
 
 @system.get("/flavors", tags=["system"])
-def list_flavors() -> dict[str, dict[str, int]]:
+def list_flavors(
+    request_settings: Settings = Depends(get_settings),
+) -> dict[str, dict[str, int]]:
     """Sizing presets — starting points the launch form can fill in.
 
     These are defaults, not limits: a user may edit the numbers afterwards, and
@@ -717,10 +719,17 @@ def list_flavors() -> dict[str, dict[str, int]]:
     an integer and once pre-formatted for display — which was two spellings of
     one fact with nothing enforcing they agreed. Presentation belongs to the
     client, which already formats sizes elsewhere.
+
+    Takes the dependency rather than reading the module-level ``settings``,
+    which is what it did — the same defect DECISIONS #59 fixed in ``/ssh-key``,
+    surviving one route further down the same file. A route that reads an
+    import-time snapshot answers from the configuration the process started
+    with, so a test that redirects settings, or any future reload, is ignored
+    silently and the answer merely looks plausible.
     """
     return {
         name: {"cpus": spec.cpus, "memory_mb": spec.memory_mb, "disk_gb": spec.disk_gb}
-        for name, spec in settings.flavors.items()
+        for name, spec in request_settings.flavors.items()
     }
 
 

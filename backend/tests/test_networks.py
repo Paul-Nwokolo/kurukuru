@@ -40,11 +40,33 @@ def _forwards(client, instance_id: str) -> list[dict]:
     return r.json()
 
 
-def _add(client, instance_id: str, host: int, guest: int, **extra):
+def _try_add(client, instance_id: str, host: int, guest: int, **extra):
+    """Attempt a forward and hand back whatever came out, refusal included.
+
+    For the tests whose subject *is* the refusal — they assert the status and
+    the message themselves.
+    """
     return client.post(
         f"/instances/{instance_id}/forwards",
         json={"host_port": host, "guest_port": guest, **extra},
     )
+
+
+def _add(client, instance_id: str, host: int, guest: int, **extra):
+    """Add a forward as *setup*, and assert it was actually added.
+
+    The assertion belongs here rather than at each call site. A test that goes
+    on to check "the forwards are gone after terminate" passes trivially if
+    they were never created — which is the shape this whole sweep is about, and
+    this helper was one of the ways in. Tests about a refusal use
+    :func:`_try_add` and say so.
+    """
+    response = _try_add(client, instance_id, host, guest, **extra)
+    assert response.status_code == 201, (
+        f"setup failed: forwarding {host}->{guest} returned "
+        f"{response.status_code}, not 201: {response.text[:200]}"
+    )
+    return response
 
 
 # --------------------------------------------------------------------------- #
@@ -134,7 +156,7 @@ def test_the_ssh_forward_is_not_a_row_in_the_table(client):
 def test_forwarding_this_instances_own_ssh_port_is_refused(client):
     instance = _instance(client)
 
-    r = _add(client, instance["id"], instance["ssh_port"], 80)
+    r = _try_add(client, instance["id"], instance["ssh_port"], 80)
 
     assert r.status_code == 422
     assert "this instance's SSH port" in r.json()["detail"]
@@ -153,7 +175,7 @@ def test_forwarding_another_instances_pinned_port_names_that_instance(client):
         session.add(row)
         session.commit()
 
-    r = _add(client, second["id"], first["ssh_port"], 80)
+    r = _try_add(client, second["id"], first["ssh_port"], 80)
 
     assert r.status_code == 422
     detail = r.json()["detail"]
@@ -164,9 +186,9 @@ def test_forwarding_another_instances_pinned_port_names_that_instance(client):
 def test_a_port_already_forwarded_names_the_instance_holding_it(client):
     first = _instance(client, "web-01")
     second = _instance(client, "web-02")
-    assert _add(client, first["id"], 18080, 80).status_code == 201
+    assert _try_add(client, first["id"], 18080, 80).status_code == 201
 
-    r = _add(client, second["id"], 18080, 8080)
+    r = _try_add(client, second["id"], 18080, 8080)
 
     assert r.status_code == 422
     assert "already forwards to instance 'web-01'" in r.json()["detail"]
@@ -178,7 +200,7 @@ def test_a_port_inside_an_allocation_pool_is_refused_with_the_range(client):
     to discover that."""
     instance = _instance(client)
 
-    r = _add(client, instance["id"], 2250, 80)  # inside the SSH pool
+    r = _try_add(client, instance["id"], 2250, 80)  # inside the SSH pool
 
     assert r.status_code == 422
     detail = r.json()["detail"]
@@ -198,7 +220,7 @@ def test_the_same_host_port_on_two_instances_is_the_conflict_not_the_guest_port(
 @pytest.mark.parametrize("port", [0, 70000, -1])
 def test_a_port_outside_the_valid_range_is_rejected(client, port):
     instance = _instance(client)
-    assert _add(client, instance["id"], port, 80).status_code == 422
+    assert _try_add(client, instance["id"], port, 80).status_code == 422
 
 
 # --------------------------------------------------------------------------- #
@@ -233,7 +255,7 @@ def test_a_forward_the_engine_refuses_is_not_recorded(client):
         raise ComputeEngineError("QEMU refused the port forward")
 
     client.fake.add_port_forward = _boom
-    r = _add(client, instance["id"], 18080, 80)
+    r = _try_add(client, instance["id"], 18080, 80)
 
     assert r.status_code == 502
     assert len(_forwards(client, instance["id"])) == 1  # SSH only
@@ -274,7 +296,7 @@ def test_forwarding_to_a_terminated_instance_is_refused(client):
     instance = _instance(client)
     client.delete(f"/instances/{instance['id']}")
 
-    r = _add(client, instance["id"], 18080, 80)
+    r = _try_add(client, instance["id"], 18080, 80)
 
     assert r.status_code == 409
     assert "nothing to forward to" in r.json()["detail"]

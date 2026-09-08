@@ -574,6 +574,8 @@ ergonomics.
 - [Security](docs/SECURITY.md) — the threat model, what is deliberately not
   protected, and how to recover a password or revoke a token.
 - [Decisions](docs/DECISIONS.md) — why things are the way they are.
+- [Roadmap](docs/ROADMAP.md) — what is next, and what was considered and set
+  aside with the reasoning kept.
 - [Contributing](CONTRIBUTING.md) — running the tests and the conventions in use.
 - [History](docs/history/) — the phase briefs this was built from.
 

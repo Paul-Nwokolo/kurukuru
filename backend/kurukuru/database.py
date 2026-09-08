@@ -28,27 +28,73 @@ PRODUCT_SLUG = CLI_NAME
 
 logger = logging.getLogger("kurukuru.db")
 
-settings = get_settings()
+#: Built on first use, not at import. See ``__getattr__`` below.
+_engine: Engine | None = None
 
-# check_same_thread=False is required because FastAPI may service a
-# request on a different thread than the one that opened the connection.
-# Session-per-request (below) keeps this safe.
-#
-# `resolved_database_url`, not `database_url`: the default now lives under
-# `~/.kurukuru`, and SQLAlchemy would open a directory literally named `~`.
-engine = create_engine(
-    settings.resolved_database_url,
-    echo=settings.debug,
-    connect_args={"check_same_thread": False}
-    if settings.database_url.startswith("sqlite")
-    else {},
-)
+
+def _build_engine(settings: Settings) -> Engine:
+    """The one place an engine is configured.
+
+    ``check_same_thread=False`` is required because FastAPI may service a
+    request on a different thread than the one that opened the connection;
+    session-per-request (below) keeps that safe.
+
+    ``resolved_database_url``, not ``database_url``: the default lives under
+    ``~/.kurukuru``, and SQLAlchemy would open a directory literally named
+    ``~``.
+    """
+    return create_engine(
+        settings.resolved_database_url,
+        echo=settings.debug,
+        connect_args={"check_same_thread": False}
+        if settings.database_url.startswith("sqlite")
+        else {},
+    )
+
+
+def __getattr__(name: str) -> object:
+    """Create ``engine`` on first access rather than at import.
+
+    This module used to do ``settings = get_settings()`` and build the engine
+    from it at import time, which is the exact shape CONTRIBUTING's rule 5 and
+    DECISIONS #59 are about — and it was still here, in one of the files that
+    rule was written about.
+
+    What it cost, measured rather than assumed: with the guard instrumented to
+    record every attempt, the whole suite reached the real database exactly
+    twice, and both were the two tests that exist to prove the guard fires. So
+    the *engine* was not the leak — ``conftest.isolated_state`` patches
+    ``kurukuru.database.engine`` and that held. But the correctness of an
+    import-time value depended on a fixture remembering to overwrite it, which
+    is the hand-maintained arrangement DECISIONS #59 says to stop relying on;
+    and the pragma listener below read that snapshot at *connect* time, so a
+    test engine's pragmas were decided by the developer's real settings.
+
+    Lazy, so nothing is read from settings until something actually wants a
+    database. PEP 562: this fires only for names not already in the module, and
+    the result is cached into globals, so the second access is an ordinary
+    attribute lookup and ``monkeypatch.setattr`` still works exactly as before.
+    """
+    if name == "engine":
+        global _engine
+        if _engine is None:
+            _engine = _build_engine(get_settings())
+        globals()["engine"] = _engine
+        return _engine
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @event.listens_for(Engine, "connect")
 def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # noqa: ANN001
-    """Enable WAL + foreign keys for better concurrency and integrity."""
-    if settings.database_url.startswith("sqlite"):
+    """Enable WAL + foreign keys for better concurrency and integrity.
+
+    ``get_settings()`` at call time, not a module-level snapshot: this fires on
+    every connection, including connections to engines a test built, and the
+    snapshot was the developer's real configuration. It happened to be
+    harmless — both URLs start with ``sqlite`` — which is the only reason it
+    was never noticed.
+    """
+    if get_settings().database_url.startswith("sqlite"):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
