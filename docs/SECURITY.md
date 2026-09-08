@@ -221,8 +221,27 @@ The token in that file is an ordinary API token. If it leaks, revoke it:
 The default binds to `127.0.0.1`, and guest-facing sockets (VNC, QMP, the SSH
 port forward) are bound to loopback too, with a test guarding it.
 
-If you bind the API elsewhere, understand that you are exposing plain HTTP
-carrying credentials and VM framebuffers. At minimum:
+**Wanting this from another machine is reasonable.** A VM host you can reach
+from the laptop on the sofa is a normal thing to want, and "don't" is not useful
+advice. The supported shape is: leave the bind on `127.0.0.1` and put a reverse
+proxy in front of it that terminates TLS and requires its own authentication —
+Caddy, nginx or Traefik all do this in a few lines. The proxy talks to loopback
+on the same machine, so nothing about this application's assumptions changes,
+and the thing crossing your network is TLS rather than a session cookie and a
+framebuffer in the clear. Add the proxy's hostname to `KURUKURU_HOST`'s trusted
+names so the Host check accepts it.
+
+**The public internet is a different question, and the answer is no for now.**
+Not because loopback is sacred, but because two things this does not have are
+exactly the two you need before exposing a control plane: *roles*, so an
+account can be something other than a full administrator of every VM, and
+*audit by actor*, so the event log records which person did a thing rather than
+only that it happened. Until both exist there is no honest way to run this
+where strangers can reach it, and no configuration flag will substitute. That
+is a roadmap item, not a principle.
+
+If you bind the API elsewhere anyway, understand that you are exposing plain
+HTTP carrying credentials and VM framebuffers. At minimum:
 
 1. Put a reverse proxy in front of it and terminate TLS there.
 2. Restrict who can reach the port at the network layer.
