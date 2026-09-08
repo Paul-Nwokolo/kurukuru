@@ -485,6 +485,14 @@ piece of good news. But a password, a username and a routable address together
 are not three findings — they are one working login, sitting in a plain JSON
 file in a project directory.
 
+**That particular login is dead.** The Linux test host was destroyed after the
+portability work finished, so the password, the accounts and the address in
+those rules no longer open anything, and there is nothing left to rotate. The
+rest of this section is not softened by that: the credential was live for as
+long as the file held it, nobody chose to put it there, and the next one will
+arrive by the same route. What closed this incident was deleting the machine,
+which is not a security practice — it is luck about timing.
+
 The mechanism is worth understanding, because nobody typed that file. It is
 written by *approving commands*: every one-off `plink -pw … ` or
 `echo <password> | sudo -S …` that gets approved is recorded verbatim so it can
