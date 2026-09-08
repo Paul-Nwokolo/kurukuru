@@ -43,10 +43,17 @@ dist-ssr/
 .env.*
 !.env.example
 
-# Claude Code's per-machine settings. Ignored on principle (it is a record of
-# one machine's approved commands, not a project artefact) and on evidence: the
-# current file contains a plaintext password for the Linux test host.
-.claude/settings.local.json
+# Claude Code's per-machine settings. Ignored on principle — it is a record of
+# one machine's approved commands, not a project artefact — and on evidence:
+# the file once held a plaintext password for the Linux test host, put there by
+# approving one-off commands that get recorded verbatim. See CONTRIBUTING.
+#
+# The glob, rather than the exact filename it used to be, is the lesson from
+# cleaning that up: making a `.json.bak` before editing produced an untracked
+# copy of the secret that the exact-path rule did not cover, so `git add -A`
+# would have staged it. A rule that protects the original and not its backups
+# protects nothing — the copy is where this kind of thing actually leaks from.
+.claude/settings.local*
 
 # --------------------------------------------------------------------------- #
 # State directory
