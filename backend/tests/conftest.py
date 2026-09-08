@@ -338,14 +338,29 @@ def api_client(app, **kwargs) -> "TestClient":
 
     from kurukuru.product import API_PREFIX
 
-    base = kwargs.pop("base_url", "http://testserver")
+    # A loopback *host*, for the same reason as the loopback peer below: the
+    # service validates the Host header to close DNS rebinding (see
+    # docs/SECURITY.md), and Starlette's default of "testserver" is precisely
+    # the shape that check exists to refuse. Defaulting to a real loopback name
+    # means the tests go through the same path a browser does instead of around
+    # it — the alternative, adding "testserver" to the trusted list, would have
+    # made every test pass by disabling the thing under test in production too.
+    base = kwargs.pop("base_url", "http://127.0.0.1")
     # A loopback peer, because that is what the real service sees: it binds
     # 127.0.0.1 and there is no proxy in front of it. Starlette's default peer
     # is the string "testclient", which is not an address at all — so a route
     # that checks where the request came from (POST /auth/first-run) would
     # refuse every test for a reason no real caller could hit.
     kwargs.setdefault("client", ("127.0.0.1", 50000))
-    return TestClient(app, base_url=f"{base.rstrip('/')}{API_PREFIX}", **kwargs)
+    # And an explicit Host, because `base_url` does not reach every request:
+    # `websocket_connect` ignores it and joins against a hard-coded
+    # ``ws://testserver`` (see :func:`api_ws`). Without this the console's
+    # WebSocket arrives with a Host the service is right to refuse, and every
+    # console test fails at the handshake instead of at the thing it tests.
+    headers = {"host": "127.0.0.1", **(kwargs.pop("headers", None) or {})}
+    return TestClient(
+        app, base_url=f"{base.rstrip('/')}{API_PREFIX}", headers=headers, **kwargs
+    )
 
 
 def api_ws(path: str) -> str:

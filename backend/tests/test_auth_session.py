@@ -354,7 +354,7 @@ def test_a_rejected_password_names_reset_password_not_login(anon_client):  # noq
     from kurukuru.cli.errors import CliError
 
     with pytest.raises(CliError) as exc:
-        ApiClient("http://testserver", http=anon_client).login("owner", "wrong-password")
+        ApiClient("http://127.0.0.1", http=anon_client).login("owner", "wrong-password")
 
     assert "Incorrect username or password" in exc.value.message
     assert "reset-password" in (exc.value.hint or ""), exc.value.hint
@@ -371,7 +371,7 @@ def test_an_unknown_user_gets_the_same_answer_as_a_wrong_password(anon_client): 
     errors = []
     for username in ("owner", "no-such-user"):
         with pytest.raises(CliError) as exc:
-            ApiClient("http://testserver", http=anon_client).login(username, "wrong")
+            ApiClient("http://127.0.0.1", http=anon_client).login(username, "wrong")
         errors.append((exc.value.message, exc.value.hint))
 
     assert errors[0] == errors[1]
@@ -384,7 +384,7 @@ def test_a_missing_credential_still_says_sign_in(anon_client):  # noqa: F811
     from kurukuru.cli.errors import CliError
 
     with pytest.raises(CliError) as exc:
-        ApiClient("http://testserver", http=anon_client, token="kurukuru_nonsense").request(
+        ApiClient("http://127.0.0.1", http=anon_client, token="kurukuru_nonsense").request(
             "GET", "/auth/whoami"
         )
 

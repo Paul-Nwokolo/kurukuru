@@ -103,6 +103,67 @@ fully authenticated client.
 
 ---
 
+## The browser is a client you did not choose
+
+Binding `127.0.0.1` keeps other machines out. It does not keep *pages* out. A
+browser will send a request to `127.0.0.1:7842` from any site the user happens
+to have open, and it will attach the session cookie while doing it — so in
+practice every page on the internet is a client of this server, and that, not
+the network, is where the interesting attacks are.
+
+Four things address it.
+
+**`X-Frame-Options: DENY`.** Without it a hostile page can load the dashboard in
+an invisible iframe, position it under something the user is about to click, and
+have that click land on a real, authenticated control. There is no legitimate
+reason to frame this application.
+
+**A Content-Security-Policy**, with `frame-ancestors 'none'`, `object-src
+'none'`, `base-uri 'none'`, and script limited to same-origin plus one hash. The
+hash is computed at startup from the `index.html` actually being served, not
+baked into a constant: `index.html` carries one deliberate inline script — the
+theme bootstrap, which must be inline and blocking so the page does not paint
+the wrong theme and repaint — and a policy that forgot to hash it would
+reintroduce exactly the flash that script exists to prevent. Deriving it from
+the file means the two cannot drift.
+
+**`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.** The
+second is stricter than the usual `strict-origin-when-cross-origin` on purpose:
+dashboard URLs carry instance UUIDs and no outbound navigation has any business
+carrying one.
+
+**Host header validation.** This is the one that is easy to miss. Session
+cookies plus per-session CSRF tokens stop an ordinary cross-site request — the
+attacker's page cannot read the token. *DNS rebinding* is the version that
+defeats that: the attacker publishes a domain that resolves to `127.0.0.1`, at
+which point their page is **same-origin** with this server and can simply read
+the token before using it. The `Host` header is the one field that still records
+where the browser thought it was going, and a rebound request carries the
+attacker's name in it. Requests whose `Host` is not the bound address or a
+loopback name are refused with a 400. The allowed list is derived from the bind
+address, so binding a LAN address deliberately still works.
+
+### Known, deferred
+
+**A quadratic `Range`-header parse in Starlette's `FileResponse`**
+(PYSEC-2026-1942). Reachable unauthenticated through the dashboard's asset
+route; the worst case is CPU burn on the machine already running the server, by
+a page the user visited. It is not fixed because it cannot be: FastAPI
+0.115.12 requires `starlette<0.47.0` and the fix landed in 0.49.1, so it is on
+the far side of a FastAPI major upgrade. That upgrade is the first task of
+0.2.0 — see the README's deferred gaps.
+
+Two other Starlette advisories were assessed and do not apply: the `HTTPEndpoint`
+method-lookup issue (FastAPI does not use `HTTPEndpoint`) and the `StaticFiles`
+UNC SSRF on Windows (the dashboard is served by this project's own handler).
+That second one is worth reading twice, because the same mistake *was* present
+here — in the dashboard's asset resolver and in the ISO resolver, both of which
+resolved a joined path before checking it was inside the root. On Windows that
+turns a request path naming a UNC share into an outbound SMB connection to a
+host the caller chose, from an unauthenticated route. Both now use
+`kurukuru.safe_paths.resolve_within`, which decides containment before touching
+the filesystem.
+
 ## What is *not* protected
 
 Be direct with yourself about these before exposing the port.
