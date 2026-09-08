@@ -49,15 +49,21 @@ def test_the_budget_leaves_room_for_the_deepest_measured_path():
 def test_the_path_that_actually_broke_this_project_is_refused(monkeypatch):
     """159 characters, which produced a 262-character path against a 260 limit.
 
-    Not a hypothetical: this is the build root of the first frozen build of this
-    project, which failed on
-    `_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses`.
+    Not a hypothetical. The first frozen build of this project failed on
+    `_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses`
+    from a build root of exactly this length and shape — a temp directory, a
+    slug of the checkout's own path, and a per-run UUID.
+
+    The path below is synthetic. The real one named a username and a session
+    id, and a test fixture is a poor reason to publish either; the length is the
+    only part the check cares about, and it is asserted rather than assumed so
+    the fixture cannot drift away from the case it represents.
     """
     monkeypatch.setattr("build_installer.long_paths_enabled", lambda: False)
     offender = Path(
-        "C:/Users/nwoko/AppData/Local/Temp/claude/"
-        "C--Users-nwoko-Project-Abstraction-local-iaas-phase1-local-iaas/"
-        "a7546011-3638-46ed-9a65-6900f6dacc89/scratchpad/frozen"
+        "C:/Users/builder/AppData/Local/Temp/build-sandbox/"
+        "C--builder-Projects-kurukuru-phase1-kurukuru-release-1/"
+        "00000000-0000-0000-0000-000000000000/scratchpad/frozen"
     )
     assert len(str(offender)) == 159
 

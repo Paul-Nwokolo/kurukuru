@@ -458,7 +458,7 @@ def test_no_color_env_disables_colour(monkeypatch):
 def test_ssh_command_carries_the_key_and_the_forwarded_port(cli):
     launch(cli)
     with cli.http, use_client(cli.http):
-        api = ApiClient("http://testserver")
+        api = ApiClient("http://127.0.0.1")
         instance = api.instance(json.loads(cli("show", "web-one", "--json").stdout)["id"])
         command = _ssh_command(api, instance)
 
@@ -484,7 +484,7 @@ def test_ssh_discards_host_keys_via_the_posix_null_device(cli):
 
     launch(cli)
     with cli.http, use_client(cli.http):
-        api = ApiClient("http://testserver")
+        api = ApiClient("http://127.0.0.1")
         instance = next(i for i in api.instances() if i["name"] == "web-one")
         command = _ssh_command(api, instance)
 
@@ -498,7 +498,7 @@ def test_ssh_strict_keeps_openssh_defaults(cli):
     """The bypass is a default, not a decision taken away from the user."""
     launch(cli)
     with cli.http, use_client(cli.http):
-        api = ApiClient("http://testserver")
+        api = ApiClient("http://127.0.0.1")
         instance = next(i for i in api.instances() if i["name"] == "web-one")
         command = _ssh_command(api, instance, strict=True)
 
@@ -523,7 +523,7 @@ def test_ssh_refuses_console_only_instances_and_points_at_console(make_cli, tmp_
             cli_app, ["launch", "installer", "--iso", "alpine.iso", "--wait"]
         )
         assert result.exit_code == 0, result.output
-        api = ApiClient("http://testserver")
+        api = ApiClient("http://127.0.0.1")
         instance = next(i for i in api.instances() if i["name"] == "installer")
         assert instance["boot_source"] == "iso"
         with pytest.raises(CliError) as caught:

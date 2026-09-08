@@ -9,11 +9,21 @@ what your machine can actually spare.
 It is for people who want EC2-shaped workflows without a cloud account, a
 monthly bill, or a hypervisor GUI.
 
-![The instances list in the dashboard's dark theme](docs/images/dashboard.png)
+![The instances list: two running VMs with their SSH addresses, one stopped](docs/images/dashboard-light.png)
+
+<sub>Light theme above; the dashboard ships with
+[dark](docs/images/dashboard.png) too, and follows your system setting by
+default.</sub>
 
 **Windows only, today.** It runs on Windows 10 and 11 with hardware
 acceleration. Linux and macOS have code paths but no installer and, for the
 accelerated ones, no validation — see [Platform support](#platform-support).
+
+**One machine, one account, and an unsigned installer.** It manages VMs on the
+computer it runs on, for the person signed in to it: there is no remote mode,
+no second user, and nothing here is multi-tenant. Windows will warn about the
+unsigned build the first time you run it, which [Install](#install) explains
+before you meet it.
 
 ---
 
@@ -520,6 +530,19 @@ indistinguishable from one nobody noticed.
   manual reconcile runs so the table cannot change underneath it for an
   unrelated reason. A success message still fades after four seconds; an error
   stays until dismissed. Per-instance reconcile is the part still missing.
+
+- **Starlette is pinned behind its own security fixes, and that is the first
+  task of 0.2.0.** FastAPI 0.115.12 requires `starlette<0.47.0`; the advisories
+  open against 0.46.2 are fixed in 0.47.2 and later, several only in 1.x. So
+  every remedy sits on the far side of a FastAPI major upgrade, which is not a
+  thing to attempt in a release week. The two that could matter here were dealt
+  with directly instead: the Windows UNC path-resolution bug does not apply,
+  because the dashboard is served by this project's own handler rather than
+  Starlette's `StaticFiles` — but the same mistake *was* in that handler and in
+  the ISO resolver, and both now share one containment check that establishes
+  where a path lands before the filesystem is touched. What remains deferred is
+  a quadratic `Range`-header parse in `FileResponse`, whose worst case is CPU
+  burn on the machine already running the server.
 
 Guest-facing surfaces are bound to `127.0.0.1` by design — VNC, QMP and the SSH
 port forward — so the console proxy is the only path to a VM's screen. That is a

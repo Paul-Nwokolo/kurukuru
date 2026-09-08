@@ -34,6 +34,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
+from kurukuru.safe_paths import resolve_within
 from kurukuru.product import API_PREFIX
 
 logger = logging.getLogger("kurukuru.dashboard")
@@ -98,20 +99,17 @@ def find_dashboard(explicit: str | None = None) -> Path | None:
 
 
 def _safe_file(root: Path, relative: str) -> Path | None:
-    """Resolve ``relative`` under ``root``, or None if it escapes or is absent.
+    """The asset ``relative`` names under ``root``, or None.
 
-    The traversal check is a *resolved-path containment* check rather than a
-    scan for ``..``. Encoded separators, symlinks and Windows' several spellings
-    of the same path all defeat the scan; none of them defeat comparing the
-    fully resolved result against the fully resolved root. Same approach as
-    ``kurukuru.isos``, for the same reason.
+    Containment lives in :func:`kurukuru.safe_paths.resolve_within`, which is
+    shared with ``kurukuru.isos`` because both had written it separately and
+    both had written it wrong — resolving the joined path *before* checking it
+    is inside, which on Windows turns a UNC request path into an outbound SMB
+    connection. This route is unauthenticated, so that was reachable from any
+    page the user happened to have open.
     """
-    try:
-        resolved = (root / relative).resolve()
-        resolved.relative_to(root.resolve())
-    except (OSError, ValueError):
-        return None
-    return resolved if resolved.is_file() else None
+    resolved = resolve_within(root, relative)
+    return resolved if resolved is not None and resolved.is_file() else None
 
 
 def mount_dashboard(app: FastAPI, directory: str | None = None) -> Path | None:

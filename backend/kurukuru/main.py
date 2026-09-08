@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 
@@ -26,6 +27,7 @@ from kurukuru.config import Settings, get_settings
 from kurukuru.database import get_session, init_db
 from kurukuru.engines import EngineRegistry, get_engine_registry
 from kurukuru.dashboard import mount_dashboard
+from kurukuru.security_headers import SecurityHeadersMiddleware
 from kurukuru.product import API_PREFIX
 
 logging.basicConfig(
@@ -774,3 +776,31 @@ app.include_router(api)
 # Last, and the order is what makes it safe: the dashboard's catch-all only ever
 # sees a path no API route claimed.
 _dashboard_root = mount_dashboard(app, settings.dashboard_dir or None)
+
+
+# --------------------------------------------------------------------------- #
+# The browser is the threat model, not the network
+# --------------------------------------------------------------------------- #
+# Binding loopback keeps other machines out. It does not keep *pages* out: a
+# browser will happily send a request to 127.0.0.1 from any site the user has
+# open, with the session cookie attached. These two middlewares address that,
+# and are registered here — after the routes, before startup — because the CSP
+# is built from the index.html actually being served.
+#
+# Registration order is reversed at runtime: the last one added is the outermost,
+# so TrustedHost goes last and rejects a rebound Host before anything else runs.
+app.add_middleware(SecurityHeadersMiddleware, dashboard_root=_dashboard_root)
+
+# DNS rebinding is the attack this closes. An attacker's domain is made to
+# resolve to 127.0.0.1, so their page becomes *same-origin* with this server —
+# at which point the CSRF token stops helping, because their script can simply
+# read it. The Host header is the one thing that still names where the browser
+# thought it was going, and a rebound request carries the attacker's name in it.
+#
+# Derived from the bind address rather than hard-coded, because binding a LAN
+# address is supported (loudly, with a warning) and hard-coding loopback here
+# would break it in a way that looks like a networking fault.
+_allowed_hosts = sorted(
+    {settings.host, "localhost", "127.0.0.1", "::1", "[::1]"} - {"", "0.0.0.0", "::"}
+)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from kurukuru.config import Settings, get_settings
+from kurukuru.safe_paths import resolve_within
 
 logger = logging.getLogger("kurukuru.isos")
 
@@ -72,15 +73,21 @@ def list_isos(settings: Settings | None = None) -> list[IsoFile]:
 def resolve_iso(name: str, settings: Settings | None = None) -> Path:
     """Resolve an ISO filename to an absolute path inside the ISO directory.
 
-    Rejects anything that escapes, by comparing *resolved* paths rather than
-    inspecting the string: ``..`` segments, absolute paths, and symlinks that
-    point outside all collapse to a path that fails the containment check, which
-    string matching alone would miss.
+    Rejects anything that escapes: ``..`` segments, absolute paths, UNC paths
+    and symlinks pointing outside all fail the containment check in
+    :func:`kurukuru.safe_paths.resolve_within`, which string matching alone
+    would miss.
+
+    That containment used to be inline here, and resolved the joined path
+    before checking it was inside — so a ``name`` naming a UNC share made
+    Windows dial the network before the check rejected it. Reaching it needs an
+    authenticated request, unlike the identical bug in ``dashboard``, but it is
+    the same primitive and it is fixed in the same place.
     """
     directory = iso_dir(settings).resolve()
-    candidate = (directory / name).resolve()
+    candidate = resolve_within(directory, name)
 
-    if candidate.parent != directory:
+    if candidate is None or candidate.parent != directory:
         raise IsoError(f"ISO '{name}' is outside the ISO directory")
     if candidate.suffix.lower() != _SUFFIX:
         raise IsoError(f"'{name}' is not an .iso file")
