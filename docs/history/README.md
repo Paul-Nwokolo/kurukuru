@@ -17,6 +17,16 @@ current behaviour see [`../ARCHITECTURE.md`](../ARCHITECTURE.md),
 | [PHASE5_QEMU_BRIEF.md](PHASE5_QEMU_BRIEF.md) | QemuEngine proof of concept | Implemented, with deviations (see below) |
 | [PHASE6_BRIEF.md](PHASE6_BRIEF.md) | Console, ISO boot, image import | Implemented, with a significant correction (see below) |
 | [PHASE7_BRIEF.md](PHASE7_BRIEF.md) | Custom resources, intent-framed launch, cleanups | Implemented |
+| [PHASE8_CLI_BRIEF.md](PHASE8_CLI_BRIEF.md) | Command-line interface | Implemented |
+| [PHASE9_LINUX_BRIEF.md](PHASE9_LINUX_BRIEF.md) | Linux support | Implemented; the Linux host it was validated on no longer exists |
+| [PHASE10_BRIEF.md](PHASE10_BRIEF.md) | Key pairs, user-data, snapshots, instance detail | Implemented |
+| [PHASE11_BRIEF.md](PHASE11_BRIEF.md) | Event log, projects, volumes, networks | Implemented |
+| [PHASE12_BRIEF.md](PHASE12_BRIEF.md) | Design system, themes, structure | Implemented; its naming and wordmark were superseded by Phase 16 (see below) |
+| [PHASE13_WINDOWS_BRIEF.md](PHASE13_WINDOWS_BRIEF.md) | Windows guest support | **Partially implemented.** Its completion criterion was never met (see below) |
+| [PHASE14_BRIEF.md](PHASE14_BRIEF.md) | Carried items and hardening | Implemented |
+| [PHASE15_AUTH_BRIEF.md](PHASE15_AUTH_BRIEF.md) | Authentication | Implemented |
+| [PHASE16_PACKAGING_BRIEF.md](PHASE16_PACKAGING_BRIEF.md) | Rebrand and packaging, Windows first | Implemented; produced the name, the mark and the installer |
+| [DOCS_BRIEF.md](DOCS_BRIEF.md) | Documentation and consolidation pass | Implemented; this directory is its output |
 | [ROADMAP_v2.md](ROADMAP_v2.md) | Strategic direction | Current as of the Multipass retirement |
 
 ## Never implemented
@@ -48,3 +58,16 @@ Worth knowing before reading a brief as if it described the system:
 - **Phase 7 asked for a nullable `flavor` column.** SQLite cannot drop `NOT
   NULL` without a table rebuild, so the column stays non-null and stores
   `"custom"` for hand-sized instances.
+- **Phase 12 deliberately kept the placeholder name.** It said the product name
+  was not decided and told the reader not to invent one: "Keep 'Local IaaS
+  Orchestrator' and make the lockup easy to change." Phase 16 named it Kurukuru
+  and replaced the placeholder wordmark with the current mark. Everything in
+  Phase 12 about naming, the lockup or the wordmark is superseded; its colour,
+  theme and spacing work is still what the dashboard uses.
+- **Phase 13 set a completion criterion that was never met.** It asked for a
+  Windows guest that boots the ISO, has the installer see the disk, completes,
+  and reboots into the installed system. No Windows install has ever completed
+  on this host. It also asked for an honest assessment of whether Windows 11
+  was reachable; the answer turned out to be no, permanently, on a Windows
+  host — QEMU excludes TPM 2.0 there at build time. Read the brief as the
+  question, not the answer; the answer is in the README's "Honest limitations".
