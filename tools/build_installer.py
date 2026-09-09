@@ -630,6 +630,40 @@ def check_powershell_scripts() -> None:
             )
 
 
+def clear_previous_artefacts(dist: Path) -> list[Path]:
+    """Remove artefacts from earlier runs, so what is here afterwards is ours.
+
+    Three files named ``Kurukuru-0.1.0-Setup.exe*`` once sat in this directory
+    at the same time: the real one, a ``.previous`` and a ``.stale``. All three
+    claimed the same version, all three had different bytes, and two of them
+    predated a fix to the code that protects the API token. Nothing in this
+    script created the extra two — somebody moved them aside by hand, which is
+    a reasonable instinct that produced an unreasonable directory.
+
+    The risk is not disk space, it is uploading the wrong one. They
+    tab-complete alike and nothing distinguishes them by eye; only a checksum
+    does, and a checksum only helps somebody who already suspects a problem.
+
+    Runs immediately before ISCC rather than at startup, so a build that fails
+    earlier leaves the previous artefact alone. It does mean a *failed* compile
+    leaves the directory empty, which is the right way round: nothing is
+    honester than nothing, and a stale exe sitting where a fresh one should be
+    is the trap this exists to close.
+
+    Scoped to the artefact name rather than emptying the directory. This path
+    is derived from ``--build-root``, and an ``rmtree`` on a caller-supplied
+    directory is a worse failure than the one being prevented.
+    """
+    if not dist.is_dir():
+        return []
+    removed: list[Path] = []
+    for path in sorted(dist.glob("Kurukuru-*-Setup.exe*")):
+        if path.is_file():
+            path.unlink()
+            removed.append(path)
+    return removed
+
+
 def build_installer(out: Path, qemu_version: str) -> Path:
     """Compile the installer. Returns the produced .exe."""
     iscc = find_iscc()
@@ -645,6 +679,8 @@ def build_installer(out: Path, qemu_version: str) -> Path:
         )
 
     check_powershell_scripts()
+    for gone in clear_previous_artefacts(out.parent / "dist"):
+        print(f"      cleared {gone.name} from a previous run")
     stage_legal_texts(out, qemu_version)
     script = REPO / "packaging" / "windows" / "kurukuru.iss"
     run(

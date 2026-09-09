@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from build_installer import (
+    clear_previous_artefacts,
     MANIFEST_NAME,
     MAX_BUILD_ROOT,
     MAX_PATH,
@@ -180,3 +181,55 @@ def test_qemu_licences_are_not_optional():
     from build_installer import QEMU_LICENCES
 
     assert "COPYING" in QEMU_LICENCES
+
+
+# --------------------------------------------------------------------------- #
+# Not leaving last run's artefacts beside this run's
+# --------------------------------------------------------------------------- #
+def test_previous_artefacts_are_cleared_before_a_build(tmp_path):
+    """The trap this closes: three files, one version, different bytes.
+
+    C:\kk-build\dist really did hold Kurukuru-0.1.0-Setup.exe alongside a
+    .previous and a .stale, all claiming 0.1.0, two of them predating a fix to
+    the code that protects the API token. They tab-complete alike, so the only
+    thing standing between that directory and the wrong file being published
+    was somebody checking a checksum they had no reason to doubt.
+    """
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name in (
+        "Kurukuru-0.1.0-Setup.exe",
+        "Kurukuru-0.1.0-Setup.exe.previous",
+        "Kurukuru-0.1.0-Setup.exe.stale",
+        "Kurukuru-0.1.0-Setup.exe.sha256",
+        "Kurukuru-0.1.1-Setup.exe",
+    ):
+        (dist / name).write_text("x")
+
+    removed = clear_previous_artefacts(dist)
+
+    assert len(removed) == 5
+    assert list(dist.glob("Kurukuru-*")) == []
+
+
+def test_clearing_leaves_unrelated_files_alone(tmp_path):
+    """Scoped to the artefact name on purpose.
+
+    The directory comes from --build-root, so emptying it wholesale would be a
+    worse failure than the one being prevented.
+    """
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "Kurukuru-0.1.0-Setup.exe").write_text("artefact")
+    (dist / "notes.txt").write_text("keep me")
+    (dist / "subdir").mkdir()
+
+    clear_previous_artefacts(dist)
+
+    assert (dist / "notes.txt").is_file()
+    assert (dist / "subdir").is_dir()
+
+
+def test_clearing_a_directory_that_does_not_exist_is_not_an_error(tmp_path):
+    """First build on a fresh machine. Nothing to clear is not a failure."""
+    assert clear_previous_artefacts(tmp_path / "never-created") == []
