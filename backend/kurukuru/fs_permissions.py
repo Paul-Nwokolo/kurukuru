@@ -31,6 +31,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -115,6 +116,27 @@ def _icacls(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["icacls", *args], capture_output=True, text=True, timeout=60)
 
 
+
+def _dacl_principals(path: Path) -> list[str]:
+    r"""Every principal named in the file's DACL, as icacls reports them.
+
+    icacls prints the path on the first line only and indents the rest, so the
+    path is stripped before parsing. An entry is ``PRINCIPAL:(perms)`` where the
+    principal may itself contain spaces and a backslash — ``NT AUTHORITY\SYSTEM``,
+    ``OWNER RIGHTS`` — so the split is on the first ``:(`` rather than on ``:``.
+    """
+    out = _icacls(str(path)).stdout
+    principals: list[str] = []
+    for line in out.splitlines():
+        line = line.replace(str(path), "").strip()
+        if not line or "Successfully processed" in line:
+            continue
+        match = re.match(r"^(?P<principal>.+?):\(", line)
+        if match:
+            principals.append(match.group("principal").strip())
+    return principals
+
+
 def _harden_windows(path: Path) -> HardenResult:
     filesystem = _windows_filesystem(path)
     if filesystem is not None and filesystem not in _ACL_FILESYSTEMS:
@@ -133,9 +155,31 @@ def _harden_windows(path: Path) -> HardenResult:
     if not principal:
         return HardenResult(path, False, "could not determine the current user account")
 
-    # Order matters: dropping inheritance first means the grant below is the
-    # only ACE on the file, rather than being added to the inherited three.
+    # `/inheritance:r` removes *inherited* ACEs and nothing else. This code used
+    # to assume that left the file bare, so the grant below would be the only
+    # entry — and on the author's account it was, because files under a user
+    # profile get SYSTEM, Administrators and the user purely by inheritance.
+    #
+    # That assumption is false on an administrator account. A new file there
+    # picks up the token's *default DACL* as explicit, non-inherited ACEs, and
+    # explicit ACEs survive `/inheritance:r` untouched. CI found it: after
+    # hardening, the DACL still read
+    #
+    #     runneradmin:(R,W), SYSTEM:(F), Administrators:(F), OWNER RIGHTS:(F)
+    #
+    # with no (I) flags on any of them, while this function returned True and
+    # reported "restricted to <SID>". Running as a local administrator is the
+    # common case on a personal Windows machine, so this was the normal path,
+    # not an exotic one.
+    #
+    # So the DACL is now emptied explicitly rather than assumed empty: every
+    # principal icacls reports is removed, then ours is granted, then the result
+    # is read back. Enumerating beats naming SYSTEM and Administrators outright,
+    # because it does not depend on knowing which default DACL this machine has.
     stripped = _icacls(str(path), "/inheritance:r")
+    for existing in _dacl_principals(path):
+        # Both lists: a deny ACE left behind would be worse than a grant.
+        _icacls(str(path), "/remove:g", existing, "/remove:d", existing)
     granted = _icacls(str(path), "/grant:r", f"*{principal}:(R,W)")
     if granted.returncode != 0:
         return HardenResult(
@@ -149,6 +193,16 @@ def _harden_windows(path: Path) -> HardenResult:
             path, False,
             "granted to your account, but inherited entries could not be removed — "
             "administrators on this machine can still read it",
+        )
+
+    # Read back rather than trust the exit codes. Every claim this function
+    # makes is a claim about the DACL, so the DACL is what it checks.
+    remaining = _dacl_principals(path)
+    if len(remaining) != 1:
+        return HardenResult(
+            path, False,
+            f"granted to your account, but {len(remaining)} entries remain on the "
+            f"file ({', '.join(remaining)}) — it is not restricted to you alone",
         )
     return HardenResult(path, True, f"restricted to {principal} (NTFS ACL, inheritance removed)")
 

@@ -140,3 +140,63 @@ def test_posix_hardening_sets_0600(secret):
 
     assert result.protected
     assert secret.stat().st_mode & 0o777 == 0o600
+
+
+@windows_only
+def test_hardening_removes_explicit_entries_not_only_inherited(secret):
+    """The bug CI found, reproduced as an assertion.
+
+    `/inheritance:r` removes inherited ACEs and leaves explicit ones alone. On
+    an administrator account a new file gets SYSTEM, Administrators and OWNER
+    RIGHTS as *explicit* entries from the token's default DACL, so the old code
+    returned True and reported "restricted to <SID>" over a file three other
+    principals held Full Control on.
+
+    The starting DACL here is the one the GitHub runner produced, rebuilt by
+    hand so the case is reproducible on an ordinary non-admin account too —
+    this test failed before the fix on the author's own machine, which is the
+    only reason it is worth having.
+    """
+    import kurukuru.fs_permissions as fsp
+
+    subprocess.run(["icacls", str(secret), "/inheritance:r"], capture_output=True)
+    subprocess.run(
+        ["icacls", str(secret), "/grant:r",
+         "*S-1-5-18:(F)", "*S-1-5-32-544:(F)", "*S-1-3-4:(F)",
+         f"{os.environ['USERNAME']}:(R,W)"],
+        capture_output=True,
+    )
+    assert len(fsp._dacl_principals(secret)) > 1, "the starting state did not set up"
+
+    result = harden_file(secret)
+
+    remaining = fsp._dacl_principals(secret)
+    assert bool(result), result.detail
+    assert len(remaining) == 1, f"entries survived hardening: {remaining}"
+    assert secret.read_text() == "t0k3n", "the owner can no longer read its own secret"
+
+
+@windows_only
+def test_hardening_refuses_to_claim_success_when_entries_survive(secret, monkeypatch):
+    """Proves the read-back guard fires, by breaking the removal on purpose.
+
+    Without this the new check is a claim: it has never been observed turning a
+    DACL it could not clean into a falsy result. Removal is stubbed to a no-op,
+    which is exactly what the old code effectively did for explicit entries.
+    """
+    import kurukuru.fs_permissions as fsp
+
+    real = fsp._icacls
+
+    def refuse_to_remove(*args: str):
+        if "/remove:g" in args:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return real(*args)
+
+    monkeypatch.setattr(fsp, "_icacls", refuse_to_remove)
+    subprocess.run(["icacls", str(secret), "/grant", "*S-1-5-32-544:(F)"], capture_output=True)
+
+    result = harden_file(secret)
+
+    assert not result, "hardening claimed success over a DACL it did not clean"
+    assert "entries remain" in result.detail
