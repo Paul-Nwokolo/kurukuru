@@ -223,7 +223,24 @@ def _run_pytest(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
     (tmp_path / "test_generated.py").write_text(textwrap.dedent(body), encoding="utf-8")
 
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            # Pin the rootdir to the generated directory. Without it pytest
+            # infers one by walking upwards and can end up scanning the drive
+            # root — on a GitHub Windows runner that means `C:\Documents and
+            # Settings`, an inaccessible junction, and collection dies with
+            # PermissionError before the generated test ever runs. The failure
+            # looked like this harness being broken; it was pytest looking
+            # somewhere this test never meant to point it.
+            "--rootdir",
+            str(tmp_path),
+            str(tmp_path),
+        ],
         capture_output=True,
         text=True,
         cwd=BACKEND,

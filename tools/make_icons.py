@@ -144,10 +144,37 @@ def write_outputs(public: Path, packaging: Path) -> list[Path]:
     return written
 
 
+def _frames(image):
+    """Every frame in the file — an .ico holds several, a .png holds one."""
+    ico = getattr(image, "ico", None)
+    sizes = sorted(ico.sizes()) if ico is not None else None
+    if not sizes:
+        yield image
+        return
+    for size in sizes:
+        yield ico.getimage(size)
+
+
 def digest(paths: list[Path]) -> str:
+    """A fingerprint of what the icons *look like*, not of their bytes.
+
+    Byte comparison was the first version, and it is wrong across machines: PNG
+    and ICO are compressed, and zlib's output differs between platforms — so the
+    committed files regenerate to different bytes on Linux than on Windows while
+    depicting exactly the same thing. CI found that on its first run, reporting
+    the icons stale on a checkout that had not touched them.
+
+    Decoding and hashing the pixels makes the check say what it means: same
+    picture, same fingerprint, wherever it was rendered.
+    """
+    from PIL import Image
+
     h = hashlib.sha256()
     for path in sorted(paths):
-        h.update(path.read_bytes())
+        with Image.open(path) as image:
+            for frame in _frames(image):
+                h.update(str(frame.size).encode())
+                h.update(frame.convert("RGBA").tobytes())
     return h.hexdigest()[:16]
 
 
