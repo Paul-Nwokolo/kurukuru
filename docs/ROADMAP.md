@@ -44,6 +44,42 @@ beyond a reverse proxy on a trusted network, which is what SECURITY.md says.
 
 ---
 
+### 3. Verify the base image against Ubuntu's published checksum
+
+`fetch_into_store` already takes an `expected_sha256` and refuses the download
+when it does not match. Nothing passes one for the default base image, so the
+600 MB qcow2 every first launch pulls from
+
+    https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+
+is trusted on TLS alone. TLS authenticates the host and protects the bytes in
+flight; it says nothing about whether the file on that host is the one that was
+tested, and `current/` is a rolling path whose contents change as Canonical
+republishes.
+
+Canonical publishes `SHA256SUMS` and `SHA256SUMS.gpg` beside the image, so the
+fix is small in code and mostly a decision about *which* checksum to trust:
+
+- Pinning a literal in `config.py` means the value is reviewed with the commit,
+  and breaks the moment `current/` is republished. Correct, and it turns a
+  routine upstream refresh into a broken first launch for everyone until a
+  release ships. That failure mode is worse than the risk it closes, so a
+  pinned literal alone is not the answer.
+- Fetching `SHA256SUMS` at download time and matching the entry follows the
+  rolling path without going stale, but the checksum then comes from the same
+  host and the same TLS session as the image, so it detects corruption and a
+  bad mirror rather than a compromised origin.
+- Verifying `SHA256SUMS.gpg` against Canonical's signing key is the version
+  that actually closes the origin case, and costs a bundled public key plus a
+  signature check.
+
+The third is the right one; the second is worth having on the way if the third
+slips. Not today's work because the honest severity is low for the threat model
+this tool has — a single-user desktop pulling from a Canonical host over TLS —
+and because getting it wrong breaks every new install rather than degrading
+quietly. It is written down here because the parameter already exists and is
+unused, which is exactly the kind of gap that stays open for years by default.
+
 ## Considered, not scheduled
 
 Suggestions from an external backend review. Logged with what they would be

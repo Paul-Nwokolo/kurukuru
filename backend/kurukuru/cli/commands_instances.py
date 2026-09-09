@@ -162,6 +162,10 @@ def launch(
 
     instance = client.create_instance(payload)
 
+    # Before the wait, not after it: the point is to be readable by someone
+    # who is about to sit through a slow boot, not to explain it afterwards.
+    _warn_if_unaccelerated(out, client, accel)
+
     if not wait:
         if json_out:
             out.emit(instance)
@@ -183,6 +187,52 @@ def launch(
         out.emit(instance)
     else:
         _print_launch_summary(out, instance)
+
+
+def _warn_if_unaccelerated(
+    out: Output, client: ApiClient, requested_accel: str | None
+) -> None:
+    """Say in the terminal that this VM is going to crawl, and why.
+
+    The backend already detects this: ``QemuEngine`` logs "falling back to TCG"
+    and its capability report reads "TCG software emulation; VMs will boot
+    slowly". Neither reaches the person who typed ``launch``. They are watching
+    this process's output; that warning goes to the backend's log, in another
+    process they have no reason to open.
+
+    So without this the entire symptom is that a boot which normally takes
+    seconds takes minutes, with nothing printed. That is the worst shape a
+    failure can have — slow, and silent about the reason — because there is no
+    error string to search for and nothing to suggest the problem is a Windows
+    feature that is switched off. ``doctor`` says it plainly, but only if you
+    already suspect something is wrong.
+
+    Never fatal, and never fatal on its own failure: this is a courtesy on the
+    way past, so a backend that cannot answer ``/diagnostics`` costs the user a
+    warning rather than their launch.
+    """
+    if (requested_accel or "").strip().lower() == "tcg":
+        return  # They asked for software emulation. Reporting it back is noise.
+
+    try:
+        engine = client.diagnostics().get("engine") or {}
+    except CliError:
+        return
+    if not engine.get("available"):
+        return  # A missing engine is doctor's story, and launch would have failed.
+    if engine.get("accel_available"):
+        return
+
+    out.warn(
+        f"No hardware acceleration — this VM will run under "
+        f"{str(engine.get('accel') or 'TCG').upper()} software emulation, roughly "
+        f"30x slower. Expect the first boot to take minutes, not seconds."
+    )
+    out.note(
+        "On Windows, enable 'Windows Hypervisor Platform' in Windows Features and "
+        "reboot. On Linux, make sure /dev/kvm exists and you can read it. "
+        f"'{CLI_NAME} doctor' re-checks it."
+    )
 
 
 def _launch_payload(client: ApiClient, **options: object) -> dict:

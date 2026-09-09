@@ -33,6 +33,11 @@ machine, through a web dashboard and a CLI, on Windows and Linux.
   written with an OS-level ACL restricting them to your account.
 - **Windows installer.** A signed-by-nobody but self-contained installer that
   bundles the backend, the dashboard and a service wrapper.
+- **A warning when hardware acceleration is missing**, printed by `launch`
+  itself. The backend already detected this and logged it, but the log is a
+  different process from the terminal the user is watching, so the whole
+  symptom was a boot that took minutes instead of seconds with nothing said
+  and no error string to search for.
 - **`kurukuru doctor`.** Reports the toolchain actually resolved — QEMU, the
   accelerator, the state directory and its filesystem — because most problems
   on this kind of tool are environmental.

@@ -17,6 +17,7 @@ Three things are treated as contracts and tested as such:
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 
@@ -1394,3 +1395,112 @@ def test_the_cli_and_the_backend_agree_on_the_token_path(monkeypatch):
     assert Settings(state_dir="/srv/iaas").auth_token_file == (
         f"/srv/iaas/{auth_store.TOKEN_LEAF}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# The launch-time acceleration warning
+# --------------------------------------------------------------------------- #
+#
+# Without hardware acceleration a VM boots roughly 30x slower. The backend
+# already knows and says so in its own log, which is a different process from
+# the one the user is watching, so the entire user-visible symptom is a long
+# silence. These tests are about the message reaching the terminal.
+
+class _StubClient:
+    """Just enough ApiClient to answer /diagnostics, or to fail answering it."""
+
+    def __init__(self, engine=None, raises=False):
+        self._engine = engine
+        self._raises = raises
+        self.calls = 0
+
+    def diagnostics(self):
+        self.calls += 1
+        if self._raises:
+            raise CliError("backend is too old to answer /diagnostics")
+        return {"engine": self._engine or {}}
+
+
+def _warned(engine=None, requested=None, raises=False):
+    """Run the helper and return whatever it wrote to stderr."""
+    from kurukuru.cli.commands_instances import _warn_if_unaccelerated
+    from kurukuru.cli.output import Output
+
+    stderr = io.StringIO()
+    out = Output(json_mode=False)
+    out.err.file = stderr
+    _warn_if_unaccelerated(out, _StubClient(engine, raises), requested)
+    return stderr.getvalue()
+
+
+def test_launch_warns_when_there_is_no_hardware_acceleration():
+    written = _warned({"available": True, "accel_available": False, "accel": "tcg"})
+
+    assert "No hardware acceleration" in written
+    assert "30x slower" in written
+    # The remedy, not just the diagnosis: the whole problem with this failure is
+    # that there is nothing to search for.
+    assert "Windows Hypervisor Platform" in written
+
+
+def test_launch_says_nothing_when_acceleration_is_available():
+    """The control. A warning on every launch is noise, not a warning."""
+    written = _warned({"available": True, "accel_available": True, "accel": "whpx"})
+
+    assert written == ""
+
+
+def test_launch_does_not_warn_when_tcg_was_asked_for():
+    """Reporting back the thing the user just requested is nagging."""
+    written = _warned(
+        {"available": True, "accel_available": False, "accel": "tcg"}, requested="tcg"
+    )
+
+    assert written == ""
+
+
+def test_launch_is_not_broken_by_a_backend_that_cannot_answer_diagnostics():
+    """The probe is a courtesy on the way past. It must never cost a launch."""
+    written = _warned(raises=True)
+
+    assert written == ""
+
+
+def test_launch_stays_quiet_about_acceleration_when_the_engine_is_missing():
+    """A missing QEMU is doctor's story. Saying "no acceleration" about a host
+    that has no engine at all would point at the wrong problem."""
+    written = _warned({"available": False})
+
+    assert written == ""
+
+
+def test_the_warning_is_actually_wired_into_launch(cli, monkeypatch):
+    """The unit tests above would all pass with the call site deleted.
+
+    This one goes through the real command, so it fails if the helper is never
+    reached — which is the mistake worth catching, given the helper's entire
+    purpose is to be on that path.
+    """
+    monkeypatch.setattr(
+        ApiClient,
+        "diagnostics",
+        lambda self: {"engine": {"available": True, "accel_available": False, "accel": "tcg"}},
+    )
+
+    result = cli("launch", "web-one")
+
+    assert result.exit_code == 0
+    assert "No hardware acceleration" in (result.output or "")
+
+
+def test_launch_is_quiet_on_an_accelerated_host_end_to_end(cli, monkeypatch):
+    monkeypatch.setattr(
+        ApiClient,
+        "diagnostics",
+        lambda self: {"engine": {"available": True, "accel_available": True, "accel": "whpx"}},
+    )
+
+    result = cli("launch", "web-one")
+
+    assert result.exit_code == 0
+    assert "No hardware acceleration" not in (result.output or "")
