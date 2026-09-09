@@ -27,7 +27,36 @@ current behaviour see [`../ARCHITECTURE.md`](../ARCHITECTURE.md),
 | [PHASE15_AUTH_BRIEF.md](PHASE15_AUTH_BRIEF.md) | Authentication | Implemented |
 | [PHASE16_PACKAGING_BRIEF.md](PHASE16_PACKAGING_BRIEF.md) | Rebrand and packaging, Windows first | Implemented; produced the name, the mark and the installer |
 | [DOCS_BRIEF.md](DOCS_BRIEF.md) | Documentation and consolidation pass | Implemented; this directory is its output |
+| [frontend_review.md](frontend_review.md) | External review, dashboard | Every finding addressed before 0.1.0 (see below) |
+| [backend_review.md](backend_review.md) | External review, backend | Every finding addressed before 0.1.0 (see below) |
 | [ROADMAP_v2.md](ROADMAP_v2.md) | Strategic direction | Current as of the Multipass retirement |
+
+## External reviews
+
+Two point-in-time reviews from the run-up to 0.1.0. They are kept for the same
+reason the briefs are — they record what was found and why it mattered — and
+they are historical for the same reason. **Every defect in both was fixed before
+release.** Read them as a record of what was corrected, not as a list of what is
+wrong with the code today.
+
+- **[frontend_review.md](frontend_review.md)** — keyboard access, responsive
+  layout and ARIA gaps. Fixed in `cb32cbe` (merged `39b0058`) and `17560ab`
+  (merged `91f06db`). Two of its recommendations were deliberately *not* taken,
+  and the reasoning is written down so they are not "fixed" later: a destructive
+  dialog keeps Cancel as the initial focus, and the host capacity bar is a
+  `meter` rather than a `progressbar`. See decisions 60 and 61 in
+  [`../DECISIONS.md`](../DECISIONS.md).
+- **[backend_review.md](backend_review.md)** — settings captured at import time,
+  a route reading a module-level snapshot, and a test that passed while
+  asserting nothing. Fixed in `f352a35` (merged `22ae8d4`), with the sweep that
+  looked for the same false-green shape elsewhere merged in `764486d`. The
+  underlying pattern became rule 5 of the "Verification integrity" section of
+  [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md).
+
+  This review also made three feature suggestions. Those were **not** built:
+  they are recorded under "Considered, not scheduled" in
+  [`../ROADMAP.md`](../ROADMAP.md) with the reasoning, which is a different
+  outcome from the defects above and is worth not conflating.
 
 ## Never implemented
 
