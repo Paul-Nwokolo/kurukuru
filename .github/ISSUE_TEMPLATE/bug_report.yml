@@ -1,0 +1,91 @@
+name: Bug report
+description: Something behaved differently from how it is documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this.
+
+        Kurukuru drives QEMU on your own machine, so most bugs turn out to
+        depend on your hypervisor, your accelerator or your storage rather than
+        on Kurukuru itself. The environment questions below are the ones that
+        decide which of those it is — filling them in is usually the difference
+        between a fix and a long conversation.
+
+        **Please do not report security vulnerabilities here.** Issues are
+        public. See [SECURITY.md](../blob/main/SECURITY.md) for the private
+        route.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        1. Created an instance from ...
+        2. Clicked ...
+        3. Expected the console to open; got "Request failed with status code 500".
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `kurukuru doctor`
+      description: >
+        This reports the toolchain Kurukuru actually resolved — QEMU, the
+        accelerator, the state directory and its filesystem. It answers most of
+        the questions below on its own. Review it before pasting: it contains
+        local paths.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Kurukuru version
+      description: From `kurukuru version`, or the installer you ran.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install it?
+      options:
+        - Windows installer from Releases
+        - From source
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Windows build number if you have it — `winver` shows it.
+      placeholder: "Windows 11 Pro 24H2 (26100.2033)"
+    validations:
+      required: true
+
+  - type: input
+    id: guest
+    attributes:
+      label: Guest OS, if the bug involves a VM
+      placeholder: "Ubuntu 24.04 cloud image / Windows Server 2022 from ISO"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: >
+        Backend logs, and the browser console if it is a dashboard bug. Redact
+        anything you would not want public — issues are visible to everyone.
+      render: text
+    validations:
+      required: false

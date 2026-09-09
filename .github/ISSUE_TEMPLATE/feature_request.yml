@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest something Kurukuru should be able to do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing, it is worth checking
+        [ROADMAP.md](../blob/main/docs/ROADMAP.md) — it lists what is planned,
+        and also several things that were considered and deliberately not
+        scheduled, with the reasoning. If your idea is in the second list, the
+        most useful thing you can do is argue against that reasoning.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: >
+        The problem rather than the solution. What are you doing today, and
+        where does it become painful?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: Workarounds, other tools, or why the existing commands don't cover it.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      description: >
+        Kurukuru is a single-user control plane for VMs on one machine, bound to
+        loopback by default. Features that assume multiple tenants, remote
+        access or a hosted service are usually out of scope — see the threat
+        model in docs/SECURITY.md.
+      options:
+        - label: This fits a single-user, single-machine tool.
+          required: false
