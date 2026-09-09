@@ -24,6 +24,10 @@ from kurukuru.security import PUBLIC_ROUTES, TICKET_ROUTES, table_key
 
 from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
 
+#: The dashboard's SPA fallback. Registered only when a built bundle
+#: exists, so its absence is a fact about the checkout rather than the code.
+DASHBOARD_CATCH_ALL = "/{full_path:path}"
+
 #: Path parameters get a value that is syntactically fine and refers to nothing.
 #: The guard runs before the endpoint, so an anonymous caller must get 401 and
 #: never 404 — reaching "not found" would mean the lookup happened first, which
@@ -89,9 +93,22 @@ def test_every_route_is_closed_or_deliberately_public(anon_client, path, method)
 
 
 def test_public_routes_are_all_real_routes():
-    """A stale entry is a hole waiting for a path to be reused."""
+    """A stale entry is a hole waiting for a path to be reused.
+
+    The dashboard's catch-all is exempt, because whether it exists is a
+    property of the *checkout* rather than of the code: `mount_dashboard`
+    registers it only when a built bundle is present, and having none is a
+    documented, supported state — a developer running against the Vite dev
+    server has no `dist/`, and so does any machine that has not run
+    `npm run build`. CI is such a machine, which is where this surfaced: the
+    test failed on a tree where nothing was wrong.
+    """
     registered = {table_key(path) for path, _ in _http_routes()}
+    dashboard_present = DASHBOARD_CATCH_ALL in registered
+
     for path in PUBLIC_ROUTES:
+        if path == DASHBOARD_CATCH_ALL and not dashboard_present:
+            continue
         assert path in registered, f"PUBLIC_ROUTES names {path}, which no longer exists"
 
 

@@ -62,9 +62,17 @@ def test_hardening_removes_the_inherited_entries(secret):
     harden_file(secret)
 
     described = describe_protection(secret)
-    assert "Administrators" not in described
-    assert "SYSTEM" not in described
-    assert os.environ["USERNAME"] in described
+
+    # Reported in full on failure. This used to be three bare `in` checks
+    # against a long string, so pytest elided the middle — the CI failure read
+    # `'Administrators' not in 'C:\Users\...R RIGHTS:(F)'`, which names the
+    # problem and hides the evidence. Now whatever fails prints the whole ACL.
+    for principal in ("Administrators", "SYSTEM"):
+        assert principal not in described, (
+            f"{principal} still has access after hardening. "
+            f"  full ACL: {described}"
+        )
+    assert os.environ["USERNAME"] in described, f"full ACL: {described}"
 
 
 @windows_only
