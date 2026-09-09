@@ -130,8 +130,29 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     "images": [("project_id", "VARCHAR")],
     "keypairs": [("project_id", "VARCHAR")],
-    # `volumes`, `networks` and `port_forwards` are new tables; create_all
-    # builds them with the full schema.
+    # Phase 15. A ticket carries the credential version it was minted under, so
+    # changing a password invalidates outstanding tickets.
+    #
+    # **This is the entry whose absence broke the console on every upgraded
+    # install**, and the reason it was missed is written here because the
+    # reasoning was wrong rather than the typing. `console_tickets` arrived in
+    # Phase 15 as a *new* table, and the note below said new tables need no
+    # migration because `create_all` builds them complete. That is true on the
+    # day the table is added and false the moment a field is added to it: a
+    # database that got the table in its first shape keeps that shape forever,
+    # because `create_all` only ever creates missing *tables*.
+    #
+    # The symptom was as far from the cause as it could be. Every INSERT into
+    # `console_tickets` failed, so `POST /console/ticket` answered 500 and the
+    # console reported "Request failed with status code 500" — no mention of a
+    # column, a schema, or an upgrade. A fresh install is unaffected, which is
+    # why the whole test suite is silent about it: tests build their database
+    # with `create_all` and therefore always get the current shape.
+    "console_tickets": [("credential_version", "INTEGER NOT NULL DEFAULT 1")],
+    # `volumes`, `networks` and `port_forwards` are newer tables that have not
+    # gained a column since. If one ever does, it belongs here the same day —
+    # "create_all builds it complete" is a statement about the past, not a
+    # property that keeps holding.
 }
 
 
