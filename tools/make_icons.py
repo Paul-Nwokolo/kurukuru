@@ -30,7 +30,15 @@ import hashlib
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+# Pillow is imported inside the functions that draw, not here.
+#
+# The coordinates, the ink and the size lists are the parts other code reads —
+# `test_icons.py` checks them against the React component and the SVG favicon,
+# and says in its own docstring that it needs no Pillow so the guards run in a
+# checkout that has never installed it. That was not true while this import sat
+# at module scope: importing any constant pulled in Pillow and the whole file
+# failed to collect without it. Found by writing the CI workflow, which is
+# exactly the kind of claim a second machine checks and a familiar one does not.
 
 # --------------------------------------------------------------------------- #
 # The artwork
@@ -81,8 +89,10 @@ PNG_SIZES = (16, 32, 48, 128, 256)
 ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def render(size: int) -> Image.Image:
+def render(size: int):
     """The mark at `size` px, transparent background, anti-aliased."""
+    from PIL import Image, ImageDraw
+
     big = size * SUPERSAMPLE
     image = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)

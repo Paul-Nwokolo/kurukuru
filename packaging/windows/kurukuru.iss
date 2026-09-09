@@ -30,7 +30,7 @@
 #define AppTagline     "local cloud infrastructure"
 #define AppPublisher   "Paul Nwokolo"
 #define AppExeName     "kurukuru.exe"
-#define AppUrl         "https://github.com/Paul-Nwokolo/local-iaas"
+#define AppUrl         "https://github.com/Paul-Nwokolo/kurukuru"
 #define TaskName       "Kurukuru"
 
 [Setup]

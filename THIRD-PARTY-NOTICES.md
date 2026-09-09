@@ -52,7 +52,7 @@ none of them.
 
 Should the URLs above ever cease to resolve, the same source is available for
 at least three years from the date of distribution by opening an issue at
-<https://github.com/Paul-Nwokolo/local-iaas>, and a copy will be provided on a
+<https://github.com/Paul-Nwokolo/kurukuru>, and a copy will be provided on a
 physical medium for no more than the cost of that medium.
 
 ### On the upstream signature
