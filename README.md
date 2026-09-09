@@ -1,5 +1,7 @@
 # Kurukuru — local cloud infrastructure
 
+[![verify](https://github.com/Paul-Nwokolo/kurukuru/actions/workflows/verify.yml/badge.svg)](https://github.com/Paul-Nwokolo/kurukuru/actions/workflows/verify.yml)
+
 Launch virtual machines on your own computer the way you would in a cloud: pick
 a size, get an SSH command back, and forget where it is running. An HTTP API, a
 web dashboard and a CLI over the whole VM lifecycle, on top of QEMU — with an
@@ -43,7 +45,7 @@ one would be a cost with no upside.
 ## Install
 
 Download the latest `Kurukuru-<version>-Setup.exe` from
-[Releases](https://github.com/Paul-Nwokolo/local-iaas/releases) and run it.
+[Releases](https://github.com/Paul-Nwokolo/kurukuru/releases) and run it.
 Nothing else is needed first — not Python, not QEMU. It installs into your own
 user profile and never asks for an administrator prompt.
 
