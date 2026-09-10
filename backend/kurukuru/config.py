@@ -14,10 +14,11 @@ release — see :func:`apply_legacy_env`, which is where the deprecation lives.
 from __future__ import annotations
 
 import logging
+import sys
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from kurukuru.product import (
@@ -63,6 +64,49 @@ class FlavorSpec(BaseModel):
     cpus: int
     memory_mb: int
     disk_gb: int
+
+
+
+def bundled_qemu_binary(name: str, base: Path | None = None) -> str | None:
+    r"""Absolute path to a QEMU binary shipped beside this executable, if there is one.
+
+    The Windows installer copies a trimmed, hash-verified QEMU into
+    ``{app}\qemu`` and the README promises that nothing else is needed first —
+    "not Python, not QEMU". Nothing pointed at it. The installer puts ``{app}``
+    on PATH so the ``kurukuru`` command works, but not ``{app}\qemu``, and
+    these settings defaulted to the bare names ``qemu-system-x86_64`` and
+    ``qemu-img``, which resolve through PATH.
+
+    On a machine that already has QEMU installed, PATH finds *that* copy and
+    everything works, which is why this survived every test on the development
+    machine: the bundled binaries were never the ones being run. On a fresh
+    machine there is nothing on PATH to find, so the engine reported
+    unavailable with 25 MB of working QEMU sitting unused beside the exe. A
+    real first install found it.
+
+    Adding ``{app}\qemu`` to the user's PATH would also have worked and is the
+    wrong fix: it would put *these* QEMU binaries ahead of any the user
+    installs later, which is the same shadowing that once had this project
+    running Multipass's ``qemu-img`` without knowing it. Looking beside our own
+    executable affects nothing outside this application.
+
+    Returns None when not frozen or when no bundle is present, so a checkout
+    keeps resolving through PATH exactly as before.
+    """
+    if base is None:
+        if not getattr(sys, "frozen", False):
+            return None
+        base = Path(sys.executable).parent
+    candidate = base / "qemu" / f"{name}.exe"
+    return str(candidate) if candidate.is_file() else None
+
+
+def _default_qemu_system() -> str:
+    return bundled_qemu_binary("qemu-system-x86_64") or "qemu-system-x86_64"
+
+
+def _default_qemu_img() -> str:
+    return bundled_qemu_binary("qemu-img") or "qemu-img"
 
 
 class Settings(BaseSettings):
@@ -231,8 +275,11 @@ class Settings(BaseSettings):
     # --- QEMU engine (Phase 5) ---
     # Working tree: <qemu_dir>/base-images/<image>  and  <qemu_dir>/instances/<name>/
     qemu_dir: str = f"{DEFAULT_STATE_DIR}/qemu"
-    qemu_system_binary: str = "qemu-system-x86_64"
-    qemu_img_binary: str = "qemu-img"
+    # Resolved when Settings is constructed, not at import: prefers the QEMU
+    # the installer bundled beside this executable, falls back to PATH.
+    # An explicit KURUKURU_QEMU_*_BINARY still wins over both.
+    qemu_system_binary: str = Field(default_factory=_default_qemu_system)
+    qemu_img_binary: str = Field(default_factory=_default_qemu_img)
     # Official Ubuntu 24.04 LTS cloud image (qcow2, cloud-init preinstalled).
     qemu_base_image_url: str = (
         "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"

@@ -80,6 +80,40 @@ and because getting it wrong breaks every new install rather than degrading
 quietly. It is written down here because the parameter already exists and is
 unused, which is exactly the kind of gap that stays open for years by default.
 
+### 4. An install path for a machine with no Python
+
+`pip install kurukuru` covers "script-based" only for someone who already has
+Python. The people this tool is for often do not, and telling them to install a
+language runtime before they can install a VM manager is a strange first step.
+
+The shape other CLI tools use is a PowerShell one-liner that fetches a small
+script, which downloads the release artefact and unpacks it into the user's
+profile — no elevation, no runtime prerequisite. The pieces already exist: the
+release publishes a self-contained build and a SHA-256 beside it, and the
+installer needs no administrator rights.
+
+Two things to get right rather than fast. The script must verify the checksum
+it just downloaded, or it is a worse supply chain than the installer it
+replaces. And `irm ... | iex` asks people to pipe a URL into a shell, so the
+script wants to be short enough to read and served from somewhere the project
+controls.
+
+### 5. Say what the resource footprint actually is
+
+**Low priority, raised by a real user.** The first external installer reported
+the memory use as alarming. The number shown was a 106 MB working set, which is
+ordinary for a background service — but they had also been given a 2.2 TB
+*virtual memory* figure by an AI assistant, which is address-space reservation
+and normal for any modern process, and had no way to tell which number meant
+what.
+
+Nothing is wrong with the product here. The gap is that Settings and `doctor`
+report raw process statistics and leave the interpreting to the reader, and raw
+process statistics are exactly the thing a non-specialist cannot interpret. A
+plain sentence — "typically under 150 MB while idle" — turns a number that
+needs expertise into one that does not.
+
+Worth measuring before writing, so the figure is a fact rather than a guess.
 ## Considered, not scheduled
 
 Suggestions from an external backend review. Logged with what they would be

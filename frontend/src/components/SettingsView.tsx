@@ -78,9 +78,14 @@ export function SettingsView() {
         </div>
         <div className="border-t border-border px-4 py-2.5 text-xs text-text-subtle">
           API v{diag?.api.version ?? '—'} · Python {diag?.python ?? '—'} ·{' '}
+          {/* Says what happens next rather than only what is absent. On a
+              fresh install this is the normal state — the image is fetched
+              the first time an instance launches — but "not downloaded
+              yet" reads as a fault to somebody who has just installed and
+              is looking for a reason nothing works. */}
           {diag?.engine.base_image_present
             ? 'base image downloaded'
-            : 'base image not downloaded yet'}
+            : 'base image downloads on first launch'}
         </div>
       </section>
 

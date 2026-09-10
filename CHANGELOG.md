@@ -11,6 +11,36 @@ Design decisions behind these changes are recorded in
 [docs/DECISIONS.md](docs/DECISIONS.md), and what is planned next is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **The bundled QEMU was unreachable, so a fresh install did nothing.** The
+  Windows installer copies a trimmed, hash-verified QEMU into `{app}\qemu`, and
+  the README promises nothing else is needed first — "not Python, not QEMU".
+  Nothing pointed at it. The installer puts `{app}` on PATH so the `kurukuru`
+  command works, but not `{app}\qemu`, and the settings defaulted to the bare
+  names `qemu-system-x86_64` and `qemu-img`, which resolve through PATH.
+
+  On a machine that already had QEMU installed this worked, because PATH found
+  *that* copy — which is why it survived every test: the bundled binaries were
+  never the ones being run. On a fresh machine the engine reported unavailable
+  with 25 MB of working QEMU sitting unused beside the executable, and because
+  the base image is only fetched while provisioning an instance, it also never
+  downloaded. **Anyone installing 0.1.0 without QEMU already present got a
+  non-working install.** Found by the first real external install.
+
+  Settings now prefer a QEMU bundled beside the executable and fall back to
+  PATH, so a checkout is unaffected and an explicit `KURUKURU_QEMU_*_BINARY`
+  still wins over both.
+
+### Changed
+
+- Settings now says "base image downloads on first launch" rather than "base
+  image not downloaded yet". The image is fetched the first time an instance
+  launches, so on a fresh install the old wording described normal state in the
+  language of a fault — to exactly the person hunting for a reason nothing works.
+
 ## [0.1.0] — 2026-09-09
 
 First public release. Kurukuru manages QEMU virtual machines on a single
