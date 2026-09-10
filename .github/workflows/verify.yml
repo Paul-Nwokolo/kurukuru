@@ -49,11 +49,61 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install QEMU
-        # The 53 tests that shell out to qemu-img need a real binary. Chocolatey
-        # is preinstalled on windows-latest.
+        # The 53 tests that shell out to qemu-img need a real binary.
+        # Chocolatey is preinstalled on windows-latest.
+        #
+        # The install directory is discovered, not assumed. This step used to
+        # append a hardcoded C:\Program Files\qemu to the PATH and trust it.
+        # When the runner image moved QEMU somewhere else, choco still reported
+        # success, the PATH entry pointed at nothing, and the failure surfaced
+        # one step later as a bare "qemu-system-x86_64 is not recognized" —
+        # with every backend test skipped and the run red for a reason that
+        # looked nothing like its cause.
+        #
+        # So this step now proves what it claims: it locates both binaries and
+        # runs them before putting anything on the PATH. An install step that
+        # can report success while the thing it installed is unreachable is a
+        # false green, which is what CONTRIBUTING's "Verification integrity"
+        # section is about.
         run: |
           choco install qemu --no-progress --yes
-          "C:\Program Files\qemu" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          $roots = @(
+            'C:\Program Files\qemu',
+            "$env:ChocolateyInstall\lib\qemu\tools",
+            'C:\ProgramData\chocolatey\lib\qemu\tools'
+          ) | Where-Object { $_ -and (Test-Path $_) }
+
+          $dir = $null
+          foreach ($r in $roots) {
+            if (Test-Path (Join-Path $r 'qemu-system-x86_64.exe')) { $dir = $r; break }
+          }
+
+          if (-not $dir) {
+            # Bounded: the chocolatey package tree and Program Files, not all of C:.
+            foreach ($base in @("$env:ChocolateyInstall\lib", 'C:\Program Files', 'C:\Program Files (x86)')) {
+              if (-not (Test-Path $base)) { continue }
+              $hit = Get-ChildItem -Path $base -Filter 'qemu-system-x86_64.exe' -Recurse -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+              if ($hit) { $dir = $hit.DirectoryName; break }
+            }
+          }
+
+          if (-not $dir) {
+            Write-Host "Looked in:"
+            foreach ($r in $roots) { Write-Host "  $r" }
+            throw "choco reported success but qemu-system-x86_64.exe was not found anywhere."
+          }
+
+          $img = Join-Path $dir 'qemu-img.exe'
+          if (-not (Test-Path $img)) {
+            throw "Found qemu-system-x86_64.exe in $dir but no qemu-img.exe beside it; the tests need both."
+          }
+
+          Write-Host "QEMU found in $dir"
+          & (Join-Path $dir 'qemu-system-x86_64.exe') --version
+          & $img --version
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Show the toolchain the run actually used
         # Printed rather than assumed: a version drift here is the difference
