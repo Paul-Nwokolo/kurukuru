@@ -47,7 +47,7 @@ body:
     attributes:
       label: Kurukuru version
       description: From `kurukuru version`, or the installer you ran.
-      placeholder: "0.1.0"
+      placeholder: "0.1.1"
     validations:
       required: true
 

@@ -11,7 +11,7 @@ Design decisions behind these changes are recorded in
 [docs/DECISIONS.md](docs/DECISIONS.md), and what is planned next is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-## [Unreleased]
+## [0.1.1] — 2026-09-10
 
 ### Fixed
 
@@ -109,4 +109,5 @@ model is in [docs/SECURITY.md](docs/SECURITY.md).
 - **The installer is unsigned.** Windows SmartScreen will warn on first run.
   See the README for what the warning says and how to proceed.
 
+[0.1.1]: https://github.com/Paul-Nwokolo/kurukuru/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Paul-Nwokolo/kurukuru/releases/tag/v0.1.0
