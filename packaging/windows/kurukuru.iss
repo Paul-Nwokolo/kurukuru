@@ -426,7 +426,30 @@ begin
     Dir := StateDir();
     if DirExists(Dir) then
     begin
-      if MsgBox('Also delete your virtual machines and their data?' + Gap() +
+      { **An unattended uninstall keeps the data and does not ask.**
+
+        Measured, because the assumption was wrong in both directions. Running
+        `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES` against an install whose
+        state directory exists does *not* auto-answer this prompt: the dialog
+        appears and the uninstaller waits for a human who, by definition, is
+        not there. An unattended removal — a deployment script, an MDM push,
+        a packaging tool — hangs indefinitely.
+
+        The other direction would have been worse, so it is worth being
+        explicit rather than relying on a default button: whatever a suppressed
+        message box returns, nobody's virtual machines should be deleted by a
+        run that was told not to ask questions. Silence is not consent to
+        destroy 20 GB of somebody's work.
+
+        So when there is no one to ask, the answer is the safe one: keep it,
+        and say so in the log. `kurukuru` is gone; the data waits for a
+        reinstall, or for the user to delete the directory themselves. }
+      if UninstallSilent() then
+      begin
+        Log('Unattended uninstall: keeping ' + Dir +
+            ' (nothing is deleted without being asked).');
+      end
+      else if MsgBox('Also delete your virtual machines and their data?' + Gap() +
                 Dir + Gap() +
                 'This holds every VM disk, imported image, volume, ISO and the ' +
                 'database. It cannot be undone.' + Gap() +

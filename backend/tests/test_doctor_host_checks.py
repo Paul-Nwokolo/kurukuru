@@ -149,7 +149,11 @@ def test_an_override_pointing_nowhere_fails_and_names_0_1_0():
     assert check.status == FAIL
     assert "no file there" in check.detail
     assert "0.1.0 only" in check.remedy
-    assert "setx" in check.remedy
+    # Not `setx VAR ""`: Windows rejects that as invalid syntax and leaves the
+    # old value in place, so the instruction looks like it worked and does
+    # nothing. This project shipped that advice; the test pins the replacement.
+    assert "SetEnvironmentVariable" in check.remedy
+    assert 'setx' not in check.remedy
 
 
 def test_an_override_that_resolves_is_still_worth_saying():

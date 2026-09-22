@@ -377,9 +377,12 @@ is already right. If you set `KURUKURU_QEMU_SYSTEM_BINARY` to work around the
 only** — clear it and let 0.1.1 and later resolve for themselves:
 
 ```powershell
-setx KURUKURU_QEMU_SYSTEM_BINARY ""
-setx KURUKURU_QEMU_IMG_BINARY    ""
+[Environment]::SetEnvironmentVariable("KURUKURU_QEMU_SYSTEM_BINARY", $null, "User")
+[Environment]::SetEnvironmentVariable("KURUKURU_QEMU_IMG_BINARY",    $null, "User")
 ```
+
+(Not `setx VAR ""` — Windows rejects that as invalid syntax and leaves the
+old value in place, so it looks like it worked and changes nothing.)
 
 then sign out and back in, so the startup task stops inheriting them.
 `kurukuru doctor` reports an override that is still in place.

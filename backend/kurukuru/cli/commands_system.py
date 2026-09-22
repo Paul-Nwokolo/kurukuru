@@ -366,11 +366,18 @@ def _override_checks(data: dict) -> list[Check]:
                 FAIL if not exists else WARN,
                 f"{env} points at {in_use}"
                 + ("" if exists else " — and there is no file there"),
+                # Not `setx VAR ""`. Windows rejects that as invalid syntax and
+                # leaves the old value completely untouched, so somebody can
+                # follow the instruction, see nothing they read as an error,
+                # and still be overridden. This project's own 0.1.0 release
+                # note gave that advice.
                 f"Kurukuru would otherwise use {would_be}. If you set this to "
                 f"work around the 0.1.0 bundled-QEMU bug, that workaround is "
                 f"for 0.1.0 only and should be removed: this build finds its "
-                f"own QEMU. Clear it with 'setx {env} \"\"' and sign out and "
-                f"back in, so the startup task stops inheriting it.",
+                f"own QEMU. Remove it in PowerShell with\n"
+                f"       [Environment]::SetEnvironmentVariable(\"{env}\", $null, \"User\")\n"
+                f"     then sign out and back in, so the startup task stops "
+                f"inheriting it.",
             )
         )
     return checks

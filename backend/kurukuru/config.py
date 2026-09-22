@@ -18,7 +18,7 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from kurukuru.product import (
@@ -318,6 +318,41 @@ class Settings(BaseSettings):
     # An explicit KURUKURU_QEMU_*_BINARY still wins over both.
     qemu_system_binary: str = Field(default_factory=_default_qemu_system)
     qemu_img_binary: str = Field(default_factory=_default_qemu_img)
+
+    @field_validator("qemu_system_binary", "qemu_img_binary", mode="before")
+    @classmethod
+    def _blank_override_means_unset(cls, value: object, info: ValidationInfo) -> object:
+        """An empty override is a *cleared* one, not a binary named "".
+
+        People do clear these, and 0.1.0's release note is the reason: it told
+        anyone on that version to set them, and the advice has been wrong since
+        0.1.1. So "how do I undo it" is a question this product created and has
+        to answer well.
+
+        Windows makes it easy to get wrong. ``setx VAR ""`` — the obvious
+        spelling, and the one this project's own documentation gave until
+        0.1.2 — is rejected as invalid syntax and leaves the previous value
+        completely untouched, so somebody can follow the instructions, see no
+        error worth noticing, and still be overridden. The spelling that works
+        is ``[Environment]::SetEnvironmentVariable("VAR", $null, "User")``.
+
+        And an empty value, however it arises — the System Properties dialog
+        with a cleared box, a launcher exporting an unset variable — used to
+        land here as ``""``. Which is not "use the default": it is a path that
+        cannot resolve, so the engine reported unavailable and ``doctor`` said
+        an override pointed at nothing. Blank is the clearest possible way of
+        saying "I do not want to override this", so it is honoured as that.
+        """
+        if isinstance(value, str) and not value.strip():
+            # The default is produced here rather than by returning None:
+            # pydantic validates None against `str` and rejects it, so the
+            # field's own default_factory is never reached from a validator.
+            defaults = {
+                "qemu_system_binary": _default_qemu_system,
+                "qemu_img_binary": _default_qemu_img,
+            }
+            return defaults[info.field_name]()
+        return value
     # Official Ubuntu 24.04 LTS cloud image (qcow2, cloud-init preinstalled).
     qemu_base_image_url: str = (
         "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"

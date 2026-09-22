@@ -13,6 +13,23 @@ Design decisions behind these changes are recorded in
 
 ## [0.1.2] — 2026-09-22
 
+> [!IMPORTANT]
+> **Smart App Control still blocks Kurukuru. This release explains the block;
+> it does not lift it.**
+>
+> Nothing here is code-signed, so on a clean Windows 11 machine with Smart App
+> Control enabled — the default — Windows still refuses to load the bundled
+> QEMU, and Kurukuru still will not run. What 0.1.2 changes is that it now says
+> so: `kurukuru doctor` reads Smart App Control's state and names it as the
+> cause, and the status code is reported in hex with a plain sentence instead
+> of as a bare decimal.
+>
+> The only way to use Kurukuru on such a machine today is to turn Smart App
+> Control off (Windows Security → App & browser control), which is a
+> machine-wide security setting worth weighing rather than clicking through.
+> Code signing is the real fix and is not done yet — see
+> [DECISIONS.md #62](docs/DECISIONS.md) for the measurements and the route.
+
 Everything here came from two external installs. Nothing in it was found on
 the development machine, and most of it could not have been: the failures are
 properties of a *fresh* Windows 11 machine, of an install shape nobody tested,
@@ -61,6 +78,15 @@ and of an offline moment nobody staged.
   size while the file sat on disk at full size with an instance running off it.
   The row is now brought up to date after a launch.
 
+- **An unattended uninstall hung forever, or risked deleting your VMs.**
+  `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES` does *not* auto-answer the
+  "also delete your virtual machines?" prompt — measured, not assumed: the
+  dialog appears and waits for a human who by definition is not there, so a
+  deployment script or MDM push blocks indefinitely. An unattended uninstall
+  now keeps the state directory without asking and records that in the log.
+  Whatever a suppressed message box would have returned, nobody's VMs should
+  be removed by a run that was told not to ask questions.
+
 - **Uninstall and upgrade hit blocked files.** The backend runs as a logon
   task, so on any machine where Kurukuru has been used it is *running* when its
   own installer starts. The installer and the uninstaller now stop the task and
@@ -78,17 +104,24 @@ and of an offline moment nobody staged.
   existed** (`KurukuruBackend`; it is `Kurukuru`).
 
 - **`kurukuru auth init` crashed with `NameError: name 'engine' is not
-  defined`** — the first command a new user runs, broken in 0.1.1 and 0.1.0.
-  `kurukuru.database` builds its engine lazily through PEP 562's module
-  `__getattr__`, which serves `kurukuru.database.engine` to importers but
-  *not* a bare `engine` written inside a function in that same file: that is a
+  defined`.** It worked until **`f352a35` ("Stop reading settings at import,
+  and stop letting failures pass as successes", 8 Sep 2026)**, which replaced
+  `database.py`'s module-level `engine = create_engine(...)` with a lazy PEP
+  562 `__getattr__`. That commit shipped in **0.1.0 and 0.1.1**, so the first
+  command a new user runs has been broken in both.
+
+  `__getattr__` serves `kurukuru.database.engine` to *importers*. It does not
+  serve a bare `engine` written inside a function in that same file: that is a
   global name lookup, and global lookup never consults `__getattr__`. It
-  worked only because some importer had already fetched the attribute, which
-  caches it into the module's globals. The backend always has such an importer
-  (the routers); the CLI's `auth init` path does not. Invisible to the whole
-  suite, because every test imports a router or patches the engine directly —
-  so the new test for it runs in a subprocess that has imported nothing else.
-  Found by running the packaged build rather than the checkout.
+  worked wherever some importer had already fetched the attribute, which
+  caches it into the module's globals — always true in the backend, where the
+  routers fetch it at startup, and never true on the CLI's `auth init` path.
+
+  Verified by running the same code path either side of that commit: its
+  parent answers `account_exists() -> False`, the commit itself raises. The
+  whole suite was blind to it, because every test imports a router or patches
+  the engine directly, so the new test runs in a subprocess that has imported
+  nothing else.
 
 - **The test suite failed on a machine that had never run Kurukuru.** The test
   that proves the isolation guard works has to create `~/.kurukuru/keys` so it
@@ -121,6 +154,15 @@ and of an offline moment nobody staged.
   It used to say "put it in `backend/.env`" and "restart the backend", neither
   of which names anything that exists on an installed machine. An installed
   build reads `%USERPROFILE%\.kurukuru\kurukuru.env`, and the screen says so.
+
+- **A blank `KURUKURU_QEMU_*_BINARY` is now treated as unset**, rather than as
+  a binary whose name is the empty string — which is what it used to become,
+  breaking resolution completely. This matters because clearing these is
+  advice *this project gave*: the obvious spelling, `setx VAR ""`, is rejected
+  by Windows as invalid syntax and **leaves the old value untouched**, so
+  somebody can follow the instructions, see nothing that reads as an error,
+  and still be overridden. The documented way to remove one is now
+  `[Environment]::SetEnvironmentVariable("VAR", $null, "User")`.
 
 - **`kurukuru doctor` warns when `KURUKURU_QEMU_SYSTEM_BINARY` or
   `KURUKURU_QEMU_IMG_BINARY` is set**, because an override replaces the
