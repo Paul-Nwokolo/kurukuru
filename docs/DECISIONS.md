@@ -3066,6 +3066,22 @@ cannot notice, so a failed launch clears the entry and entries expire after two
 weeks; the worst case either way is one slow start. Measured after: 6.13 s →
 0.10 s, and 200 availability checks in 0.02 ms.
 
+**Both memos also needed a lock, which the cache made visible.** Reading the
+installed build's own log turned up *three* "whpx operational" lines in a
+single start: three six-second QEMU processes racing through the same probe,
+each finding the on-disk cache empty because none had finished writing it.
+``if self._accel is None: self._accel = self._probe_accel()`` is a
+read-modify-write across a six-second gap, and the endpoints that reach it are
+polled by a browser and read by the reconciler's thread, so concurrent callers
+are the ordinary case rather than a contrived one. The comment above the cache
+claimed bursts collapsed into one probe; the log said otherwise. Both memos are
+now double-checked behind a lock.
+
+End to end on this machine's own install, deleting the cache and starting the
+shipped executable: **11.15 s cold, 1.78 s warm**, to a healthy ``/health``.
+That is the number a user actually waits through, and it is the one worth
+quoting — the in-process figures above are components of it.
+
 ## Known limitations
 
 - **Nothing is code-signed.** SmartScreen warns on the installer, and Smart App

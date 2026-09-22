@@ -150,6 +150,10 @@ reference Windows host, against the bundled QEMU 11.1.0:
 |---|---|---|
 | `is_available()`, repeated | ~110 ms and 2 processes **per call** | 2 processes per 5 s window; 200 calls in 0.02 ms |
 | acceleration probe, per backend start | 6.13 s | 0.10 s once measured |
+| **installed build, start to a healthy `/health`** | **11.15 s** | **1.78 s** |
+
+The last row is the one a user feels, measured on this machine's own installed
+0.1.2 by deleting the cache and starting the shipped executable.
 
 The engine availability check was reached by five endpoints, several of them
 polled, and a user's log showed `qemu-system-x86_64 --version` starting several
@@ -163,6 +167,15 @@ signal. A working accelerator is the slow answer and a broken one is instant,
 so **only a success is cached** — keyed on the binary's identity and version,
 cleared when a launch fails, and expiring on its own after two weeks. A host
 that gains an accelerator still speeds up by itself, with no cache to find.
+
+And it was being paid more than once per start. Both memos were plain
+read-modify-writes, and the endpoints that reach them are polled by the browser
+and read by the reconciler's thread — so a single start on a real install
+logged **three** "whpx operational" lines: three six-second QEMU processes
+racing through the same probe, each finding the on-disk cache empty because
+none had finished writing it. Both are now behind a lock, so the first caller
+measures and the rest wait for its answer. Caught by reading the log of the
+installed build, not by a test.
 
 ## [0.1.1] — 2026-09-10
 

@@ -29,6 +29,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -356,9 +357,17 @@ class QemuEngine(ComputeEngine):
         self._system_binary = self._settings.qemu_system_binary
         self._img_binary = self._settings.qemu_img_binary
         self._accel: str | None = None  # probed lazily, then cached
+        #: Serialises the six-second accelerator probe. Without it, concurrent
+        #: callers each ran their own — see :meth:`accel`.
+        self._accel_lock = threading.Lock()
         #: ``(answer, monotonic time it was taken)``, or None before the first
         #: probe. See :meth:`is_available` for why this expires.
         self._available: tuple[bool, float] | None = None
+        #: Same reasoning as the accelerator lock, at a smaller scale: two
+        #: subprocesses rather than a six-second one, but the endpoints that
+        #: reach this are polled concurrently and the point of caching it was
+        #: to stop a burst costing one launch each.
+        self._available_lock = threading.Lock()
         #: The emulator's raw version string, memoised for the lifetime of the
         #: process. ``_UNSET`` rather than None as the empty state, because
         #: None is a real answer here — "the binary would not tell us" — and
@@ -571,10 +580,26 @@ class QemuEngine(ComputeEngine):
         another host's is guaranteed to fail. Falling back to TCG keeps the
         tool alive on a host with no accelerator — just very slowly — rather
         than hard-failing every launch.
+
+        **"Once" needs a lock, which it did not have.** The plain
+        ``if self._accel is None`` memo is a read-modify-write across a six
+        second gap, and this is called from several endpoints that a browser
+        polls concurrently plus the reconciler's own thread. Measured on a
+        real install: a single backend start logged *three* "whpx operational"
+        lines, three QEMU processes racing through the same probe and each
+        finding the on-disk cache still empty, because none of them had
+        finished to write it yet.
+
+        So the first caller probes and the rest wait for its answer.
+        Double-checked: the common case is an already-resolved value and takes
+        no lock at all.
         """
-        if self._accel is None:
-            self._accel = self._probe_accel()
-        return self._accel
+        if self._accel is not None:
+            return self._accel
+        with self._accel_lock:
+            if self._accel is None:
+                self._accel = self._probe_accel()
+            return self._accel
 
     def native_accel(self) -> str | None:
         """The hardware accelerator this platform *could* use, before probing.
@@ -962,6 +987,19 @@ class QemuEngine(ComputeEngine):
         if cached is not None and now - cached[1] < _AVAILABILITY_TTL_SECONDS:
             return cached[0]
 
+        with self._available_lock:
+            # Re-checked inside the lock: while this caller waited, another
+            # may have just measured, and repeating it would defeat the point.
+            now = time.monotonic()
+            cached = self._available
+            if cached is not None and now - cached[1] < _AVAILABILITY_TTL_SECONDS:
+                return cached[0]
+            return self._measure_availability(cached, now)
+
+    def _measure_availability(
+        self, cached: tuple[bool, float] | None, now: float
+    ) -> bool:
+        """Run the two version probes and record the answer. Caller holds the lock."""
         try:
             self._run([self._system_binary, "--version"], timeout=self._settings.cli_timeout_seconds)
             self._run([self._img_binary, "--version"], timeout=self._settings.cli_timeout_seconds)

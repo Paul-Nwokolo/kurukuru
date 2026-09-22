@@ -113,6 +113,84 @@ def test_the_availability_cache_can_be_dropped_on_demand(engine, monkeypatch):
     assert engine.is_available() is True
 
 
+def test_concurrent_callers_share_one_availability_probe(engine, monkeypatch):
+    """A burst of polls must cost one pair of probes, not one pair each.
+
+    The endpoints that reach this are polled by a browser and read by the
+    reconciler's own thread, so "concurrent" is the ordinary case rather than
+    a contrived one.
+    """
+    import threading
+
+    runs: list[str] = []
+    started = threading.Event()
+
+    def slow_run(cmd, *, timeout):
+        runs.append(cmd[0])
+        started.set()
+        time.sleep(0.05)  # wide enough for the others to pile up behind it
+
+        class Ok:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Ok()
+
+    monkeypatch.setattr(engine, "_run", slow_run)
+
+    threads = [threading.Thread(target=engine.is_available) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert len(runs) == 2, (
+        f"8 concurrent availability checks ran {len(runs)} QEMU processes; "
+        f"they should share one measurement"
+    )
+
+
+def test_concurrent_callers_share_one_acceleration_probe(tmp_path, monkeypatch):
+    """The expensive one, and the bug a real install actually showed.
+
+    A single backend start logged three "whpx operational" lines: three
+    six-second QEMU processes racing through the same probe, each finding the
+    on-disk cache empty because none had finished to write it. The in-process
+    memo was a read-modify-write across that whole gap.
+    """
+    import threading
+
+    settings = Settings(state_dir=str(tmp_path / "state"))
+    engine = QemuEngine(settings)
+    Path(settings.qemu_dir).expanduser().mkdir(parents=True, exist_ok=True)
+
+    probes: list[str] = []
+
+    def counting_probe():
+        probes.append("probe")
+        time.sleep(0.05)
+        return "whpx"
+
+    monkeypatch.setattr(engine, "_probe_accel", counting_probe)
+
+    results: list[str] = []
+    threads = [
+        threading.Thread(target=lambda: results.append(engine.accel()))
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert len(probes) == 1, (
+        f"8 concurrent accel() callers ran {len(probes)} probes; at six "
+        f"seconds each that is the cold start this cache exists to remove"
+    )
+    assert results == ["whpx"] * 8
+
+
 # --------------------------------------------------------------------------- #
 # The accelerator cache
 # --------------------------------------------------------------------------- #
