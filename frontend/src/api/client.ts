@@ -616,9 +616,35 @@ export interface SettingGroup {
   settings: SettingEntry[]
 }
 
-export async function getSettings(): Promise<SettingGroup[]> {
-  const { data } = await http.get<{ groups: SettingGroup[] }>('/settings')
-  return data.groups
+/**
+ * Where configuration lives and how to restart, for *this* build.
+ *
+ * Sent by the backend rather than decided here, because only the backend knows
+ * whether it is a frozen install or a checkout — and the answer differs
+ * completely. The Settings screen used to tell everyone to edit `backend/.env`
+ * and "restart the backend", neither of which names anything that exists on an
+ * installed machine.
+ *
+ * Optional: an older backend sends nothing, and the copy falls back to the
+ * checkout wording it has always had.
+ */
+export interface ConfigurationHelp {
+  /** True for a frozen install, false in a checkout. */
+  installed: boolean
+  /** The file to put settings in on an installed build. */
+  config_file: string
+  /** What to run afterwards, e.g. `kurukuru restart`. */
+  restart_command: string
+}
+
+export interface SettingsResponse {
+  groups: SettingGroup[]
+  configuration?: ConfigurationHelp
+}
+
+export async function getSettings(): Promise<SettingsResponse> {
+  const { data } = await http.get<SettingsResponse>('/settings')
+  return data
 }
 
 /** Host-side facts: what the CLI's `doctor` command reads. */

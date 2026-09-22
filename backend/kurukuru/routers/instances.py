@@ -606,6 +606,22 @@ def _apply_info(
         if instance.status in (InstanceStatus.PENDING, InstanceStatus.PROVISIONING):
             # Still being launched — the VM may simply not be listed yet.
             return
+        if instance.status is InstanceStatus.ERROR and instance.error_message:
+            # **A failed row already says why, and that is the better answer.**
+            #
+            # Found in the field: offline, a launch failed correctly with
+            # "Couldn't download the Ubuntu base image ... WinError 10060",
+            # and a minute later this line replaced it with "VM no longer
+            # exists on the hypervisor" — which is not merely less useful, it
+            # is false. That VM never existed. The user was left looking for a
+            # disappearing hypervisor instead of a network problem.
+            #
+            # The rule is general rather than special-cased to downloads: a row
+            # in Error already carries the cause of its failure, and "it is not
+            # on the hypervisor" is a *consequence* of that cause in every such
+            # case. Absence is only news for a row that was previously healthy,
+            # which is the branch below.
+            return
         instance.status = InstanceStatus.ERROR
         instance.error_message = "VM no longer exists on the hypervisor"
         _touch(instance)
@@ -1046,6 +1062,10 @@ def _provision_job(instance_id: str) -> None:
                     settings,
                     public_keys=instance_public_keys(session, instance),
                     custom_user_data=instance.user_data,
+                    # The row's own login, not the setting. These are the
+                    # same value today; passing the row is what guarantees
+                    # they stay the same value after the setting changes.
+                    vm_user=instance.ssh_user,
                 )
             except NoUsableKeysError as exc:
                 # Every selected key was deleted before we got here. Booting a
@@ -1079,6 +1099,14 @@ def _provision_job(instance_id: str) -> None:
             # The cloud-init file has served its purpose once launch returns,
             # whether it succeeded or failed.
             cleanup_cloud_init(cloud_init_path)
+
+        # The engine may have just downloaded the built-in base image, which
+        # is the one file in the catalog no image route fetches. Without this
+        # its row sits at "Importing" with no size until the next restart,
+        # describing a 600 MB file that is on disk and already booting a VM.
+        from kurukuru.routers.images import sync_builtin_image
+
+        sync_builtin_image(settings)
 
         # Launch succeeded — pull state from the hypervisor. ISO guests have no
         # address to wait for, so don't spend the IP budget on them.
@@ -1155,6 +1183,7 @@ def _clone_job(source_id: str, clone_id: str) -> None:
                     settings,
                     public_keys=instance_public_keys(session, clone),
                     custom_user_data=clone.user_data,
+                    vm_user=clone.ssh_user,
                 )
             except (NoUsableKeysError, CloudInitError) as exc:
                 logger.warning("Clone '%s' seed generation failed: %s", clone.name, exc)
@@ -1465,6 +1494,12 @@ def create_instance(
         guest_os=payload.guest_os,
         project_id=resolve_project_id(session, payload.project_id),
         network_id=_resolve_network_id(session, payload.network_id),
+        # Captured now, at the moment the decision is made, rather than read
+        # back from settings whenever somebody looks at the row. This is the
+        # login cloud-init is about to create inside the guest, so the row and
+        # the guest agree by construction — and a later change to the default
+        # cannot reach back and rewrite what this VM was built with.
+        ssh_user=settings.default_vm_user,
     )
     session.add(instance)
     session.commit()
@@ -1726,6 +1761,13 @@ def clone_instance(
         guest_os=source.guest_os,
         project_id=source.project_id,
         network_id=source.network_id,
+        # Inherited from the source, not taken from settings, and that is
+        # load-bearing rather than tidy. A clone's disk *is* the source's
+        # disk: its /etc/passwd already contains the source's user and
+        # nothing in the clone flow creates another one. Seeding it with the
+        # current default would hand the user an SSH command for an account
+        # that does not exist inside the filesystem they just copied.
+        ssh_user=source.ssh_user,
     )
     session.add(clone)
     session.commit()

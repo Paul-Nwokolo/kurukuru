@@ -58,6 +58,14 @@ ENV_PREFIX = "KURUKURU_"
 #: Distribution that ships the command.
 DISTRIBUTION_NAME = "kurukuru"
 
+#: The Windows scheduled task the installer registers to start the backend at
+#: logon. Defined here rather than spelled at each use because it is now read
+#: from three places — the installer, ``startup-task.ps1`` and
+#: ``kurukuru restart`` — and it was already wrong in one of them: a hint in
+#: ``kurukuru dashboard`` told users to run ``schtasks /Query /TN
+#: KurukuruBackend``, a task that has never existed under that name.
+STARTUP_TASK_NAME = "Kurukuru"
+
 #: The version, and the only place it is written down.
 #:
 #: Everything else derives from here: ``pyproject.toml`` reads it at build time
@@ -70,7 +78,7 @@ DISTRIBUTION_NAME = "kurukuru"
 #: The *installed* distribution's metadata is still the authority at runtime
 #: when there is one — see ``cli_version()`` — because a wheel built from an
 #: older tree genuinely is that older version, whatever this file now says.
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 #: Root of everything this tool keeps on disk, before ``~`` is expanded.
 #: :mod:`kurukuru.config` re-exports it as ``DEFAULT_STATE_DIR`` and roots every

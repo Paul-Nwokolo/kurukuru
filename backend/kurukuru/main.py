@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -23,12 +24,12 @@ from fastapi.responses import HTMLResponse
 from kurukuru.security import guard as security_guard
 from sqlmodel import Session
 
-from kurukuru.config import Settings, get_settings
+from kurukuru.config import CONFIG_FILE, Settings, get_settings
 from kurukuru.database import get_session, init_db
 from kurukuru.engines import EngineRegistry, get_engine_registry
 from kurukuru.dashboard import mount_dashboard
 from kurukuru.security_headers import SecurityHeadersMiddleware
-from kurukuru.product import API_PREFIX
+from kurukuru.product import API_PREFIX, CLI_NAME
 
 logging.basicConfig(
     level=logging.INFO,
@@ -441,6 +442,46 @@ def diagnostics(
     except SSHKeyError as exc:
         payload["ssh_key"] = {"present": False, "private_key_path": None, "error": str(exc)}
 
+    # Windows' own application-control state. A fact, like everything else
+    # here: it is the difference between "the engine is unavailable" and "the
+    # engine is fine and Windows will not let it run", and nothing else in the
+    # product can tell those apart. `doctor` supplies the verdict.
+    from kurukuru.win_security import smart_app_control_state
+
+    payload["smart_app_control"] = smart_app_control_state().as_dict()
+
+    # Whether the QEMU binaries in use are the ones this build would have
+    # picked for itself. Reported because an override silently replaces the
+    # bundled-QEMU resolution, and the 0.1.0 release note told people to set
+    # exactly these two variables — so on an upgraded install they now override
+    # a resolution that is already correct, and on an all-users install (which
+    # 0.1.2 no longer offers) they point at a path that does not exist.
+    #
+    # Compared against the resolved default rather than read from os.environ:
+    # a value set in a .env file overrides just as completely and would not
+    # show up in the environment at all.
+    from kurukuru.config import bundled_qemu_binary
+
+    overrides: dict[str, dict[str, object]] = {}
+    for field, leaf, env in (
+        ("qemu_system_binary", "qemu-system-x86_64", "KURUKURU_QEMU_SYSTEM_BINARY"),
+        ("qemu_img_binary", "qemu-img", "KURUKURU_QEMU_IMG_BINARY"),
+    ):
+        in_use = getattr(request_settings, field)
+        default = bundled_qemu_binary(leaf) or leaf
+        if in_use != default:
+            overrides[env] = {
+                "in_use": in_use,
+                "would_be": default,
+                # Resolved the way the engine resolves it: an override may
+                # legitimately be a bare name found on PATH, and reporting
+                # that as missing would send someone to fix the wrong thing.
+                "exists": bool(
+                    shutil.which(in_use) or Path(in_use).expanduser().is_file()
+                ),
+            }
+    payload["qemu_overrides"] = overrides
+
     return payload
 
 
@@ -486,6 +527,20 @@ def effective_settings(
 
     s = request_settings
     return {
+        # How to change any of this, answered for the build the user is
+        # actually running. The dashboard used to say "put it in backend/.env
+        # and restart the backend" unconditionally — two instructions, neither
+        # of which names anything that exists on an installed machine: there is
+        # no backend/ directory, and no terminal holding a process to restart.
+        #
+        # Sent from here rather than decided in the dashboard because only the
+        # backend knows whether it is frozen, and because the file path is the
+        # backend's own fact.
+        "configuration": {
+            "installed": bool(getattr(sys, "frozen", False)),
+            "config_file": str(CONFIG_FILE),
+            "restart_command": f"{CLI_NAME} restart",
+        },
         "groups": [
             {
                 "name": "Paths",
@@ -752,6 +807,10 @@ def ssh_key(request_settings: Settings = Depends(get_settings)) -> dict[str, str
             "private_key_path": private_key_path,
             # Retained under its original name for pre-existing consumers.
             "key_path": private_key_path,
+            # The login *new* instances will get. Deliberately still the
+            # setting: this endpoint describes the orchestrator's key, not any
+            # one VM, so it has no row to read. Per-instance logins live on the
+            # instance — see Instance.ssh_user, which is what "Copy SSH" uses.
             "ssh_user": request_settings.default_vm_user,
         }
     except SSHKeyError as exc:

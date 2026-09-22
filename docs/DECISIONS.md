@@ -2156,6 +2156,10 @@ user on the row, backfill existing rows with `iaas` (correct for all of them),
 and only then move the default. Until that is done, the rename stops at the
 host.
 
+> **Done in 0.1.2**, in exactly that order — see decision 62. The username is
+> now `kurukuru` for new instances and `iaas`, unchanged, for every instance
+> that predates it.
+
 **The mark appears with its descriptor.** There is a live Nintendo registration
 for "KURUKURU KURURIN" in Class 009, video game programs. A single-host
 hypervisor control plane is not in that category, but resembling one has a cost
@@ -2927,10 +2931,131 @@ visible text beside it.
 the role is not understood, the name and value still are, and the fallback is
 a correct sentence rather than a wrong one about progress.
 
+## 62. Finishing the rename: the guest username, and what an unsigned build costs on a fresh Windows 11 machine
+
+**Context.** Two external installs, neither on the development machine, and
+between them they exposed the whole class of thing a developer's host cannot
+show you. The machine that built this project already had QEMU, already had
+Smart App Control off, had never been offline mid-launch, and had a `~/.kurukuru`
+full of instances created by every intermediate build. Each of those is a
+precondition that hid a defect.
+
+**Smart App Control is the one with no fix inside the product.** On a clean
+Windows 11 install it is on by default and refuses any program it does not
+recognise. Kurukuru is unsigned, so it refuses Kurukuru — and refuses it at
+*load* time, which means no stdout, no stderr, and an exit code. The engine
+reported unavailable with 25 MB of working QEMU sitting beside the executable,
+exactly as in 0.1.0's bundled-QEMU bug, for an entirely different reason.
+
+What made it unsolvable from the user's side was the reporting. The failure
+surfaced as `failed (exit 3236495362)`: a signed 32-bit NTSTATUS printed in
+decimal, which does not read as a status code at all. It is `0xC0E90002`,
+`STATUS_SYSTEM_INTEGRITY_POLICY_VIOLATION`, and Windows' own message table
+renders it as "An Application Control policy has blocked this file". The user
+took the decimal number to an AI assistant, which mis-converted it and advised
+adding QEMU to `PATH` — a fix for the *previous* release's bug, on an install
+whose path resolution was already correct.
+
+**Decision.** Windows status codes are translated where they are produced, not
+where they are read. `kurukuru/win_status.py` prints hex, a name, and a plain
+sentence; a short table covers the codes actually seen, and everything else
+falls back to `FormatMessage` against `ntdll` so a *new* failure still arrives
+with words attached. (That fallback silently returned nothing when first
+written: ctypes was left to infer signatures and truncated the 64-bit module
+handle to an int. Declaring `argtypes`/`restype` is load-bearing, not tidiness.)
+
+`doctor` reads Smart App Control's state from
+`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState`
+and says plainly when it will block Kurukuru. It also says when it is **off**
+and something blocked QEMU anyway, because `0xC0E90002` is equally what an
+enterprise WDAC policy returns — and that one the user cannot lift.
+
+**Signing is the real fix and is not bought yet.** Measured on the bundled
+QEMU: the two executables carry a signature from a certificate that expired
+2023-10-12 and were timestamped in 2026, *after* expiry, so the countersignature
+cannot rescue it; all 118 DLLs are unsigned outright. On the Kurukuru side, 28
+of 45 shipped binaries are already validly signed (Python Software Foundation,
+Microsoft) and 17 are not, `kurukuru.exe` among them. Smart App Control blocks
+a process if any module it loads is untrusted, so the count that matters is 135
+of 185.
+
+Azure Artifact Signing — Microsoft's own service, ~$10/month, no hardware token
+— is unavailable here: organisations in USA/Canada/EU/UK, individuals in USA and
+Canada only. An OV certificate is ~$150-300/year worldwide and, since June 2023,
+requires the key on a hardware token. EV is no longer worth its premium: its one
+advantage, instant SmartScreen bypass, was removed in 2024. **SignPath
+Foundation** signs qualifying open-source projects free, which this is (Apache-2.0
+over GPLv2 QEMU, no proprietary components), and is the route to take. Note that
+signing is necessary but not sufficient: Smart App Control consults the
+Intelligent Security Graph first, so a valid signature buys *reputation that
+accrues to a publisher across releases* rather than immediate trust.
+
+**The guest username moved, finally.** Decision 49 deferred it and named the
+prerequisite. Done in that order, and the order is the entire safety argument:
+
+1. `instances.ssh_user` became a real column.
+2. The migration backfilled every existing row with `iaas` — a literal, not
+   `settings.default_vm_user`, because reading the setting would have written
+   *0.1.2's* value into the column whose purpose is to hold the historical one,
+   producing the exact breakage permanently and invisibly.
+3. Provisioning writes the row's user and feeds cloud-init from it, so the guest
+   and the row agree by construction rather than by both happening to read the
+   same setting at two different moments.
+4. Only then did the default move to `kurukuru`.
+
+A clone inherits its *source's* login rather than the current default: a clone's
+disk is the source's disk, so its `/etc/passwd` already holds the source's user
+and nothing in the clone path creates another.
+
+**All-users installs are refused rather than supported.** The "install for me /
+for all users" page was one click from the tested shape and nothing about the
+product works in the other one — the state directory is one user's home, the
+token ACL names one account, the logon task is registered for one user. A real
+user took it and was stranded. `PrivilegesRequiredOverridesAllowed` is gone and
+an existing machine-wide install is detected and named.
+
+**Stopping before touching files, rather than failing part-way.** The backend
+runs as a logon task, so on any machine where Kurukuru has been used it is
+running when its own installer starts. Inno's default is to carry on and leave a
+partial install. Both the installer and the uninstaller now stop the task, end
+Kurukuru and QEMU, and then check whether the main executable can still be
+renamed to itself — a rename that fails exactly when a file has an open image
+section, and modifies nothing. If it is still locked, the run aborts having
+changed nothing at all, which is strictly better than a product that will
+neither start nor uninstall.
+
+Verifying that found a second defect by accident: two test installs had
+accumulated two dead `PATH` entries. Inno appends to `PATH` and has no matching
+removal, so **every uninstall since 0.1.0 left one behind**, while
+`docs/INSTALL.md` claimed otherwise.
+
+**Two caches, and the asymmetry that shapes them.** A user's log showed
+`qemu-system-x86_64 --version` starting several times a second with the
+dashboard open: `is_available()` spawns two processes and is reached from five
+endpoints, several polled. It is now cached for five seconds — deliberately a
+short TTL, because a *failed* answer must be able to recover without a restart
+the user has no way to perform.
+
+The acceleration probe is the opposite problem. It is paid once and costs 6.13 s
+of an 8.4 s cold start, because QEMU started with `-S` never exits and the
+probe's *timeout* is therefore its success signal. Which means:
+
+> A working accelerator is the slow answer. A broken one is instant.
+
+So only a success is stored (`kurukuru/engines/accel_cache.py`), keyed on the
+binary's path, size, mtime and version. Caching a failure would save nothing
+measurable and would keep telling a host that its accelerator does not work
+after somebody enabled it. A host feature toggled off is the one thing the key
+cannot notice, so a failed launch clears the entry and entries expire after two
+weeks; the worst case either way is one slow start. Measured after: 6.13 s →
+0.10 s, and 200 availability checks in 0.02 ms.
+
 ## Known limitations
 
-- **The guest username is still `iaas`.** See decision 49; it needs a
-  per-instance column before it can move.
+- **Nothing is code-signed.** SmartScreen warns on the installer, and Smart App
+  Control — on by default on a clean Windows 11 install — blocks the product
+  outright. See decision 62 for the measurements and the route out; `doctor`
+  reports it when that is what is happening.
 - **No authorization.** Authentication exists (decisions 45-48); roles and
   project isolation do not. Every account is a full administrator.
 - **No transport encryption.** Plain HTTP, so anything beyond loopback needs

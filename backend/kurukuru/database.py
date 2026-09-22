@@ -127,6 +127,11 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("guest_os", "VARCHAR(8) NOT NULL DEFAULT 'LINUX'"),  # Phase 13
         ("qemu_version", "VARCHAR"),
         ("monitor_reachable", "BOOLEAN"),  # Phase 14
+        # 0.1.2. Added without a DEFAULT on purpose: the backfill below fills
+        # it, and a column default would also silently apply to any future row
+        # that forgot to set one, which is how a stored fact quietly becomes a
+        # derived one again.
+        ("ssh_user", "VARCHAR"),
     ],
     "images": [("project_id", "VARCHAR")],
     "keypairs": [("project_id", "VARCHAR")],
@@ -204,6 +209,43 @@ def _backfill_instance_sizing(connection) -> None:
             ),
             {"cpus": spec.cpus, "memory_mb": spec.memory_mb,
              "disk_gb": spec.disk_gb, "flavor": label},
+        )
+
+
+#: The default VM user for every release up to and including 0.1.1.
+#:
+#: A literal, and deliberately not ``settings.default_vm_user``: this is a
+#: historical fact about guests already on disk, not a current setting. Reading
+#: the setting here would backfill every existing row with 0.1.2's *new*
+#: default and produce exactly the breakage the column exists to prevent —
+#: the migration would have written the wrong answer into the place that is
+#: supposed to hold the right one, permanently.
+_PRE_RENAME_VM_USER = "iaas"
+
+
+def _backfill_instance_ssh_user(connection) -> None:
+    """Record the login every pre-0.1.2 instance was actually built with.
+
+    ``ssh_user`` moved from a value derived at display time to a column, so
+    that 0.1.2 could change the default from "iaas" to "kurukuru" without
+    rewriting the SSH command of every VM that already exists.
+
+    Every row that predates the column was provisioned by a build whose only
+    possible default was "iaas" — the setting existed but no release ever
+    shipped a different value — so the backfill is exact rather than a guess.
+
+    Idempotent: only ever fills nulls, so a second start writes nothing.
+    """
+    result = connection.execute(
+        text("UPDATE instances SET ssh_user = :user WHERE ssh_user IS NULL"),
+        {"user": _PRE_RENAME_VM_USER},
+    )
+    if result.rowcount:
+        logger.info(
+            "Recorded the guest login '%s' on %d existing instance(s); their "
+            "SSH commands are unchanged by the new default.",
+            _PRE_RENAME_VM_USER,
+            result.rowcount,
         )
 
 
@@ -555,6 +597,7 @@ def _apply_additive_migrations() -> None:
                 connection.execute(text(ddl))
 
         _backfill_instance_sizing(connection)
+        _backfill_instance_ssh_user(connection)
         # After the columns exist, and inside the same transaction, so a
         # half-migrated database is never visible.
         _seed_default_project(connection)

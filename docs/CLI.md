@@ -37,17 +37,30 @@ kurukuru doctor
 
 ```
 PASS API: Kurukuru at http://127.0.0.1:7842
-PASS kurukuru CLI: v0.1.0 on Python 3.13.7
+PASS kurukuru CLI: v0.1.2 on Python 3.13.7
 PASS QEMU: QEMU emulator version 11.1.0 (v11.1.0-12130-ge470268ff4)
 PASS Accelerator: whpx
 PASS Base image: C:\Users\you\.kurukuru\qemu\base-images\noble-server-cloudimg-amd64.img
 PASS Instance store: C:\Users\you\.kurukuru\qemu\instances - 35.8 GB free
 PASS SSH keypair: C:\Users\you\.kurukuru\keys\id_ed25519
-PASS Backend: v0.1.0 on Python 3.13.7
+PASS Backend: v0.1.2 on Python 3.13.7
 ```
 
 `WARN` never fails the run — a host with no accelerator is slow, not broken.
 `FAIL` exits 1, and an unreachable API exits 3.
+
+Two of its checks exist because of one external install where everything was
+correct and nothing worked:
+
+- **Application control.** On a clean Windows 11 machine, Smart App Control is
+  on by default and refuses programs it does not recognise — including this
+  one, which is not code-signed. `doctor` reads its state and says so. When it
+  is *off* and QEMU was blocked anyway, it says that too: the same status code
+  comes from an enterprise policy, and that one only an administrator can lift.
+- **QEMU override.** `KURUKURU_QEMU_SYSTEM_BINARY` and `KURUKURU_QEMU_IMG_BINARY`
+  replace the bundled-QEMU lookup. The 0.1.0 release note told people to set
+  them; that workaround is for **0.1.0 only**, and on a later build it replaces
+  a correct answer with a hardcoded path.
 
 ### Shell completion
 
@@ -470,6 +483,7 @@ default `~/.kurukuru/isos`); there is no upload endpoint.
 
 ```bash
 kurukuru serve --port 8000 --reload
+kurukuru restart
 kurukuru capacity
 kurukuru doctor
 kurukuru version
@@ -482,6 +496,20 @@ convenience wrapper, not a process manager: no daemonising, no PID file. Ctrl-C
 stops it. It binds `127.0.0.1` by default — the API has no authentication, so
 binding a LAN interface publishes unauthenticated control of every VM on the
 host. Installing the backend as a service comes later.
+
+`restart` is for installed builds, where the backend runs as a logon task and
+there is no terminal to Ctrl-C. Settings are read once at startup, so this is
+how a changed setting takes effect:
+
+```
+$ kurukuru restart
+Restarting the 'Kurukuru' startup task...
+Kurukuru is answering on http://127.0.0.1:7842/ again.
+```
+
+The Start Menu has the same thing as **Restart Kurukuru**. From a checkout
+there is no task, and `restart` says so rather than reporting a success it did
+not achieve — stop `kurukuru serve` and start it again instead.
 
 `capacity` shows what the host can still give:
 

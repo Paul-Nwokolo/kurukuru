@@ -29,6 +29,7 @@ from kurukuru.product import (
     DISTRIBUTION_NAME,
     ENV_PREFIX,
     PRODUCT_NAME,
+    STARTUP_TASK_NAME,
     apply_legacy_env,
 )
 
@@ -38,6 +39,7 @@ __all__ = [
     "CREDENTIALS_REJECTED",
     "CSRF_HEADER",
     "PRODUCT_NAME",
+    "STARTUP_TASK_NAME",
     "apply_legacy_env",
     "CONFIG_PATH",
     "DEFAULT_API_URL",

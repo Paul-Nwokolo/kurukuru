@@ -575,7 +575,7 @@ export function useSettings() {
 export function useSettingValue(key: string): string | null {
   const { data } = useSettings()
   if (!data) return null
-  for (const group of data) {
+  for (const group of data.groups) {
     const found = group.settings.find((setting) => setting.key === key)
     if (found) return String(found.value)
   }

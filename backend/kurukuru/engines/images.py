@@ -42,6 +42,64 @@ def base_image_path(settings: Settings | None = None) -> Path:
     return base_images_dir(settings) / settings.qemu_base_image_name
 
 
+#: The way out when the download cannot work at all. Named once so the two
+#: messages below cannot drift, and phrased as a route through the product
+#: rather than as a setting — the user reading this is not looking for
+#: KURUKURU_QEMU_BASE_IMAGE_URL, they are looking for a working VM.
+_OFFLINE_ROUTE = (
+    "If this machine has no internet access, you can use an image you already "
+    "have instead: Images -> Add image, then pick it when you launch."
+)
+
+
+def _download_failure_message(url: str, exc: Exception) -> str:
+    """Why the base image could not be fetched, led by the likely cause.
+
+    This message is what lands in ``Instance.error_message`` and is the entire
+    explanation the user gets for a launch that failed before it started. It
+    used to read:
+
+        Base image download failed (https://cloud-images.ubuntu.com/...):
+        [WinError 10060] A connection attempt failed because the connected
+        party did not properly respond after a period of time...
+
+    Every word of which is true, and none of which says "you are offline" or
+    "here is what to do instead". So the plain sentence leads, the route out
+    follows, and the raw error is kept underneath it — that last part is not
+    politeness, it is what makes a bug report diagnosable.
+
+    The lead is chosen from the exception *type* rather than by matching on
+    its text: ``httpx`` already classifies these, and matching on "WinError
+    10060" would be matching on one platform's spelling of one cause.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        lead = (
+            f"Couldn't download the Ubuntu base image — the server answered "
+            f"HTTP {exc.response.status_code}. That is a problem at the other "
+            f"end rather than on your machine, and it usually clears by "
+            f"itself; try again in a few minutes."
+        )
+    elif isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        lead = (
+            "Couldn't download the Ubuntu base image — check your internet "
+            "connection. Kurukuru fetches it once, about 600 MB, the first "
+            "time you launch an instance."
+        )
+    elif isinstance(exc, httpx.TimeoutException):
+        lead = (
+            "Couldn't download the Ubuntu base image — the connection timed "
+            "out part-way through. Check your internet connection and try "
+            "again; the download resumes from nothing, so a slow link may "
+            "need a few attempts."
+        )
+    else:
+        lead = (
+            "Couldn't download the Ubuntu base image — check your internet "
+            "connection."
+        )
+    return f"{lead}\n\n{_OFFLINE_ROUTE}\n\nDetail: {url} — {exc!r}"
+
+
 def ensure_base_image(settings: Settings | None = None) -> Path:
     """Return the local base image path, downloading it first if absent.
 
@@ -84,14 +142,19 @@ def ensure_base_image(settings: Settings | None = None) -> Path:
                         next_log += _PROGRESS_STEP_BYTES
     except httpx.HTTPError as exc:
         partial.unlink(missing_ok=True)
-        raise BaseImageError(f"Base image download failed ({url}): {exc}") from exc
+        raise BaseImageError(_download_failure_message(url, exc)) from exc
     except OSError as exc:
         partial.unlink(missing_ok=True)
         raise BaseImageError(f"Could not write base image to {partial}: {exc}") from exc
 
     if downloaded == 0:
         partial.unlink(missing_ok=True)
-        raise BaseImageError(f"Base image download from {url} produced an empty file")
+        raise BaseImageError(
+            f"Couldn't download the Ubuntu base image — the server sent an "
+            f"empty file. Try again; if it keeps happening, the mirror is "
+            f"broken rather than your connection.\n\n{_OFFLINE_ROUTE}\n\n"
+            f"Detail: {url} returned 0 bytes"
+        )
 
     try:
         partial.replace(target)

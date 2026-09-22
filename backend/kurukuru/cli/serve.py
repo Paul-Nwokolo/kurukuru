@@ -25,19 +25,21 @@ import errno
 import ipaddress
 import os
 import socket
+import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from kurukuru.cli.errors import CliError, ExitCode
-from kurukuru.cli.naming import CLI_NAME, env_var
+from kurukuru.cli.naming import CLI_NAME, STARTUP_TASK_NAME, env_var
 from kurukuru.cli.output import Output
 
 
 def register(app: typer.Typer) -> None:
     app.command("serve")(serve)
     app.command("dashboard")(dashboard)
+    app.command("restart")(restart)
 
 
 def serve(
@@ -225,9 +227,9 @@ def dashboard(
             f"The backend at {url} did not answer.",
             ExitCode.UNREACHABLE,
             hint=(
-                f"Start it with '{CLI_NAME} serve', or check whether the startup "
-                f"task is running:\n"
-                f"    schtasks /Query /TN KurukuruBackend"
+                f"Start it with '{CLI_NAME} serve', or restart it with "
+                f"'{CLI_NAME} restart'. To look at the task directly:\n"
+                f"    schtasks /Query /TN {STARTUP_TASK_NAME}"
             ),
         )
 
@@ -236,6 +238,137 @@ def dashboard(
         return
     out.note(f"Opening {url}")
     webbrowser.open(url)
+
+
+def restart(
+    wait: Annotated[
+        bool,
+        typer.Option("--wait/--no-wait", help="Wait for the backend to answer again."),
+    ] = True,
+) -> None:
+    """Restart Kurukuru, so a changed setting takes effect.
+
+    Restarts the startup task an installed build runs under. From a checkout,
+    stop 'kurukuru serve' with Ctrl-C and start it again instead.
+    """
+    # Why this command exists, kept out of --help because it is a note to
+    # whoever maintains this rather than to whoever runs it:
+    #
+    # Two separate users needed a restart and neither could find one. Settings
+    # are read once at startup and the Settings screen says so, but on an
+    # installed build there was no answer to the obvious next question.
+    # "Restart the backend" describes something a developer does with Ctrl-C in
+    # a terminal they are already looking at; an installed user has no
+    # terminal, no visible process, and a backend started by a scheduled task
+    # at logon. Signing out and back in worked, and is an absurd thing to ask.
+    #
+    # Where there is no task — a checkout, or an install where the startup task
+    # was declined — this says so and names what to do instead, rather than
+    # reporting a success it did not achieve.
+    out = Output()
+    settings = _serve_settings()
+    host = "127.0.0.1" if not _is_loopback(settings.host) else settings.host
+
+    if sys.platform != "win32":
+        raise CliError(
+            f"'{CLI_NAME} restart' manages the Windows startup task, and this "
+            f"host is not Windows.",
+            ExitCode.USAGE,
+            hint=(
+                "Restart however you started it — Ctrl-C and run "
+                f"'{CLI_NAME} serve' again, or restart the service if you "
+                f"wrote a unit for it."
+            ),
+        )
+
+    if not _startup_task_exists():
+        raise CliError(
+            f"There is no '{STARTUP_TASK_NAME}' startup task on this machine, "
+            f"so there is nothing for this command to restart.",
+            ExitCode.FAILURE,
+            hint=(
+                f"If you are running '{CLI_NAME} serve' in a terminal, stop it "
+                f"with Ctrl-C and start it again — that is the restart. If you "
+                f"installed Kurukuru and declined 'Start when I sign in', "
+                f"start it with '{CLI_NAME} serve'."
+            ),
+        )
+
+    out.note(f"Restarting the '{STARTUP_TASK_NAME}' startup task...")
+    # Stop then start, rather than a single restart verb: Task Scheduler has
+    # no restart, and stopping first is what lets the backend close its
+    # database cleanly instead of being replaced underneath itself.
+    _task_command("Stop-ScheduledTask")
+    _task_command("Start-ScheduledTask")
+
+    if not wait:
+        out.note("Asked it to start again.")
+        return
+
+    if _wait_for_backend(host, settings.port, timeout=60.0):
+        out.note(f"Kurukuru is answering on http://{host}:{settings.port}/ again.")
+        return
+
+    raise CliError(
+        f"The task was restarted, but nothing is answering on "
+        f"http://{host}:{settings.port}/ yet.",
+        ExitCode.UNREACHABLE,
+        hint=(
+            f"Give it a few more seconds and check again, or look at Task "
+            f"Scheduler for the '{STARTUP_TASK_NAME}' task. "
+            f"'{CLI_NAME} doctor' reports what the backend can see."
+        ),
+    )
+
+
+def _task_command(verb: str) -> None:
+    """Run one Task Scheduler cmdlet against our task. Failures are not fatal.
+
+    Stop on an already-stopped task is an error PowerShell reports and nobody
+    needs to hear about; what matters is whether the backend answers at the
+    end, which the caller checks directly.
+    """
+    import subprocess
+
+    subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy", "Bypass",
+            "-Command",
+            f"{verb} -TaskName '{STARTUP_TASK_NAME}' -ErrorAction SilentlyContinue",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+
+def _startup_task_exists() -> bool:
+    """Whether the logon task is registered. False on any doubt."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy", "Bypass",
+                "-Command",
+                f"if (Get-ScheduledTask -TaskName '{STARTUP_TASK_NAME}' "
+                f"-ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
 
 
 def _wait_for_backend(host: str, port: int, timeout: float = 90.0) -> bool:

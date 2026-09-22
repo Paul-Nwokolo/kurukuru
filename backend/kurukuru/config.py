@@ -109,10 +109,36 @@ def _default_qemu_img() -> str:
     return bundled_qemu_binary("qemu-img") or "qemu-img"
 
 
+#: Where an *installed* build's configuration lives.
+#:
+#: ``.env`` is resolved against the working directory, which is the right
+#: answer in a checkout (``backend/.env``, next to the code) and no answer at
+#: all on an installed build: the backend is started by a logon task from a
+#: directory the user has never heard of, so there was nowhere for them to put
+#: a setting. The Settings screen nonetheless told them to "put it in
+#: backend/.env and restart the backend" — two instructions, neither of which
+#: named anything that exists on their machine.
+#:
+#: So a second file is read, beside the database and the VM disks in the state
+#: directory, which is the one location an installed user can find and already
+#: knows about.
+#:
+#: **The default location, not ``state_dir``**, and that is not an oversight:
+#: ``state_dir`` is itself a setting, so reading the file that might change it
+#: from the directory it names is circular. ``KURUKURU_STATE_DIR`` therefore
+#: has to be an environment variable, which is what the docs have always said.
+CONFIG_FILE = Path(DEFAULT_STATE_DIR).expanduser() / "kurukuru.env"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix=ENV_PREFIX,
-        env_file=".env",
+        # Both, in increasing priority: the state-directory file an installed
+        # user can actually reach, then the checkout's own .env, which a
+        # developer expects to win in the directory they are working in.
+        # Environment variables still beat both — that is pydantic-settings'
+        # own source ordering, not something arranged here.
+        env_file=(CONFIG_FILE, ".env"),
         env_file_encoding="utf-8-sig",  # tolerates BOM; plain UTF-8 still works
         extra="ignore",                 # unknown .env keys warn-by-omission, never crash the server
     )
@@ -254,18 +280,30 @@ class Settings(BaseSettings):
     # --- Cloud-init & SSH access (Phase 4) ---
     # The non-root sudo user created inside every cloud-init guest.
     #
-    # **Deliberately not renamed in Phase 16.** This is not a product string:
-    # it is an identity written into a guest's ``/etc/passwd`` at provision
-    # time, and the row does not record which name it got — ``Instance.ssh_user``
-    # returns *this setting*, live. Changing it would therefore rewrite the
-    # "Copy SSH" command of every instance that already exists into a username
-    # its guest has never heard of, which fails as "Permission denied
-    # (publickey)" and looks like a broken key rather than a wrong user.
+    # **Renamed in 0.1.2, and only after the groundwork that made it safe.**
+    # This is not a product string: it is an identity written into a guest's
+    # ``/etc/passwd`` at provision time. Until 0.1.2 the row did not record
+    # which name it got — ``Instance.ssh_user`` returned *this setting*, live —
+    # so changing it would have rewritten the "Copy SSH" command of every
+    # instance that already existed into a username its guest had never heard
+    # of, failing as "Permission denied (publickey)" and looking like a broken
+    # key rather than a wrong user.
     #
-    # Renaming it is a two-step change: persist the user on the instance row,
-    # backfill existing rows with "iaas" (which is correct for all of them),
-    # and only then move the default. See docs/DECISIONS.md.
-    default_vm_user: str = "iaas"
+    # The rename was therefore done in the order that makes it invisible:
+    #
+    #   1. ``instances.ssh_user`` became a real column (models.py).
+    #   2. The migration backfilled every existing row with "iaas", which is
+    #      correct for all of them — no released build ever had another
+    #      default (database.py, ``_backfill_instance_ssh_user``).
+    #   3. Provisioning writes the row's user and feeds cloud-init from it, so
+    #      the guest and the row agree by construction.
+    #   4. Only then, this line.
+    #
+    # An instance created before 0.1.2 still reports "iaas" and its SSH command
+    # is byte-for-byte what it was. New instances get "kurukuru". Changing this
+    # setting now affects only instances created after the change, which is the
+    # behaviour it always appeared to have.
+    default_vm_user: str = "kurukuru"
     # Orchestrator keypair location. "~" is expanded at use-time in ssh_keys.py.
     ssh_key_dir: str = f"{DEFAULT_STATE_DIR}/keys"
     # Per-instance cloud-init YAML is rendered here, then deleted after launch.
