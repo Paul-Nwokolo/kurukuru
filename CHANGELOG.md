@@ -11,6 +11,40 @@ Design decisions behind these changes are recorded in
 [docs/DECISIONS.md](docs/DECISIONS.md), and what is planned next is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **The "also delete your virtual machines?" question now says what it is
+  deleting, and no longer destroys it.** It counted nothing: it named the
+  directory and listed the kinds of thing in it, which is true and tells you
+  nothing about whether Yes costs 200 MB or 200 GB. It now measures the tree
+  at the moment of asking and itemises it — VM disks, images, volumes, ISOs,
+  the database, and the backups, with a size against each and a total.
+
+  And answering Yes moves the folder to the **Recycle Bin** instead of
+  deleting it, so it can be put back; the space returns when the bin is
+  emptied. This matters because backups live *inside* the state directory, so
+  the one answer that removed it removed every backup too — the only safety
+  net the product has, gone exactly when it would be wanted. If the tree is
+  too large for the Recycle Bin, nothing is removed and the uninstaller says
+  so, rather than silently falling back to a permanent delete.
+
+- **The release installer is now built in CI**, from a QEMU downloaded and
+  hash-verified by the build rather than whatever was installed on the
+  author's machine. That immediately found six files — `libSvtAv1Enc-3`,
+  `libhogweed-6`, `libnettle-8`, `libnfs-14`, `share/linuxboot.bin`,
+  `share/multiboot.bin` — which every installer up to and including 0.1.2 has
+  bundled beside QEMU 11.1.0. They are leftovers from an older QEMU that a
+  newer installer did not remove. The hashes in `qemu-manifest.json` were
+  honest; their provenance was "whatever accumulated in that directory". The
+  pinned bundle is 180 files to the laptop's 186, every shared file
+  byte-identical, and it runs standalone.
+
+  The release job also installs the installer it just built, runs it, and
+  uninstalls it — the step that would have caught `auth init`, the unreachable
+  bundled QEMU, and the `PATH` entry left behind.
+
 ## [0.1.2] — 2026-09-22
 
 > [!IMPORTANT]
@@ -77,21 +111,6 @@ and of an offline moment nobody staged.
   it had arrived: the Images page went on showing "Importing" with no virtual
   size while the file sat on disk at full size with an instance running off it.
   The row is now brought up to date after a launch.
-
-- **The "also delete your virtual machines?" question now says what it is
-  deleting, and no longer destroys it.** It counted nothing: it named the
-  directory and listed the kinds of thing in it, which is true and tells you
-  nothing about whether Yes costs 200 MB or 200 GB. It now measures the tree
-  at the moment of asking and itemises it — VM disks, images, volumes, ISOs,
-  the database, and the backups, with a size against each and a total.
-
-  And answering Yes moves the folder to the **Recycle Bin** instead of
-  deleting it, so it can be put back; the space returns when the bin is
-  emptied. This matters because backups live *inside* the state directory, so
-  the one answer that removed it removed every backup too — the only safety
-  net the product has, gone exactly when it would be wanted. If the tree is
-  too large for the Recycle Bin, nothing is removed and the uninstaller says
-  so, rather than silently falling back to a permanent delete.
 
 - **An unattended uninstall hung forever, or risked deleting your VMs.**
   `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES` does *not* auto-answer the
