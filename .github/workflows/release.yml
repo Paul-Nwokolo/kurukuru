@@ -119,8 +119,23 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # PowerShell 7 turns a native command's non-zero exit into a
+          # terminating error when ErrorActionPreference is Stop. Several
+          # commands below are *supposed* to exit non-zero — `auth init` with
+          # no terminal refuses with exit 2, and that refusal is the thing
+          # being asserted — so the exit codes are checked deliberately here
+          # rather than thrown on. (Missing this is why the first run of this
+          # workflow failed: it was written against Windows PowerShell 5.1,
+          # where the behaviour does not exist.)
+          $PSNativeCommandUseErrorActionPreference = $false
+
           $setup = '${{ steps.artefact.outputs.path }}'
           $dir   = 'C:\kk-app'
+          $summary = @()
+          function Note($text) {
+            Write-Host $text
+            $script:summary += $text
+          }
 
           $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList `
                  '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$dir",'/TASKS='
@@ -136,8 +151,9 @@ jobs:
           $env:KURUKURU_PORT      = '7899'
           $env:KURUKURU_API_URL   = 'http://127.0.0.1:7899'
 
-          & $exe version
+          $version = (& $exe version 2>&1 | Out-String).Trim()
           if ($LASTEXITCODE -ne 0) { throw "kurukuru version exited $LASTEXITCODE" }
+          Note "version: $($version -replace "`r?`n", ' | ')"
 
           # The check that would have caught `auth init`. With no account and
           # no terminal it must reach its password prompt and refuse *there*.
@@ -145,10 +161,11 @@ jobs:
           # is the difference between the two.
           $out = (& $exe auth init --username ci 2>&1 | Out-String)
           Write-Host $out
-          if ($out -match 'NameError') { throw 'auth init crashed before prompting' }
+          if ($out -match 'NameError') { throw "auth init crashed before prompting: $out" }
           if ($out -notmatch 'password is required') {
-            throw "auth init did not reach its password prompt"
+            throw "auth init did not reach its password prompt; it said: $out"
           }
+          Note 'auth init: reached its password prompt (did not crash)'
 
           # And the engine has to find the QEMU that was installed beside it —
           # the 0.1.0 bug, which shipped because nothing ever ran the artefact.
@@ -170,8 +187,10 @@ jobs:
           if ($null -eq $health) { throw 'the backend never answered /health' }
           Write-Host ($health | ConvertTo-Json -Depth 4)
           if (-not $health.engine.available) {
-            throw 'the engine is unavailable: the bundled QEMU was not resolved'
+            throw ('the engine is unavailable, so the bundled QEMU was not ' +
+                   'resolved: ' + ($health.engine | ConvertTo-Json -Compress))
           }
+          Note "engine: available, qemu $($health.engine.version), accel $($health.engine.accel)"
           Get-Process -Name kurukuru -ErrorAction SilentlyContinue | Stop-Process -Force
 
           # Finally, the uninstall path: it must remove the program, keep the
@@ -186,7 +205,12 @@ jobs:
           if (-not (Test-Path 'C:\kk-smoke')) { throw 'an unattended uninstall removed the data' }
           $after = [Environment]::GetEnvironmentVariable('Path','User')
           if ($after -like "*$dir*") { throw 'the uninstaller left its PATH entry behind' }
-          Write-Host 'installed, ran, resolved its QEMU, and uninstalled cleanly.'
+          Note 'uninstalled: program gone, data kept, PATH entry removed'
+
+          # Written to the run summary as well as the log, because the log
+          # lives in blob storage that is not always reachable from every
+          # network — and a check whose result cannot be read is not a check.
+          $summary -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - uses: actions/upload-artifact@v4
         with:
