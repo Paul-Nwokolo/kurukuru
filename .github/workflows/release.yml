@@ -128,9 +128,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           # PowerShell 7 turns a native command's non-zero exit into a
           # terminating error when ErrorActionPreference is Stop. Several
-          # commands below are *supposed* to exit non-zero — `auth init` with
+          # commands below are *supposed* to exit non-zero -- `auth init` with
           # no terminal refuses with exit 2, and that refusal is the thing
-          # being asserted — so exit codes are checked deliberately instead.
+          # being asserted -- so exit codes are checked deliberately instead.
           $PSNativeCommandUseErrorActionPreference = $false
 
           function Note([string] $text) {
@@ -167,15 +167,15 @@ jobs:
           # no terminal it must reach its password prompt and refuse *there*.
           # Before 0.1.2 it died earlier with a NameError, and the whole point
           # is the difference between the two.
-          $out = ((& $exe auth init --username ci 2>&1 | Out-String).Trim()
-                  -replace "`r?`n", ' | ')
+          $raw = (& $exe auth init --username ci 2>&1 | Out-String).Trim()
+          $out = $raw -replace "`r?`n", ' |'
           if ($out -match 'NameError') { Fail "auth init crashed before prompting: $out" }
           if ($out -notmatch 'password is required') {
             Fail "auth init did not reach its password prompt; it said: $out"
           }
           Note 'auth init reached its password prompt'
 
-          # And the engine has to find the QEMU installed beside it — the
+          # And the engine has to find the QEMU installed beside it -- the
           # 0.1.0 bug, which shipped because nothing ever ran the artefact.
           Start-Process -FilePath $exe -ArgumentList 'serve' -WindowStyle Hidden `
             -RedirectStandardOutput C:\kk-serve.log `
@@ -200,7 +200,7 @@ jobs:
             Fail ('the engine is unavailable, so the bundled QEMU was not resolved: ' +
                   ($health.engine | ConvertTo-Json -Compress))
           }
-          Note "engine available — qemu $($health.engine.version), accel $($health.engine.accel)"
+          Note "engine available -- qemu $($health.engine.version), accel $($health.engine.accel)"
 
           Get-Process -Name kurukuru -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
