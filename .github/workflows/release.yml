@@ -116,6 +116,13 @@ jobs:
         # packaging defect 0.1.2 fixed was invisible until something ran what
         # ships: the bundled QEMU nothing pointed at, `auth init` dying in the
         # frozen build, an uninstall leaving a PATH entry behind.
+        #
+        # Every checkpoint is emitted as a workflow *annotation* rather than
+        # only written to the log. Logs live in blob storage that is not
+        # reachable from every network — it was not reachable from the
+        # maintainer's while this workflow was being debugged — and a check
+        # whose result cannot be read is not a check. Annotations come back
+        # through the API that serves the run itself.
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -123,55 +130,56 @@ jobs:
           # terminating error when ErrorActionPreference is Stop. Several
           # commands below are *supposed* to exit non-zero — `auth init` with
           # no terminal refuses with exit 2, and that refusal is the thing
-          # being asserted — so the exit codes are checked deliberately here
-          # rather than thrown on. (Missing this is why the first run of this
-          # workflow failed: it was written against Windows PowerShell 5.1,
-          # where the behaviour does not exist.)
+          # being asserted — so exit codes are checked deliberately instead.
           $PSNativeCommandUseErrorActionPreference = $false
+
+          function Note([string] $text) {
+            Write-Host "::notice title=smoke::$text"
+          }
+          function Fail([string] $text) {
+            Write-Host "::error title=smoke::$text"
+            exit 1
+          }
 
           $setup = '${{ steps.artefact.outputs.path }}'
           $dir   = 'C:\kk-app'
-          $summary = @()
-          function Note($text) {
-            Write-Host $text
-            $script:summary += $text
-          }
 
           $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList `
                  '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$dir",'/TASKS='
-          if ($p.ExitCode -ne 0) { throw "the installer exited $($p.ExitCode)" }
+          if ($p.ExitCode -ne 0) { Fail "the installer exited $($p.ExitCode)" }
+          Note "installed to $dir"
 
           $exe = Join-Path $dir 'kurukuru.exe'
-          if (-not (Test-Path $exe)) { throw "nothing installed at $exe" }
+          if (-not (Test-Path $exe)) { Fail "nothing installed at $exe" }
           if (-not (Test-Path (Join-Path $dir 'qemu\qemu-system-x86_64.exe'))) {
-            throw 'the bundled QEMU is not beside the executable'
+            Fail 'the bundled QEMU is not beside the executable'
           }
+          Note 'the bundled QEMU is beside the executable'
 
           $env:KURUKURU_STATE_DIR = 'C:\kk-smoke'
           $env:KURUKURU_PORT      = '7899'
           $env:KURUKURU_API_URL   = 'http://127.0.0.1:7899'
 
-          $version = (& $exe version 2>&1 | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0) { throw "kurukuru version exited $LASTEXITCODE" }
-          Note "version: $($version -replace "`r?`n", ' | ')"
+          $v = (& $exe version 2>&1 | Out-String).Trim() -replace "`r?`n", ' | '
+          Note "version says: $v"
 
           # The check that would have caught `auth init`. With no account and
           # no terminal it must reach its password prompt and refuse *there*.
           # Before 0.1.2 it died earlier with a NameError, and the whole point
           # is the difference between the two.
-          $out = (& $exe auth init --username ci 2>&1 | Out-String)
-          Write-Host $out
-          if ($out -match 'NameError') { throw "auth init crashed before prompting: $out" }
+          $out = ((& $exe auth init --username ci 2>&1 | Out-String).Trim()
+                  -replace "`r?`n", ' | ')
+          if ($out -match 'NameError') { Fail "auth init crashed before prompting: $out" }
           if ($out -notmatch 'password is required') {
-            throw "auth init did not reach its password prompt; it said: $out"
+            Fail "auth init did not reach its password prompt; it said: $out"
           }
-          Note 'auth init: reached its password prompt (did not crash)'
+          Note 'auth init reached its password prompt'
 
-          # And the engine has to find the QEMU that was installed beside it —
-          # the 0.1.0 bug, which shipped because nothing ever ran the artefact.
+          # And the engine has to find the QEMU installed beside it — the
+          # 0.1.0 bug, which shipped because nothing ever ran the artefact.
           Start-Process -FilePath $exe -ArgumentList 'serve' -WindowStyle Hidden `
-            -RedirectStandardOutput C:\kk-smoke-serve.log `
-            -RedirectStandardError  C:\kk-smoke-serve.err | Out-Null
+            -RedirectStandardOutput C:\kk-serve.log `
+            -RedirectStandardError  C:\kk-serve.err | Out-Null
 
           $deadline = (Get-Date).AddSeconds(180)
           $health = $null
@@ -182,35 +190,34 @@ jobs:
               break
             } catch { Start-Sleep -Milliseconds 500 }
           }
-          Get-Content C:\kk-smoke-serve.log,C:\kk-smoke-serve.err -ErrorAction SilentlyContinue
 
-          if ($null -eq $health) { throw 'the backend never answered /health' }
-          Write-Host ($health | ConvertTo-Json -Depth 4)
-          if (-not $health.engine.available) {
-            throw ('the engine is unavailable, so the bundled QEMU was not ' +
-                   'resolved: ' + ($health.engine | ConvertTo-Json -Compress))
+          if ($null -eq $health) {
+            $log = ((Get-Content C:\kk-serve.log,C:\kk-serve.err -ErrorAction SilentlyContinue |
+                     Select-Object -Last 15) -join ' | ')
+            Fail "the backend never answered /health. Last output: $log"
           }
-          Note "engine: available, qemu $($health.engine.version), accel $($health.engine.accel)"
-          Get-Process -Name kurukuru -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $health.engine.available) {
+            Fail ('the engine is unavailable, so the bundled QEMU was not resolved: ' +
+                  ($health.engine | ConvertTo-Json -Compress))
+          }
+          Note "engine available — qemu $($health.engine.version), accel $($health.engine.accel)"
 
-          # Finally, the uninstall path: it must remove the program, keep the
-          # data (unattended never asks), and take its PATH entry with it.
+          Get-Process -Name kurukuru -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+
+          # Finally the uninstall path: remove the program, keep the data
+          # (unattended never asks), and take the PATH entry with it.
           $before = [Environment]::GetEnvironmentVariable('Path','User')
-          if ($before -notlike "*$dir*") { throw 'the installer did not add its PATH entry' }
+          if ($before -notlike "*$dir*") { Fail 'the installer did not add its PATH entry' }
           $u = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -PassThru `
                  -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'
-          if ($u.ExitCode -ne 0) { throw "the uninstaller exited $($u.ExitCode)" }
-          Start-Sleep -Seconds 2
-          if (Test-Path $exe) { throw 'the program is still installed' }
-          if (-not (Test-Path 'C:\kk-smoke')) { throw 'an unattended uninstall removed the data' }
+          if ($u.ExitCode -ne 0) { Fail "the uninstaller exited $($u.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (Test-Path $exe) { Fail 'the program is still installed' }
+          if (-not (Test-Path 'C:\kk-smoke')) { Fail 'an unattended uninstall removed the data' }
           $after = [Environment]::GetEnvironmentVariable('Path','User')
-          if ($after -like "*$dir*") { throw 'the uninstaller left its PATH entry behind' }
-          Note 'uninstalled: program gone, data kept, PATH entry removed'
-
-          # Written to the run summary as well as the log, because the log
-          # lives in blob storage that is not always reachable from every
-          # network — and a check whose result cannot be read is not a check.
-          $summary -join "`n" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if ($after -like "*$dir*") { Fail 'the uninstaller left its PATH entry behind' }
+          Note 'uninstalled cleanly: program gone, data kept, PATH entry removed'
 
       - uses: actions/upload-artifact@v4
         with:
