@@ -204,6 +204,16 @@ Settings → Apps → Installed apps → Kurukuru → Uninstall. Or run
 `%USERPROFILE%\.kurukuru` as well, and defaults to **No**. Answer No and a
 later reinstall picks up exactly where you left off.
 
+Since 0.1.2 that question counts what is there before it asks — VM disks,
+images, volumes, ISOs, the database and **every backup of it**, each with its
+size — and answering Yes moves the folder to the **Recycle Bin** rather than
+destroying it, so you can put it back. The disk space returns when you empty
+the bin. If the folder is too large for the Recycle Bin, nothing is removed
+and the uninstaller says so rather than deleting it permanently.
+
+An unattended uninstall (`/VERYSILENT /SUPPRESSMSGBOXES`) never asks and never
+removes your data.
+
 It also removes the startup task and the `PATH` entry.
 
 Removing the `PATH` entry is new in 0.1.2 — every earlier uninstall left one

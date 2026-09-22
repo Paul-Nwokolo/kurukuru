@@ -161,6 +161,25 @@ def check_build_root(root: Path) -> None:
 #: a pin nobody verifies is a comment.
 PINNED_QEMU_VERSION = "11.1.0"
 
+#: Where the pinned QEMU comes from, and what it must hash to.
+#:
+#: Written down here rather than in the workflow YAML because it is a property
+#: of *this release*, not of one way of building it: the same two constants
+#: answer "what is in the bundle?" for a developer on a laptop and for a CI
+#: runner that has never seen QEMU. A pin that only exists in a build script
+#: somewhere is a pin nobody can check.
+#:
+#: This matters more than it did. Code signing (decision 62) requires builds
+#: to come from CI "in a verifiable way", and a bundle assembled from whatever
+#: QEMU happened to be installed on the author's machine is exactly what that
+#: requirement exists to rule out. Verified by downloading it and installing
+#: it silently — ``/S /D=<dir>``, an NSIS installer — which yields
+#: ``QEMU emulator version 11.1.0 (v11.1.0-12130-ge470268ff4)``.
+QEMU_INSTALLER_URL = "https://qemu.weilnetz.de/w64/qemu-w64-setup-20260811.exe"
+QEMU_INSTALLER_SHA256 = (
+    "f98a8aeb5f7faea9765b6dee28316c266cd179d80354a2fed8e50176f9a2e59f"
+)
+
 #: Firmware and option ROMs an x86_64 guest can actually load. Named explicitly
 #: rather than copied wholesale: the full share/ directory carries ARM, RISC-V
 #: and PPC firmware totalling hundreds of megabytes that this product can never
@@ -246,6 +265,89 @@ def qemu_version_of(binary: Path) -> str:
         if token[:1].isdigit():
             return token
     raise BuildError(f"Could not read a version out of: {first!r}")
+
+
+def fetch_qemu(into: Path) -> Path:
+    """Download the pinned QEMU installer, verify it, and install it silently.
+
+    For a machine that has no QEMU — a CI runner, or somebody building this
+    for the first time. Returns the directory to pass to :func:`collect_qemu`.
+
+    The hash is checked **before** the installer is executed, not after. That
+    ordering is the whole point: an installer is arbitrary code, and verifying
+    it once it has already run verifies nothing. A mismatch aborts without the
+    file ever being launched.
+    """
+    import urllib.request
+
+    into.mkdir(parents=True, exist_ok=True)
+    download = into / "qemu-setup.exe"
+
+    if download.is_file() and sha256(download) == QEMU_INSTALLER_SHA256:
+        print(f"      reusing verified {download.name}")
+    else:
+        print(f"      downloading {QEMU_INSTALLER_URL}")
+        try:
+            urllib.request.urlretrieve(QEMU_INSTALLER_URL, download)
+        except OSError as exc:
+            raise BuildError(
+                f"Could not download the pinned QEMU installer:\n"
+                f"    {QEMU_INSTALLER_URL}\n"
+                f"    {exc}\n"
+                f"\n"
+                f"Install QEMU {PINNED_QEMU_VERSION} by hand and pass --qemu "
+                f"with its directory instead."
+            ) from exc
+
+        actual = sha256(download)
+        if actual != QEMU_INSTALLER_SHA256:
+            download.unlink(missing_ok=True)
+            raise BuildError(
+                f"The QEMU installer is not the pinned one.\n"
+                f"    expected  {QEMU_INSTALLER_SHA256}\n"
+                f"    got       {actual}\n"
+                f"\n"
+                f"Upstream reuses its filenames, so this is most likely a new "
+                f"build published under the same name. Verify the new one, run "
+                f"the suite and a live launch against it, then update "
+                f"QEMU_INSTALLER_SHA256 and PINNED_QEMU_VERSION together."
+            )
+
+    target = into / "qemu"
+    if (target / "qemu-system-x86_64.exe").is_file():
+        print(f"      already installed at {target}")
+        return target
+
+    # NSIS. `/S` is silent, and `/D` must come last and unquoted or it is
+    # ignored and the installer lands in its own default location instead.
+    #
+    # Launched through PowerShell's Start-Process rather than subprocess
+    # directly, because the installer's manifest requires elevation:
+    # CreateProcess refuses it outright with WinError 740, while ShellExecute
+    # — which Start-Process uses — performs the elevation. On a CI runner,
+    # which is already administrator, that is silent; on a developer's machine
+    # it is one UAC prompt, which is what installing QEMU by hand would have
+    # cost anyway.
+    print(f"      installing silently into {target}")
+    completed = subprocess.run(
+        [
+            "powershell.exe", "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass", "-Command",
+            f"$p = Start-Process -FilePath '{download}' "
+            f"-ArgumentList '/S','/D={target}' -Wait -PassThru; exit $p.ExitCode",
+        ],
+        check=False,
+    )
+    if completed.returncode != 0 or not (target / "qemu-system-x86_64.exe").is_file():
+        raise BuildError(
+            f"The QEMU installer exited {completed.returncode} and "
+            f"{target / 'qemu-system-x86_64.exe'} is not there." + NEWLINE
+            + NEWLINE
+            + f"It requires elevation. If a UAC prompt was declined, accept it; "
+            f"if this is running somewhere that cannot prompt, install QEMU "
+            f"{PINNED_QEMU_VERSION} by hand and pass --qemu with its directory."
+        )
+    return target
 
 
 def collect_qemu(source: Path, target: Path) -> Manifest:
@@ -719,6 +821,14 @@ def main(argv: list[str] | None = None) -> int:
         help="A QEMU install to bundle from.",
     )
     parser.add_argument(
+        "--fetch-qemu", action="store_true",
+        help=(
+            "Download and silently install the pinned QEMU into the build "
+            "root instead of using --qemu. What CI uses: it needs no QEMU on "
+            "the machine and verifies the installer's SHA-256 before running it."
+        ),
+    )
+    parser.add_argument(
         "--skip-dashboard", action="store_true",
         help="Reuse an existing frontend/dist instead of rebuilding it.",
     )
@@ -767,7 +877,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"      -> {freeze_backend(out, args.build_root / 'work')}")
 
         print("[4/6] Collecting QEMU")
-        manifest = collect_qemu(args.qemu, out / "qemu")
+        qemu_source = args.qemu
+        if args.fetch_qemu:
+            qemu_source = fetch_qemu(args.build_root / "qemu-src")
+        manifest = collect_qemu(qemu_source, out / "qemu")
         print(f"      QEMU {manifest.qemu_version}, {len(manifest.files)} files hashed")
 
         print("[5/6] Verifying the bundle against its manifest")

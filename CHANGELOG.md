@@ -78,6 +78,21 @@ and of an offline moment nobody staged.
   size while the file sat on disk at full size with an instance running off it.
   The row is now brought up to date after a launch.
 
+- **The "also delete your virtual machines?" question now says what it is
+  deleting, and no longer destroys it.** It counted nothing: it named the
+  directory and listed the kinds of thing in it, which is true and tells you
+  nothing about whether Yes costs 200 MB or 200 GB. It now measures the tree
+  at the moment of asking and itemises it — VM disks, images, volumes, ISOs,
+  the database, and the backups, with a size against each and a total.
+
+  And answering Yes moves the folder to the **Recycle Bin** instead of
+  deleting it, so it can be put back; the space returns when the bin is
+  emptied. This matters because backups live *inside* the state directory, so
+  the one answer that removed it removed every backup too — the only safety
+  net the product has, gone exactly when it would be wanted. If the tree is
+  too large for the Recycle Bin, nothing is removed and the uninstaller says
+  so, rather than silently falling back to a permanent delete.
+
 - **An unattended uninstall hung forever, or risked deleting your VMs.**
   `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES` does *not* auto-answer the
   "also delete your virtual machines?" prompt — measured, not assumed: the

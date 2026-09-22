@@ -1,0 +1,211 @@
+# Build the shipped installer on a machine that is not the author's.
+#
+# `verify.yml` proves the code is good. This proves the *artefact* is, and the
+# distinction is not academic: every defect 0.1.2 fixed in the packaging — the
+# unreachable bundled QEMU, `auth init` dying in the frozen build, an uninstall
+# that left a PATH entry — was invisible to the test suite and visible the
+# moment somebody ran the thing that ships.
+#
+# It is also the precondition for code signing. SignPath Foundation requires
+# binaries to be "built from source code in a verifiable way", with provenance
+# over the repository, branch and build agent; an installer assembled on a
+# laptop from whatever QEMU happened to be installed on it is exactly what that
+# rule exists to exclude. See docs/DECISIONS.md #62.
+#
+# Nothing here signs anything yet. When it does, the signing step goes between
+# "build" and "upload" and nothing else changes.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # So the artefact can be built and inspected without cutting a release —
+  # which is how this workflow gets exercised between releases rather than
+  # being first run on the day it matters.
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: "Attach the installer to the release for this tag"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    name: Windows installer
+    runs-on: windows-latest
+    permissions:
+      # Only the attach step needs more than read, and only on a tag.
+      contents: write
+    # The QEMU download is ~200 MB and PyInstaller is not quick. Measured at
+    # roughly 12 minutes locally; this is generous rather than tight, because
+    # a release build timing out is worse than one that took a while.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Inno Setup
+        # The compiler, not the IDE. `build_installer.py` discovers ISCC.exe in
+        # the three places it can land, so nothing here needs to say where.
+        run: choco install innosetup --no-progress --yes
+
+      - name: Install the backend and its build tooling
+        # `-e backend[build]` carries the pinned PyInstaller. The package
+        # itself is installed, not just its requirements: PyInstaller freezes
+        # what it can import.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "backend[build]"
+
+      - name: Cache the pinned QEMU installer
+        # ~200 MB from a single upstream mirror. Keyed on the pinned URL and
+        # hash, which live in build_installer.py — so bumping the pin misses
+        # the cache and re-downloads, which is the correct behaviour rather
+        # than something to work around.
+        id: qemu-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\kk-build\qemu-src\qemu-setup.exe
+          key: qemu-${{ hashFiles('tools/build_installer.py') }}
+
+      - name: Build the installer
+        # --fetch-qemu verifies the installer's SHA-256 *before* executing it,
+        # then installs it silently into the build root. No QEMU needs to be
+        # on the runner, and the bundle cannot quietly become whatever version
+        # a package manager decided to ship today.
+        #
+        # --build-root C:\kk-build for the 260-character budget: the default
+        # workspace path plus PyInstaller's nesting goes over it.
+        run: python tools/build_installer.py --build-root C:\kk-build --fetch-qemu
+
+      - name: Record what was built
+        id: artefact
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem 'C:\kk-build\dist\Kurukuru-*-Setup.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'No installer was produced.' }
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($exe.Name)" | Set-Content "$($exe.FullName).sha256" -Encoding ascii
+          "name=$($exe.Name)"      >> $env:GITHUB_OUTPUT
+          "path=$($exe.FullName)"  >> $env:GITHUB_OUTPUT
+          "sha256=$hash"           >> $env:GITHUB_OUTPUT
+          Write-Host "$($exe.Name)  $([math]::Round($exe.Length/1MB,1)) MB  $hash"
+
+      - name: Install it, and make it run
+        # Not the staged tree — the actual installer, installed. Every
+        # packaging defect 0.1.2 fixed was invisible until something ran what
+        # ships: the bundled QEMU nothing pointed at, `auth init` dying in the
+        # frozen build, an uninstall leaving a PATH entry behind.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = '${{ steps.artefact.outputs.path }}'
+          $dir   = 'C:\kk-app'
+
+          $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList `
+                 '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$dir",'/TASKS='
+          if ($p.ExitCode -ne 0) { throw "the installer exited $($p.ExitCode)" }
+
+          $exe = Join-Path $dir 'kurukuru.exe'
+          if (-not (Test-Path $exe)) { throw "nothing installed at $exe" }
+          if (-not (Test-Path (Join-Path $dir 'qemu\qemu-system-x86_64.exe'))) {
+            throw 'the bundled QEMU is not beside the executable'
+          }
+
+          $env:KURUKURU_STATE_DIR = 'C:\kk-smoke'
+          $env:KURUKURU_PORT      = '7899'
+          $env:KURUKURU_API_URL   = 'http://127.0.0.1:7899'
+
+          & $exe version
+          if ($LASTEXITCODE -ne 0) { throw "kurukuru version exited $LASTEXITCODE" }
+
+          # The check that would have caught `auth init`. With no account and
+          # no terminal it must reach its password prompt and refuse *there*.
+          # Before 0.1.2 it died earlier with a NameError, and the whole point
+          # is the difference between the two.
+          $out = (& $exe auth init --username ci 2>&1 | Out-String)
+          Write-Host $out
+          if ($out -match 'NameError') { throw 'auth init crashed before prompting' }
+          if ($out -notmatch 'password is required') {
+            throw "auth init did not reach its password prompt"
+          }
+
+          # And the engine has to find the QEMU that was installed beside it —
+          # the 0.1.0 bug, which shipped because nothing ever ran the artefact.
+          Start-Process -FilePath $exe -ArgumentList 'serve' -WindowStyle Hidden `
+            -RedirectStandardOutput C:\kk-smoke-serve.log `
+            -RedirectStandardError  C:\kk-smoke-serve.err | Out-Null
+
+          $deadline = (Get-Date).AddSeconds(180)
+          $health = $null
+          while ((Get-Date) -lt $deadline) {
+            try {
+              $health = (Invoke-WebRequest 'http://127.0.0.1:7899/api/health' `
+                          -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
+              break
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          Get-Content C:\kk-smoke-serve.log,C:\kk-smoke-serve.err -ErrorAction SilentlyContinue
+
+          if ($null -eq $health) { throw 'the backend never answered /health' }
+          Write-Host ($health | ConvertTo-Json -Depth 4)
+          if (-not $health.engine.available) {
+            throw 'the engine is unavailable: the bundled QEMU was not resolved'
+          }
+          Get-Process -Name kurukuru -ErrorAction SilentlyContinue | Stop-Process -Force
+
+          # Finally, the uninstall path: it must remove the program, keep the
+          # data (unattended never asks), and take its PATH entry with it.
+          $before = [Environment]::GetEnvironmentVariable('Path','User')
+          if ($before -notlike "*$dir*") { throw 'the installer did not add its PATH entry' }
+          $u = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -PassThru `
+                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'
+          if ($u.ExitCode -ne 0) { throw "the uninstaller exited $($u.ExitCode)" }
+          Start-Sleep -Seconds 2
+          if (Test-Path $exe) { throw 'the program is still installed' }
+          if (-not (Test-Path 'C:\kk-smoke')) { throw 'an unattended uninstall removed the data' }
+          $after = [Environment]::GetEnvironmentVariable('Path','User')
+          if ($after -like "*$dir*") { throw 'the uninstaller left its PATH entry behind' }
+          Write-Host 'installed, ran, resolved its QEMU, and uninstalled cleanly.'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artefact.outputs.name }}
+          path: |
+            C:\kk-build\dist\Kurukuru-*-Setup.exe
+            C:\kk-build\dist\Kurukuru-*-Setup.exe.sha256
+            C:\kk-build\stage\qemu\qemu-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach to the release
+        # Only for a tag, and only when asked. Publishing is still a human
+        # act: this uploads to an existing release rather than creating one.
+        if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || inputs.upload_to_release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" `
+            "${{ steps.artefact.outputs.path }}" `
+            "${{ steps.artefact.outputs.path }}.sha256" `
+            --clobber
