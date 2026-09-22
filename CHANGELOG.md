@@ -77,6 +77,19 @@ and of an offline moment nobody staged.
 - **The dashboard's "task is running?" hint named a task that has never
   existed** (`KurukuruBackend`; it is `Kurukuru`).
 
+- **`kurukuru auth init` crashed with `NameError: name 'engine' is not
+  defined`** — the first command a new user runs, broken in 0.1.1 and 0.1.0.
+  `kurukuru.database` builds its engine lazily through PEP 562's module
+  `__getattr__`, which serves `kurukuru.database.engine` to importers but
+  *not* a bare `engine` written inside a function in that same file: that is a
+  global name lookup, and global lookup never consults `__getattr__`. It
+  worked only because some importer had already fetched the attribute, which
+  caches it into the module's globals. The backend always has such an importer
+  (the routers); the CLI's `auth init` path does not. Invisible to the whole
+  suite, because every test imports a router or patches the engine directly —
+  so the new test for it runs in a subprocess that has imported nothing else.
+  Found by running the packaged build rather than the checkout.
+
 - **The test suite failed on a machine that had never run Kurukuru.** The test
   that proves the isolation guard works has to create `~/.kurukuru/keys` so it
   has somewhere to plant a deliberate leak. `mkdir(parents=True)` also creates

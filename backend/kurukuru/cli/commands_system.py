@@ -381,13 +381,22 @@ def _backend_checks(client: ApiClient) -> list[Check]:
     try:
         data = client.diagnostics()
     except CliError as exc:
+        # Two very different causes wear the same failure here, and the old
+        # remedy named only the rarer one — so a user who had simply not
+        # signed in was told their install was out of date and to reinstall
+        # it. Told apart by the exit code rather than by reading the message:
+        # 401 has a code of its own precisely so callers need not match on
+        # prose, and `doctor` should be the last place that does.
+        unauthenticated = exc.code is ExitCode.UNAUTHENTICATED
         return [
             Check(
                 "Diagnostics",
                 FAIL,
                 exc.message,
-                "The backend answered /health but not /diagnostics — it is "
-                "probably an older build. Reinstall it from this checkout.",
+                f"Sign in first: '{CLI_NAME} auth login'."
+                if unauthenticated
+                else "The backend answered /health but not /diagnostics — it "
+                "is probably an older build than this CLI. Upgrade it.",
             )
         ]
 

@@ -84,6 +84,37 @@ def __getattr__(name: str) -> object:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def _engine_instance() -> Engine:
+    """The engine, for use by functions **inside this module**.
+
+    PEP 562's module ``__getattr__`` above serves ``kurukuru.database.engine``
+    to importers. It does **not** serve a bare ``engine`` written inside a
+    function in this file: that compiles to a global *name* lookup, and global
+    name lookup never consults ``__getattr__``. It only worked because some
+    importer had already fetched the attribute, which cached it into
+    ``globals()`` and made the bare name resolve from then on.
+
+    So every function here that wanted the engine was quietly depending on
+    somebody else having asked for it first — true for the backend, where the
+    routers import it at startup, and false for the CLI.
+
+    **What that cost:** ``kurukuru auth init``, the first command a new user
+    runs, died with ``NameError: name 'engine' is not defined``. Its path is
+    ``host_admin._session() -> database.init_db()``, and nothing on it touches
+    the attribute, so the very first global lookup was the failing one.
+    Reproducible in a checkout and in the frozen build alike; invisible to the
+    whole suite, because every test either imports something that fetches the
+    attribute or patches it directly. Found by running the packaged build.
+
+    Reads the global first so a test's ``monkeypatch.setattr`` on
+    ``kurukuru.database.engine`` still wins, exactly as before.
+    """
+    existing = globals().get("engine")
+    if existing is not None:
+        return existing
+    return __getattr__("engine")  # type: ignore[return-value]
+
+
 @event.listens_for(Engine, "connect")
 def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # noqa: ANN001
     """Enable WAL + foreign keys for better concurrency and integrity.
@@ -560,6 +591,7 @@ def _apply_additive_migrations() -> None:
     A full migration tool is overkill for a single-file SQLite database; adding
     columns and redefining indexes covers every change so far.
     """
+    engine = _engine_instance()
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
 
@@ -765,6 +797,7 @@ def init_db() -> None:
     # It raises rather than returning on the one case it cannot handle (running
     # VMs), and that exception is allowed to reach the lifespan. See
     # kurukuru.state_migration.StateMigrationBlocked for why not starting is right.
+    engine = _engine_instance()
     migrate_state_dir(get_settings(), engine)
 
     # Then the directory, then the older CWD-relative relocation — which still
@@ -780,5 +813,5 @@ def init_db() -> None:
 
 def get_session() -> Generator[Session, None, None]:
     """FastAPI dependency yielding a per-request session."""
-    with Session(engine) as session:
+    with Session(_engine_instance()) as session:
         yield session
