@@ -2,6 +2,7 @@ import { AlertCircle, CheckCircle2, Cpu, HardDrive, KeyRound, Settings2 } from '
 import { useDiagnostics, useSettings } from '../hooks/queries'
 import { AccountSection } from './AccountSection'
 import { PathValue } from '../ui/Feedback'
+import { PRODUCT_NAME } from '../ui/product'
 import { formatBytes } from '../lib/format'
 
 /**
@@ -140,14 +141,14 @@ export function SettingsView() {
         its configuration file lives, and what to run.
       */}
       <div className="rounded-lg border border-transitional/30 bg-transitional-quiet px-4 py-3 text-xs text-transitional">
-        These values are read once when Kurukuru starts.{' '}
+        These values are read once when {PRODUCT_NAME} starts.{' '}
         {config?.installed ? (
           <>
             To change one, put it in{' '}
             <PathValue value={config.config_file} /> as{' '}
             <code className="rounded bg-surface px-1 py-0.5">NAME=value</code>{' '}
             using the variable name shown against the setting, then restart —
-            from the Start Menu (<strong>Restart Kurukuru</strong>) or by
+            from the Start Menu (<strong>Restart {PRODUCT_NAME}</strong>) or by
             running{' '}
             <code className="rounded bg-surface px-1 py-0.5">
               {config.restart_command}

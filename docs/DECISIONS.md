@@ -3029,6 +3029,22 @@ accumulated two dead `PATH` entries. Inno appends to `PATH` and has no matching
 removal, so **every uninstall since 0.1.0 left one behind**, while
 `docs/INSTALL.md` claimed otherwise.
 
+**And a third, from the same habit of removing the thing under test.** With
+`~/.kurukuru` deleted, the suite grew scattered teardown errors in the CLI and
+event suites — reproducible only in a full run, never in a subset, and never at
+the previous commit. The cause was the test that proves
+`conftest.no_real_state_writes` works: it creates `REAL_STATE_DIR / "keys"` so
+it has somewhere to plant a deliberate leak, `mkdir(parents=True)` creates the
+*root* as well, and the cleanup removed only the leaf. The root then appeared
+once and stayed, drifting the very fingerprint that guard compares and blaming
+whichever unrelated test straddled the change.
+
+It is the same shape as everything else in this release: invisible on a machine
+with a real install, certain on a fresh clone or in CI. Worth recording because
+the instinct when a guard reports a leak is to hunt the code under test, and
+here the guard's own scaffolding was the leak — found by making the creation
+raise rather than by reasoning about which change could have caused it.
+
 **Two caches, and the asymmetry that shapes them.** A user's log showed
 `qemu-system-x86_64 --version` starting several times a second with the
 dashboard open: `is_available()` spawns two processes and is reached from five

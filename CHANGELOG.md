@@ -77,6 +77,16 @@ and of an offline moment nobody staged.
 - **The dashboard's "task is running?" hint named a task that has never
   existed** (`KurukuruBackend`; it is `Kurukuru`).
 
+- **The test suite failed on a machine that had never run Kurukuru.** The test
+  that proves the isolation guard works has to create `~/.kurukuru/keys` so it
+  has somewhere to plant a deliberate leak. `mkdir(parents=True)` also creates
+  `~/.kurukuru`, and the cleanup removed only the leaf — so the state root
+  appeared once and stayed, drifting the fingerprint that same guard compares
+  and blaming whichever unrelated test happened to straddle it. Scattered
+  teardown errors in the CLI and event suites, reproducible only in a full run
+  and only where no real install exists, which is every fresh clone and CI.
+  Found while verifying this release, by deleting the directory.
+
 ### Changed
 
 - **The default VM user is now `kurukuru`, not `iaas`** — the pre-rename name.
