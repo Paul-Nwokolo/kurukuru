@@ -3029,8 +3029,16 @@ accumulated two dead `PATH` entries. Inno appends to `PATH` and has no matching
 removal, so **every uninstall since 0.1.0 left one behind**, while
 `docs/INSTALL.md` claimed otherwise.
 
-**And a third, from the same habit of removing the thing under test.** With
-`~/.kurukuru` deleted, the suite grew scattered teardown errors in the CLI and
+**And a third, found on a machine that had no state directory.** The
+maintainer had uninstalled an earlier build and answered **Yes** to "also
+delete your virtual machines and their data?", so `~/.kurukuru` was gone —
+which is an ordinary, supported thing to have done, and is what made the next
+defect visible. (This was chased for a while as a suspected accident during
+the 0.1.2 work, and it was not one. The cause is recorded here because the
+*investigation* produced decision 63: the prompt that removed it did not say
+what it was removing, and it took every database backup with it.)
+
+With no `~/.kurukuru`, the suite grew scattered teardown errors in the CLI and
 event suites — reproducible only in a full run, never in a subset, and never at
 the previous commit. The cause was the test that proves
 `conftest.no_real_state_writes` works: it creates `REAL_STATE_DIR / "keys"` so
@@ -3044,6 +3052,13 @@ with a real install, certain on a fresh clone or in CI. Worth recording because
 the instinct when a guard reports a leak is to hunt the code under test, and
 here the guard's own scaffolding was the leak — found by making the creation
 raise rather than by reasoning about which change could have caused it.
+
+The same instinct is worth naming in the other direction. Working out *why*
+the state directory was absent cost a long detour, and one of its steps was
+deleting the empty directory that remained rather than renaming it aside —
+which removed the evidence that would have answered the question immediately.
+A directory a product documents as holding the user's work is not a thing to
+clear out of the way, empty or not.
 
 **Two caches, and the asymmetry that shapes them.** A user's log showed
 `qemu-system-x86_64 --version` starting several times a second with the
@@ -3081,6 +3096,75 @@ End to end on this machine's own install, deleting the cache and starting the
 shipped executable: **11.15 s cold, 1.78 s warm**, to a healthy ``/health``.
 That is the number a user actually waits through, and it is the one worth
 quoting — the in-process figures above are components of it.
+
+## 63. The uninstall question did not say what it was deleting, and took every backup with it
+
+**Context.** The maintainer uninstalled an earlier build on the development
+laptop and answered **Yes** to "also delete your virtual machines and their
+data?". That removed `~/.kurukuru`: ~22 GB, of which 21.4 GB was an ISO
+library, plus the Ubuntu base image, volumes, and four database backups. The
+answer was deliberate and the data was test history nobody wanted back.
+
+It is still the wrong question, for two reasons that have nothing to do with
+this particular answer.
+
+**It carried no quantity.** The prompt named the directory and described the
+contents accurately — "every VM disk, imported image, volume, ISO and the
+database" — and said it could not be undone. Every word true, and none of it
+tells you whether Yes costs 200 MB or 200 GB. A destructive choice should
+price itself; nobody should have to already know what is in a directory the
+product created and filled on their behalf.
+
+So the question now measures the tree at the moment of asking and itemises it:
+counts and sizes per category, the total, and an explicit line for the
+backups — *"which is every copy you have"* — because that is the part nobody
+would otherwise think about.
+
+**And the one answer that removed the data removed the only safety net.**
+Backups live inside the state directory on purpose (decision 14): the database
+and everything protecting it travel together, and one `KURUKURU_STATE_DIR`
+moves the lot. The cost shows up only here.
+
+**Decision: the Recycle Bin, not relocated backups.** Moving backups outside
+the state directory fixes the symptom narrowly and badly:
+
+* They are ~300 KB of database history. The VM disks and the ISO library are
+  the gigabytes, and they would still be destroyed. It rescues the cheapest
+  thing in the tree.
+* A backup outside `state_dir` would not follow `KURUKURU_STATE_DIR`, so
+  relocating an install would silently orphan it.
+* Worst, it would be *left behind* by an uninstall the user asked to remove
+  their data — copies of their database surviving on a machine where they
+  said to remove it. That is a worse default than the problem.
+
+Sending the tree to the Recycle Bin covers all of it with one mechanism the
+user already understands, needs no second location, and makes the prompt's
+claim true: "it cannot be undone" becomes "you can put it back". The disk
+space returns when the bin is emptied, which the prompt says — so destroying
+20 GB becomes a deliberate second act rather than a side effect of uninstalling
+a program.
+
+**It never destroys, even when it cannot recycle.** If the tree is larger than
+the Recycle Bin can hold, Windows' own behaviour is to delete permanently
+instead — which would turn a promise of recoverability into exactly the loss
+this exists to prevent. So `remove-state.ps1` measures first, refuses with a
+distinct exit code, and the uninstaller tells the user where the folder is so
+they can remove it themselves. Measured on this machine: the bin holds 25.3 GB
+(read from `BitBucket\Volume\…\MaxCapacity`), so the 22 GB that went would
+have been recoverable.
+
+**Why a PowerShell script rather than Pascal.** The Win32 route is
+`SHFileOperation` with `FOF_ALLOWUNDO`, which means declaring a struct by hand
+in Pascal Script and getting its field alignment right. A mistake there does
+not fail loudly — it hands the shell a different path or a different flag. The
+.NET call (`FileSystem.DeleteDirectory`, `SendToRecycleBin`) has no such
+failure mode, the installer already shells out to PowerShell for the scheduled
+task, and the script ships into the install directory so "what does Yes do?"
+is a file somebody can read.
+
+**Related, found by the same investigation:** `/SUPPRESSMSGBOXES` does not
+auto-answer this prompt. An unattended uninstall used to hang on it forever;
+it now keeps the data without asking.
 
 ## Known limitations
 

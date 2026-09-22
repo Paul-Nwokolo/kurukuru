@@ -114,6 +114,7 @@ Source: "{#StageDir}\dist\kurukuru\*"; DestDir: "{app}"; Flags: ignoreversion re
 Source: "{#StageDir}\dashboard\*";     DestDir: "{app}\dashboard"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#StageDir}\qemu\*";          DestDir: "{app}\qemu";      Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "startup-task.ps1";                 DestDir: "{app}"; Flags: ignoreversion
+Source: "remove-state.ps1";                 DestDir: "{app}"; Flags: ignoreversion
 Source: "kurukuru.ico";                     DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\LICENSE";              DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\NOTICE";               DestDir: "{app}"; Flags: ignoreversion
@@ -389,6 +390,164 @@ begin
   Result := ExpandConstant('{%USERPROFILE}') + '\.kurukuru';
 end;
 
+{ ---------------------------------------------------------------------------
+  Saying what "delete your data" actually deletes.
+
+  The prompt used to name the directory and call its contents "every VM disk,
+  imported image, volume, ISO and the database" — a true sentence that carries
+  no quantity. The maintainer answered Yes to it on this laptop and removed
+  ~22 GB: five ISOs, the Ubuntu base image, volumes, and four database
+  backups. That was deliberate and the data was expendable, but nothing in the
+  question said how much was at stake, and nobody should have to already know.
+
+  So the question now counts what is there and prices it. Measured at the
+  moment of asking, not guessed from the schema.
+  --------------------------------------------------------------------------- }
+
+procedure MeasureTree(const Dir: string; var Bytes: Int64; var Files: Integer);
+var
+  Rec: TFindRec;
+begin
+  if not FindFirst(AddBackslash(Dir) + '*', Rec) then
+    exit;
+  try
+    repeat
+      if (Rec.Name = '.') or (Rec.Name = '..') then
+        Continue;
+      if (Rec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        MeasureTree(AddBackslash(Dir) + Rec.Name, Bytes, Files)
+      else
+      begin
+        Bytes := Bytes + (Int64(Rec.SizeHigh) shl 32) + Int64(Rec.SizeLow);
+        Files := Files + 1;
+      end;
+    until not FindNext(Rec);
+  finally
+    FindClose(Rec);
+  end;
+end;
+
+function FormatSize(Bytes: Int64): string;
+begin
+  if Bytes >= Int64(1073741824) then
+    Result := Format('%.1f GB', [Bytes / 1073741824.0])
+  else if Bytes >= 1048576 then
+    Result := Format('%.0f MB', [Bytes / 1048576.0])
+  else if Bytes >= 1024 then
+    Result := Format('%.0f KB', [Bytes / 1024.0])
+  else if Bytes > 0 then
+    { A handful of bytes is still something, and "0 KB" beside a line that
+      says "the keypair every VM trusts" reads as "nothing here". }
+    Result := 'under 1 KB'
+  else
+    Result := 'empty';
+end;
+
+{ One itemised line, or '' when that part of the tree is not there. Returning
+  an empty string rather than "0 ISOs" keeps the list to what the user
+  actually has. }
+function TreeLine(const Root, Leaf, Caption: string; var TotalBytes: Int64): string;
+var
+  Bytes: Int64;
+  Files: Integer;
+  Dir: string;
+begin
+  Result := '';
+  Dir := AddBackslash(Root) + Leaf;
+  if not DirExists(Dir) then
+    exit;
+  Bytes := 0;
+  Files := 0;
+  MeasureTree(Dir, Bytes, Files);
+  if Files = 0 then
+    exit;
+  TotalBytes := TotalBytes + Bytes;
+  Result := Chr(13) + Chr(10) + Format('    %d %s — %s', [Files, Caption, FormatSize(Bytes)]);
+end;
+
+{ Hand the tree to the Recycle Bin, and never destroy it.
+
+  The work is in remove-state.ps1 rather than here, for a reason worth stating
+  on a destructive path: the Win32 way is SHFileOperation with FOF_ALLOWUNDO,
+  which means declaring a struct by hand in Pascal Script and getting its
+  field alignment right. A mistake there does not fail loudly — it passes the
+  shell a different path or a different flag. The .NET call the script uses
+  (FileSystem.DeleteDirectory, SendToRecycleBin) has no such failure mode, the
+  installer already shells out to PowerShell for the scheduled task, and the
+  script is installed alongside so the answer to "what does Yes do?" is a file
+  somebody can read.
+
+  Exit 2 means the tree is larger than the Recycle Bin can hold. Windows'
+  own behaviour there is to delete permanently instead, which would turn a
+  promise of recoverability into the loss this exists to prevent — so the
+  script refuses, nothing is touched, and the user is told where the folder
+  is. }
+procedure RemoveStateDir(const Dir: string);
+var
+  ResultCode: Integer;
+  Script: string;
+begin
+  Script := ExpandConstant('{app}\remove-state.ps1');
+  if not FileExists(Script) then
+  begin
+    { Upgraded from a build that predates the script: keep the data rather
+      than fall back to a permanent delete the prompt did not describe. }
+    MsgBox('Your data has been left in place:' + Gap() + Dir + Gap() +
+           'This uninstaller could not find remove-state.ps1, and it will not ' +
+           'delete anything permanently. Delete the folder yourself if you ' +
+           'want the space back.', mbInformation, MB_OK);
+    exit;
+  end;
+
+  RunHidden(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+            '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+            Script + '" -Path "' + Dir + '"',
+            ResultCode);
+
+  if ResultCode = 0 then
+    exit;
+
+  if ResultCode = 2 then
+    MsgBox('Your data is too large for the Recycle Bin, so nothing was ' +
+           'removed:' + Gap() + Dir + Gap() +
+           'Windows would have had to delete it permanently, which is not ' +
+           'what the question offered. Delete the folder yourself if you want ' +
+           'the space back.', mbInformation, MB_OK)
+  else
+    MsgBox('Your data could not be moved to the Recycle Bin, so it has been ' +
+           'left alone:' + Gap() + Dir + Gap() +
+           'Nothing was removed. Delete the folder yourself if you want the ' +
+           'space back.', mbInformation, MB_OK);
+end;
+
+function DescribeStateDir(const Dir: string): string;
+var
+  TotalBytes, Counted: Int64;
+  TotalFiles: Integer;
+  Lines: string;
+begin
+  TotalBytes := 0;
+  TotalFiles := 0;
+  MeasureTree(Dir, TotalBytes, TotalFiles);
+
+  Counted := 0;
+  Lines := '';
+  Lines := Lines + TreeLine(Dir, 'qemu\instances', 'file(s) of VM disks and the state to restart them', Counted);
+  Lines := Lines + TreeLine(Dir, 'qemu\base-images', 'downloaded and imported image file(s)', Counted);
+  Lines := Lines + TreeLine(Dir, 'qemu\volumes', 'additional disk(s)', Counted);
+  Lines := Lines + TreeLine(Dir, 'isos', 'ISO(s) you added yourself', Counted);
+  Lines := Lines + TreeLine(Dir, 'backups', 'database backup(s), which is every copy you have', Counted);
+  Lines := Lines + TreeLine(Dir, 'keys', 'key file(s) for the keypair every VM trusts', Counted);
+
+  Result := Dir + '  —  ' + FormatSize(TotalBytes) + ' in ' +
+            IntToStr(TotalFiles) + ' file(s)' + Lines;
+  { Whatever is not in a named subdirectory: the database itself, the CLI
+    token, a config file. Named rather than left as an unexplained remainder. }
+  if TotalBytes > Counted then
+    Result := Result + Chr(13) + Chr(10) + '    the database, and the rest of ' +
+              ExtractFileName(Dir);
+end;
+
 { The uninstaller asks — once, explicitly, defaulting to NO — whether to remove
   the state directory. It holds VM disks, imported images, volumes, boot media
   and the database, which are the user's work and are frequently many
@@ -449,14 +608,15 @@ begin
         Log('Unattended uninstall: keeping ' + Dir +
             ' (nothing is deleted without being asked).');
       end
-      else if MsgBox('Also delete your virtual machines and their data?' + Gap() +
-                Dir + Gap() +
-                'This holds every VM disk, imported image, volume, ISO and the ' +
-                'database. It cannot be undone.' + Gap() +
-                'Choose No to keep it — reinstalling will pick it up again.',
+      else if MsgBox('Also remove your virtual machines and their data?' + Gap() +
+                DescribeStateDir(Dir) + Gap() +
+                'This is moved to the Recycle Bin, so you can put it back. The ' +
+                'disk space comes back when you empty the bin.' + Gap() +
+                'Choose No to keep it where it is — reinstalling picks it up ' +
+                'again.',
                 mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
       begin
-        DelTree(Dir, True, True, True);
+        RemoveStateDir(Dir);
       end;
     end;
   end;
