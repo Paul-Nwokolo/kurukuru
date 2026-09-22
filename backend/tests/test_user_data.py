@@ -112,9 +112,16 @@ def test_a_user_supplied_users_list_does_not_remove_our_login():
     merged = merge_cloud_config(ours, theirs)
     names = [u["name"] for u in merged["users"]]
 
-    assert "iaas" in names and "deploy" in names
-    iaas = next(u for u in merged["users"] if u["name"] == "iaas")
-    assert iaas["ssh_authorized_keys"] == ["ssh-ed25519 AAAAkey ours"]
+    # Asserted against the configured default rather than a literal: the claim
+    # is "ours survives alongside theirs", which is true whatever ours is
+    # called, and a literal here turned the 0.1.2 rename into a failure in a
+    # test about merging.
+    from kurukuru.config import get_settings
+
+    ours_name = get_settings().default_vm_user
+    assert ours_name in names and "deploy" in names
+    kept = next(u for u in merged["users"] if u["name"] == ours_name)
+    assert kept["ssh_authorized_keys"] == ["ssh-ed25519 AAAAkey ours"]
 
 
 def test_neither_input_is_mutated():

@@ -108,6 +108,7 @@ The first launch downloads the Ubuntu cloud image, about 600 MB, once.
 ```
 %USERPROFILE%\.kurukuru\
     kurukuru.db          the database: instances, images, volumes, accounts
+    kurukuru.env         your settings, if you change any (see below)
     backups\             automatic copies, taken before any schema change
     cli-token            this machine's API token
     keys\                the keypair every VM trusts
@@ -118,9 +119,43 @@ The first launch downloads the Ubuntu cloud image, about 600 MB, once.
         volumes\         additional disks
 ```
 
-To move all of it — onto a bigger drive, say — set `KURUKURU_STATE_DIR` and
-restart. Everything follows it. Move the directory first; nothing is copied for
-you.
+To move all of it — onto a bigger drive, say — set `KURUKURU_STATE_DIR` as an
+environment variable and restart. Everything follows it. Move the directory
+first; nothing is copied for you.
+
+---
+
+## Changing a setting
+
+Settings are read once when Kurukuru starts. On an installed build they live in
+
+```
+%USERPROFILE%\.kurukuru\kurukuru.env
+```
+
+which does not exist until you create it. One `NAME=value` per line, using the
+variable name the **Settings** page shows against each value:
+
+```
+KURUKURU_PORT=7843
+KURUKURU_QEMU_BOOT_TIMEOUT_SECONDS=900
+```
+
+Then restart Kurukuru — **Start Menu → Restart Kurukuru**, or:
+
+```
+kurukuru restart
+```
+
+An environment variable of the same name still wins over the file, which is how
+`KURUKURU_STATE_DIR` has to be set: it decides *where this file is read from*,
+so it cannot be set inside it.
+
+**Do not set `KURUKURU_QEMU_SYSTEM_BINARY` or `KURUKURU_QEMU_IMG_BINARY` on an
+installed build.** Kurukuru ships QEMU and finds it beside its own executable.
+The workaround that named those two variables applies to **0.1.0 only**, where
+nothing pointed at the bundle; on any later build it replaces a correct answer
+with a hardcoded path. `kurukuru doctor` reports one that is still set.
 
 ---
 
@@ -130,8 +165,18 @@ Run the new installer. It installs over the old one, keeps `%USERPROFILE%\.kuruk
 untouched, re-registers the startup task against the new build, and re-runs any
 database migrations on the next start.
 
-**Stop your VMs first.** A running VM holds its disk open, and while nothing
-will be damaged, the upgrade cannot replace files that are in use.
+**Stop your VMs first.** A running VM holds its disk open. Since 0.1.2 the
+installer stops the startup task and ends any Kurukuru and QEMU processes
+before it touches a file, so an upgrade over a running install works — but a
+VM ended that way loses whatever was unsaved inside it, exactly as pulling its
+power would. If a file still cannot be replaced, the installer says so and
+changes nothing, rather than leaving a half-replaced install behind.
+
+**Per-user only.** 0.1.2 removed the "install for me / for all users" choice.
+The state directory, the token's file permissions and the logon task all assume
+one signed-in user, so all-users was an untested shape — one a real user picked,
+and got stranded on. An existing all-users install is detected, and the
+installer asks you to remove it first.
 
 Verified end to end: installing 0.1.1 over a running 0.1.0 preserved the
 account, the running instance, every database row and the VM's disk.
@@ -161,6 +206,10 @@ later reinstall picks up exactly where you left off.
 
 It also removes the startup task and the `PATH` entry.
 
+Removing the `PATH` entry is new in 0.1.2 — every earlier uninstall left one
+behind, pointing at a directory that no longer existed. If you have uninstalled
+an older build, check your user `PATH` for a stale `...\Programs\Kurukuru`.
+
 ---
 
 ## If something is wrong
@@ -171,6 +220,19 @@ kurukuru doctor
 
 reports the host: whether QEMU is usable, whether acceleration works, where
 everything lives, and how much room is left.
+
+**"Smart App Control is on and enforcing."** Windows is refusing to load
+Kurukuru's bundled QEMU because this build is not code-signed. Nothing is wrong
+with your install or your machine: Smart App Control is on by default on a
+clean Windows 11 install and blocks any program it does not recognise. Older
+builds reported this as `qemu-system-x86_64.exe --version failed (exit
+3236495362)` with no other explanation — that number is `0xC0E90002`, an
+application-control block.
+
+To use Kurukuru, turn Smart App Control off in **Windows Security → App &
+browser control → Smart App Control**. It is a machine-wide security setting
+protecting everything else you run, so it is worth a moment's thought rather
+than a reflex click.
 
 **"Port 7842 is already in use."** Something else is on it. `kurukuru serve
 --port 7843`, or set `KURUKURU_PORT`.

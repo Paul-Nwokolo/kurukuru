@@ -1383,6 +1383,12 @@ def test_ssh_key_endpoint_exposes_the_private_key_path(client):
     assert body["private_key_path"].endswith("id_ed25519")
     # The public half is what goes into the guest, and must never be the path.
     assert body["public_key"].startswith("ssh-ed25519 ")
-    assert body["ssh_user"] == "iaas"
+    # The login *new* instances get, which is this endpoint's claim — it
+    # describes the orchestrator's key, not any one VM. Per-instance logins are
+    # on the instance row (see test_vm_user_rename.py); asserting a literal
+    # here made a rename look like a key-endpoint regression.
+    from kurukuru.config import get_settings
+
+    assert body["ssh_user"] == get_settings().default_vm_user
     # Original field name retained so existing consumers keep working.
     assert body["key_path"] == body["private_key_path"]

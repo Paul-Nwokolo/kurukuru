@@ -40,6 +40,7 @@ def build_config(
     instance_name: str,
     settings: Settings | None = None,
     public_keys: list[str] | None = None,
+    vm_user: str | None = None,
 ) -> dict:
     """Build the cloud-config payload as a dict (no I/O).
 
@@ -52,6 +53,13 @@ def build_config(
     list is honoured as "no keys at all": the caller has said something
     definite, and inventing a key would make the instance reachable by someone
     who asked for it not to be.
+
+    ``vm_user`` is the login to create. The provisioning job passes the
+    instance row's own ``ssh_user``, which is what keeps the guest and the row
+    in agreement: both now come from one value decided once, instead of each
+    reading ``settings.default_vm_user`` at a different moment. Omitted, it
+    falls back to the setting, which is right for callers that have no row —
+    a bare ``render_user_data`` in a test, or a preview.
     """
     settings = settings or get_settings()
     if public_keys is None:
@@ -66,7 +74,7 @@ def build_config(
     return {
         "users": [
             {
-                "name": settings.default_vm_user,
+                "name": vm_user or settings.default_vm_user,
                 "sudo": "ALL=(ALL) NOPASSWD:ALL",
                 "shell": "/bin/bash",
                 "ssh_authorized_keys": list(public_keys),
@@ -82,6 +90,7 @@ def render_user_data(
     settings: Settings | None = None,
     public_keys: list[str] | None = None,
     custom_user_data: str | None = None,
+    vm_user: str | None = None,
 ) -> str:
     """Return the complete ``#cloud-config`` document as text (no I/O).
 
@@ -91,7 +100,9 @@ def render_user_data(
     means two callers can never provision differently.
     """
     settings = settings or get_settings()
-    config = build_config(instance_name, settings, public_keys=public_keys)
+    config = build_config(
+        instance_name, settings, public_keys=public_keys, vm_user=vm_user
+    )
     # The user's cloud-config is merged onto ours structurally, never appended
     # as text — see app.user_data. cloud-init requires the "#cloud-config"
     # header on the first line, and width is set high in there so long values
@@ -107,6 +118,7 @@ def build_cloud_init(
     settings: Settings | None = None,
     public_keys: list[str] | None = None,
     custom_user_data: str | None = None,
+    vm_user: str | None = None,
 ) -> Path:
     """Render the cloud-config for ``instance_name`` to a YAML file and return its path.
 
@@ -114,7 +126,11 @@ def build_cloud_init(
     """
     settings = settings or get_settings()
     document = render_user_data(
-        instance_name, settings, public_keys=public_keys, custom_user_data=custom_user_data
+        instance_name,
+        settings,
+        public_keys=public_keys,
+        custom_user_data=custom_user_data,
+        vm_user=vm_user,
     )
 
     target_dir = _cloud_init_dir(settings)

@@ -770,7 +770,11 @@ def _ssh_command(client: ApiClient, instance: dict, *, strict: bool = False) -> 
             "-o", "LogLevel=ERROR",  # otherwise every run prints a key warning
         ]
     command += ["-p", str(instance["ssh_port"])]
-    command.append(f"{instance.get('ssh_user', 'iaas')}@{instance['ip_address']}")
+    # The API always sends a login — it is a column now, backfilled for every
+    # pre-0.1.2 row — so the fallback is only for a response from an older
+    # backend. "iaas" is the right guess there precisely because an older
+    # backend is one that had no other default.
+    command.append(f"{instance.get('ssh_user') or 'iaas'}@{instance['ip_address']}")
     return command
 
 

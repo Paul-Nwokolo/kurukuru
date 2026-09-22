@@ -84,6 +84,37 @@ def __getattr__(name: str) -> object:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def _engine_instance() -> Engine:
+    """The engine, for use by functions **inside this module**.
+
+    PEP 562's module ``__getattr__`` above serves ``kurukuru.database.engine``
+    to importers. It does **not** serve a bare ``engine`` written inside a
+    function in this file: that compiles to a global *name* lookup, and global
+    name lookup never consults ``__getattr__``. It only worked because some
+    importer had already fetched the attribute, which cached it into
+    ``globals()`` and made the bare name resolve from then on.
+
+    So every function here that wanted the engine was quietly depending on
+    somebody else having asked for it first — true for the backend, where the
+    routers import it at startup, and false for the CLI.
+
+    **What that cost:** ``kurukuru auth init``, the first command a new user
+    runs, died with ``NameError: name 'engine' is not defined``. Its path is
+    ``host_admin._session() -> database.init_db()``, and nothing on it touches
+    the attribute, so the very first global lookup was the failing one.
+    Reproducible in a checkout and in the frozen build alike; invisible to the
+    whole suite, because every test either imports something that fetches the
+    attribute or patches it directly. Found by running the packaged build.
+
+    Reads the global first so a test's ``monkeypatch.setattr`` on
+    ``kurukuru.database.engine`` still wins, exactly as before.
+    """
+    existing = globals().get("engine")
+    if existing is not None:
+        return existing
+    return __getattr__("engine")  # type: ignore[return-value]
+
+
 @event.listens_for(Engine, "connect")
 def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # noqa: ANN001
     """Enable WAL + foreign keys for better concurrency and integrity.
@@ -127,6 +158,11 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("guest_os", "VARCHAR(8) NOT NULL DEFAULT 'LINUX'"),  # Phase 13
         ("qemu_version", "VARCHAR"),
         ("monitor_reachable", "BOOLEAN"),  # Phase 14
+        # 0.1.2. Added without a DEFAULT on purpose: the backfill below fills
+        # it, and a column default would also silently apply to any future row
+        # that forgot to set one, which is how a stored fact quietly becomes a
+        # derived one again.
+        ("ssh_user", "VARCHAR"),
     ],
     "images": [("project_id", "VARCHAR")],
     "keypairs": [("project_id", "VARCHAR")],
@@ -204,6 +240,43 @@ def _backfill_instance_sizing(connection) -> None:
             ),
             {"cpus": spec.cpus, "memory_mb": spec.memory_mb,
              "disk_gb": spec.disk_gb, "flavor": label},
+        )
+
+
+#: The default VM user for every release up to and including 0.1.1.
+#:
+#: A literal, and deliberately not ``settings.default_vm_user``: this is a
+#: historical fact about guests already on disk, not a current setting. Reading
+#: the setting here would backfill every existing row with 0.1.2's *new*
+#: default and produce exactly the breakage the column exists to prevent —
+#: the migration would have written the wrong answer into the place that is
+#: supposed to hold the right one, permanently.
+_PRE_RENAME_VM_USER = "iaas"
+
+
+def _backfill_instance_ssh_user(connection) -> None:
+    """Record the login every pre-0.1.2 instance was actually built with.
+
+    ``ssh_user`` moved from a value derived at display time to a column, so
+    that 0.1.2 could change the default from "iaas" to "kurukuru" without
+    rewriting the SSH command of every VM that already exists.
+
+    Every row that predates the column was provisioned by a build whose only
+    possible default was "iaas" — the setting existed but no release ever
+    shipped a different value — so the backfill is exact rather than a guess.
+
+    Idempotent: only ever fills nulls, so a second start writes nothing.
+    """
+    result = connection.execute(
+        text("UPDATE instances SET ssh_user = :user WHERE ssh_user IS NULL"),
+        {"user": _PRE_RENAME_VM_USER},
+    )
+    if result.rowcount:
+        logger.info(
+            "Recorded the guest login '%s' on %d existing instance(s); their "
+            "SSH commands are unchanged by the new default.",
+            _PRE_RENAME_VM_USER,
+            result.rowcount,
         )
 
 
@@ -518,6 +591,7 @@ def _apply_additive_migrations() -> None:
     A full migration tool is overkill for a single-file SQLite database; adding
     columns and redefining indexes covers every change so far.
     """
+    engine = _engine_instance()
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
 
@@ -555,6 +629,7 @@ def _apply_additive_migrations() -> None:
                 connection.execute(text(ddl))
 
         _backfill_instance_sizing(connection)
+        _backfill_instance_ssh_user(connection)
         # After the columns exist, and inside the same transaction, so a
         # half-migrated database is never visible.
         _seed_default_project(connection)
@@ -722,6 +797,7 @@ def init_db() -> None:
     # It raises rather than returning on the one case it cannot handle (running
     # VMs), and that exception is allowed to reach the lifespan. See
     # kurukuru.state_migration.StateMigrationBlocked for why not starting is right.
+    engine = _engine_instance()
     migrate_state_dir(get_settings(), engine)
 
     # Then the directory, then the older CWD-relative relocation — which still
@@ -737,5 +813,5 @@ def init_db() -> None:
 
 def get_session() -> Generator[Session, None, None]:
     """FastAPI dependency yielding a per-request session."""
-    with Session(engine) as session:
+    with Session(_engine_instance()) as session:
         yield session

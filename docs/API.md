@@ -82,9 +82,25 @@ the two are not the same.
     "path": "C:\\Users\\you\\.kurukuru\\qemu\\instances",
     "exists": true, "writable": true, "free_bytes": 39504084992
   },
-  "ssh_key": {"present": true, "private_key_path": "...", "error": null}
+  "ssh_key": {"present": true, "private_key_path": "...", "error": null},
+  "smart_app_control": {"state": "off", "detail": "Smart App Control is off.", "raw": 0},
+  "qemu_overrides": {}
 }
 ```
+
+`smart_app_control` is Windows' application-control state, and it is here
+because nothing else in the product could tell "the engine is broken" apart
+from "Windows will not let the engine run". `state` is one of `off`,
+`enforced`, `evaluation`, `unsupported` (not Windows, or a build without the
+feature) or `unknown` (the key would not read — distinct from `off`, because
+guessing `off` would rule out the very thing being asked about). A fact, like
+everything else here: `doctor` supplies the verdict.
+
+`qemu_overrides` lists any QEMU binary in use that is *not* the one this build
+would resolve for itself, with what it would otherwise have used and whether
+the override actually exists. Empty on a normal install. It is populated by
+comparing the effective setting against the bundled default rather than by
+reading the environment, so a value set in a config file is caught too.
 
 Facts, not verdicts: no pass/fail and no remedies, so each client applies its own
 idea of healthy. It always answers — a broken engine becomes
@@ -164,7 +180,7 @@ The orchestrator's keypair. Only the *public* key contents are returned;
 ```json
 {"public_key": "ssh-ed25519 AAAA... kurukuru-orchestrator",
  "private_key_path": "C:\\Users\\you\\.kurukuru\\keys\\id_ed25519",
- "key_path": "...", "ssh_user": "iaas"}
+ "key_path": "...", "ssh_user": "kurukuru"}
 ```
 
 `key_path` is a deprecated alias for `private_key_path`. The keypair is
@@ -251,7 +267,7 @@ Query: `include_terminated` (bool, default `false`).
   "console_supported": true,
   "console_caveat": "Guests that stay in VGA text mode…",
   "degraded": false, "degraded_reason": null,
-  "error_message": null, "ssh_user": "iaas",
+  "error_message": null, "ssh_user": "kurukuru",
   "created_at": "…", "updated_at": "…"
 }
 ```
@@ -940,8 +956,12 @@ $r | Select-Object status, ip_address, ssh_port, ssh_user
 Then SSH in — note the key and the port:
 
 ```
-ssh -i "$HOME\.kurukuru\keys\id_ed25519" -p <ssh_port> iaas@127.0.0.1
+ssh -i "$HOME\.kurukuru\keys\id_ed25519" -p <ssh_port> <ssh_user>@127.0.0.1
 ```
+
+`ssh_user` is on the instance, not a global: it is the login that instance's
+guest was actually built with. New instances get `kurukuru`; anything created
+before 0.1.2 keeps `iaas`, which is what its `/etc/passwd` holds.
 
 ### Launch with custom sizing
 

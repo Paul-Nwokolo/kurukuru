@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 
-from pydantic import computed_field, field_validator
+from pydantic import computed_field, field_validator, model_validator
 from sqlmodel import Field, SQLModel
 
 # Multipass instance-name constraint (also a sane hostname rule):
@@ -1166,6 +1166,21 @@ class Instance(InstanceBase, table=True):
     #: and its reachability. Names stay globally unique regardless of project
     #: (DECISIONS #20).
     project_id: str | None = Field(default=None, index=True)
+    #: The login this guest was actually built with.
+    #:
+    #: Stored, not derived, and that is the entire point. This used to be read
+    #: from ``settings.default_vm_user`` at *display* time, which meant the
+    #: "Copy SSH" command for every existing instance was a live reflection of
+    #: a setting rather than a fact about the VM. Changing the default — which
+    #: 0.1.2 does, from "iaas" to "kurukuru" — would have rewritten the command
+    #: for every VM already on disk into a username its guest has never heard
+    #: of, failing as "Permission denied (publickey)" and looking like a broken
+    #: key rather than a wrong user.
+    #:
+    #: Null only on rows that predate the column; the migration backfills those
+    #: to "iaas", which is correct for all of them because it is the only
+    #: default that has ever shipped.
+    ssh_user: str | None = Field(default=None)
 
 
 class InstanceCreate(InstanceBase):
@@ -1344,6 +1359,28 @@ class InstanceRead(InstanceBase):
     #: Read by `degraded` below, so it has to travel on the response schema
     #: as well as the table.
     monitor_reachable: bool | None = None
+    #: The guest's login. Declared optional to match the column, and then
+    #: filled in below so the response is always a string — every client
+    #: builds an ssh command out of it, and a null there is a command that
+    #: cannot be pasted.
+    ssh_user: str | None = None
+
+    @model_validator(mode="after")
+    def _default_ssh_user(self) -> InstanceRead:
+        """Fall back to the configured default for rows that carry no user.
+
+        Belt and braces: the migration backfills every pre-existing row and
+        every new row is written with one, so this should never fire in
+        practice. It exists because the alternative when it *does* fire is a
+        "Copy SSH" button that produces ``ssh -p 2200 None@127.0.0.1``, and a
+        row with no recorded user is far better served by this build's current
+        default than by that.
+        """
+        if not self.ssh_user:
+            from kurukuru.config import get_settings
+
+            object.__setattr__(self, "ssh_user", get_settings().default_vm_user)
+        return self
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -1420,14 +1457,6 @@ class InstanceRead(InstanceBase):
 
         return QemuEngine.console_caveat(self.accel, self.display)
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def ssh_user(self) -> str:
-        """Default VM login user (from settings) — derived, never stored per-row."""
-        # Imported lazily to avoid a config <-> models import cycle at load time.
-        from kurukuru.config import get_settings
-
-        return get_settings().default_vm_user
 
 # --------------------------------------------------------------------------- #
 # Authentication (Phase 15)

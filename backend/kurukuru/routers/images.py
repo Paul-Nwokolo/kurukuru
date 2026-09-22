@@ -86,25 +86,72 @@ def ensure_builtin_image(settings: Settings | None = None) -> None:
                 status=ImageStatus.IMPORTING,
             )
 
-        if not path.exists():
-            # Downloaded lazily on first QEMU launch; leave it pending.
-            image.status = ImageStatus.IMPORTING
-            image.error_message = "Base image not downloaded yet"
-        else:
-            try:
-                probe = probe_image(path, settings)
-                image.format = probe.format
-                image.virtual_size_bytes = probe.virtual_size_bytes
-                image.actual_size_bytes = probe.actual_size_bytes
-                image.status = ImageStatus.AVAILABLE
-                image.error_message = None
-            except ImageError as exc:
-                image.status = ImageStatus.ERROR
-                image.error_message = str(exc)
+        _apply_builtin_state(image, path, settings)
 
         session.add(image)
         session.commit()
         logger.info("Built-in image registered: %s (%s)", image.name, image.status.value)
+
+
+def _apply_builtin_state(image: Image, path: Path, settings: Settings) -> None:
+    """Bring the built-in row into line with whether its file is on disk yet."""
+    if not path.exists():
+        # Downloaded lazily on first QEMU launch; leave it pending.
+        image.status = ImageStatus.IMPORTING
+        image.error_message = "Base image not downloaded yet"
+        return
+    try:
+        probe = probe_image(path, settings)
+        image.format = probe.format
+        image.virtual_size_bytes = probe.virtual_size_bytes
+        image.actual_size_bytes = probe.actual_size_bytes
+        image.status = ImageStatus.AVAILABLE
+        image.error_message = None
+    except ImageError as exc:
+        image.status = ImageStatus.ERROR
+        image.error_message = str(exc)
+
+
+def sync_builtin_image(settings: Settings | None = None) -> None:
+    """Catch the built-in row up after something else downloaded its file.
+
+    The built-in image is the one row in the catalog whose file this router
+    does not fetch. The *engine* does, lazily, inside ``provision_instance``
+    — so the first launch on a fresh install downloads 600 MB and the Images
+    page goes on saying "Importing", with no virtual size, until the backend
+    happens to restart and ``ensure_builtin_image`` re-probes. A user reported
+    exactly that: the file at full size on disk, an instance running off it,
+    and a row that still looked mid-import.
+
+    Called after a launch, so the download and the row that describes it are
+    settled by the same operation.
+
+    Cheap in the common case and free in the usual one: a row already
+    ``Available`` returns without touching the disk, which is every launch
+    after the first. Never raises — a stale catalog row must not fail a VM
+    that has already booted.
+    """
+    settings = settings or get_settings()
+    try:
+        with Session(db_engine) as session:
+            image = session.exec(
+                select(Image).where(Image.source == ImageSource.BUILTIN)
+            ).first()
+            if image is None or image.status is ImageStatus.AVAILABLE:
+                return
+            path = base_image_path(settings)
+            if not path.exists():
+                return
+            _apply_builtin_state(image, path, settings)
+            session.add(image)
+            session.commit()
+            logger.info(
+                "Built-in image is now %s (%s)",
+                image.status.value,
+                f"{(image.virtual_size_bytes or 0) / 1024**3:.1f} GB virtual",
+            )
+    except Exception:  # noqa: BLE001 - a catalog update must not fail a launch
+        logger.exception("Could not refresh the built-in image row")
 
 
 def _import_job(image_id: str, source_path: str) -> None:

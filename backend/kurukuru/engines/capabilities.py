@@ -43,6 +43,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from kurukuru.config import Settings
+from kurukuru.win_status import describe_exit_code
 
 logger = logging.getLogger("kurukuru.qemu.capabilities")
 
@@ -171,7 +172,13 @@ def _probe(binary: str, args: list[str], timeout: int) -> tuple[int, str]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return -1, str(exc)
-    return completed.returncode, f"{completed.stdout}\n{completed.stderr}".strip()
+    output = f"{completed.stdout}\n{completed.stderr}".strip()
+    if completed.returncode != 0 and not output:
+        # A process Windows refused to load writes nothing at all, so the exit
+        # code is the only evidence there is. Turned into a sentence here
+        # rather than left as a number the caller would report verbatim.
+        output = f"exit {completed.returncode}{describe_exit_code(completed.returncode)}"
+    return completed.returncode, output
 
 
 def _tpm_capability(binary: str, timeout: int) -> Capability:

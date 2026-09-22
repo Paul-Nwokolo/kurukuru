@@ -11,6 +11,214 @@ Design decisions behind these changes are recorded in
 [docs/DECISIONS.md](docs/DECISIONS.md), and what is planned next is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
+## [0.1.2] — 2026-09-22
+
+> [!IMPORTANT]
+> **Smart App Control still blocks Kurukuru. This release explains the block;
+> it does not lift it.**
+>
+> Nothing here is code-signed, so on a clean Windows 11 machine with Smart App
+> Control enabled — the default — Windows still refuses to load the bundled
+> QEMU, and Kurukuru still will not run. What 0.1.2 changes is that it now says
+> so: `kurukuru doctor` reads Smart App Control's state and names it as the
+> cause, and the status code is reported in hex with a plain sentence instead
+> of as a bare decimal.
+>
+> The only way to use Kurukuru on such a machine today is to turn Smart App
+> Control off (Windows Security → App & browser control), which is a
+> machine-wide security setting worth weighing rather than clicking through.
+> Code signing is the real fix and is not done yet — see
+> [DECISIONS.md #62](docs/DECISIONS.md) for the measurements and the route.
+
+Everything here came from two external installs. Nothing in it was found on
+the development machine, and most of it could not have been: the failures are
+properties of a *fresh* Windows 11 machine, of an install shape nobody tested,
+and of an offline moment nobody staged.
+
+### Fixed
+
+- **Smart App Control blocks the bundled QEMU, and nothing said so.** On a
+  clean Windows 11 install, Smart App Control is on by default and refuses any
+  program it does not recognise. Kurukuru is not code-signed, so it refuses
+  Kurukuru — and all the user saw was an engine reporting unavailable and
+
+  ```
+  qemu-system-x86_64.exe --version failed (exit 3236495362)
+  ```
+
+  That number is a signed NTSTATUS in decimal, so it does not read as a status
+  code at all. It is `0xC0E90002`, `STATUS_SYSTEM_INTEGRITY_POLICY_VIOLATION`
+  — Windows' own message for it is "An Application Control policy has blocked
+  this file". The user took the decimal to an AI assistant, which converted it
+  wrongly and told them to add QEMU to `PATH`: a fix for a problem they did not
+  have, on an install whose path resolution was already correct.
+
+  Windows status codes are now reported in hex, with their name and a plain
+  sentence about what to do. `kurukuru doctor` reads Smart App Control's state
+  and says plainly when it is what is blocking Kurukuru — and, when it is off
+  but something still blocked QEMU, says that too, because `0xC0E90002` is also
+  what an enterprise policy returns and that one is the administrator's to lift.
+
+- **A launch that failed before reaching the hypervisor had its cause
+  overwritten.** Offline, a launch correctly reported that the base image could
+  not be downloaded. A minute later the reconciler replaced that with "VM no
+  longer exists on the hypervisor" — not merely less useful but false, since
+  that VM never existed. A row already in `Error` now keeps the cause it
+  recorded; absence is only news for a row that was previously healthy.
+
+- **The offline download failure now leads in plain language.** "Couldn't
+  download the Ubuntu base image — check your internet connection", followed by
+  the way out (Images → Add image, for a machine with no internet), followed by
+  the raw error, which is kept because a bug report needs it. An HTTP error is
+  no longer described as a connection problem.
+
+- **The built-in image stayed on "Importing" forever.** Its file is downloaded
+  by the *engine*, during a launch, so nothing in the images router ever learned
+  it had arrived: the Images page went on showing "Importing" with no virtual
+  size while the file sat on disk at full size with an instance running off it.
+  The row is now brought up to date after a launch.
+
+- **An unattended uninstall hung forever, or risked deleting your VMs.**
+  `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES` does *not* auto-answer the
+  "also delete your virtual machines?" prompt — measured, not assumed: the
+  dialog appears and waits for a human who by definition is not there, so a
+  deployment script or MDM push blocks indefinitely. An unattended uninstall
+  now keeps the state directory without asking and records that in the log.
+  Whatever a suppressed message box would have returned, nobody's VMs should
+  be removed by a run that was told not to ask questions.
+
+- **Uninstall and upgrade hit blocked files.** The backend runs as a logon
+  task, so on any machine where Kurukuru has been used it is *running* when its
+  own installer starts. The installer and the uninstaller now stop the task and
+  end any Kurukuru and QEMU processes before touching a file, and a file that
+  still cannot be replaced produces a clear message and no changes at all,
+  rather than a partial install that will neither start nor uninstall.
+
+- **Uninstall left a dead `PATH` entry.** Inno appends to `PATH` and has no
+  matching removal, so every uninstall since 0.1.0 left an entry pointing at a
+  directory that no longer existed — while the docs claimed it was removed. It
+  is now removed. Found while verifying the fix above, by noticing that two
+  test installs had accumulated two dead entries.
+
+- **The dashboard's "task is running?" hint named a task that has never
+  existed** (`KurukuruBackend`; it is `Kurukuru`).
+
+- **`kurukuru auth init` crashed with `NameError: name 'engine' is not
+  defined`.** It worked until **`f352a35` ("Stop reading settings at import,
+  and stop letting failures pass as successes", 8 Sep 2026)**, which replaced
+  `database.py`'s module-level `engine = create_engine(...)` with a lazy PEP
+  562 `__getattr__`. That commit shipped in **0.1.0 and 0.1.1**, so the first
+  command a new user runs has been broken in both.
+
+  `__getattr__` serves `kurukuru.database.engine` to *importers*. It does not
+  serve a bare `engine` written inside a function in that same file: that is a
+  global name lookup, and global lookup never consults `__getattr__`. It
+  worked wherever some importer had already fetched the attribute, which
+  caches it into the module's globals — always true in the backend, where the
+  routers fetch it at startup, and never true on the CLI's `auth init` path.
+
+  Verified by running the same code path either side of that commit: its
+  parent answers `account_exists() -> False`, the commit itself raises. The
+  whole suite was blind to it, because every test imports a router or patches
+  the engine directly, so the new test runs in a subprocess that has imported
+  nothing else.
+
+- **The test suite failed on a machine that had never run Kurukuru.** The test
+  that proves the isolation guard works has to create `~/.kurukuru/keys` so it
+  has somewhere to plant a deliberate leak. `mkdir(parents=True)` also creates
+  `~/.kurukuru`, and the cleanup removed only the leaf — so the state root
+  appeared once and stayed, drifting the fingerprint that same guard compares
+  and blaming whichever unrelated test happened to straddle it. Scattered
+  teardown errors in the CLI and event suites, reproducible only in a full run
+  and only where no real install exists, which is every fresh clone and CI.
+  Found while verifying this release, by deleting the directory.
+
+### Changed
+
+- **The default VM user is now `kurukuru`, not `iaas`** — the pre-rename name.
+  Done in the order that makes it invisible: the login is now recorded on the
+  instance row, every existing row is backfilled with `iaas` (correct for all of
+  them, since no release ever shipped another default), cloud-init is fed the
+  row's user so the guest and the row agree by construction, and only then does
+  the default move. **An instance created before 0.1.2 reports `iaas` and its
+  "Copy SSH" command is byte-for-byte what it was.** A clone inherits its
+  source's login, because its disk carries the source's accounts.
+
+- **The installer is per-user only.** The "install for me / for all users"
+  choice is gone. The state directory, the token's file permissions and the
+  logon task all assume one signed-in user, so all-users was an untested shape
+  — one a real user picked and got stranded on. An existing all-users install
+  is detected and the installer asks for it to be removed first.
+
+- **Settings now says where configuration lives on the build you are running.**
+  It used to say "put it in `backend/.env`" and "restart the backend", neither
+  of which names anything that exists on an installed machine. An installed
+  build reads `%USERPROFILE%\.kurukuru\kurukuru.env`, and the screen says so.
+
+- **A blank `KURUKURU_QEMU_*_BINARY` is now treated as unset**, rather than as
+  a binary whose name is the empty string — which is what it used to become,
+  breaking resolution completely. This matters because clearing these is
+  advice *this project gave*: the obvious spelling, `setx VAR ""`, is rejected
+  by Windows as invalid syntax and **leaves the old value untouched**, so
+  somebody can follow the instructions, see nothing that reads as an error,
+  and still be overridden. The documented way to remove one is now
+  `[Environment]::SetEnvironmentVariable("VAR", $null, "User")`.
+
+- **`kurukuru doctor` warns when `KURUKURU_QEMU_SYSTEM_BINARY` or
+  `KURUKURU_QEMU_IMG_BINARY` is set**, because an override replaces the
+  bundled-QEMU resolution. The 0.1.0 release note told people to set exactly
+  these; that workaround is for **0.1.0 only** and on a later build replaces a
+  correct answer with a hardcoded path — on an all-users install, with one that
+  did not exist. The docs now say so where the workaround appears.
+
+### Added
+
+- **`kurukuru restart`**, and a **Restart Kurukuru** Start Menu entry. Settings
+  are read once at startup; an installed user had no terminal, no visible
+  process, and no answer but signing out and back in. This is the second user
+  who needed one.
+
+- **A configuration file for installed builds**, at
+  `%USERPROFILE%\.kurukuru\kurukuru.env`. Environment variables still win over
+  it, which is how `KURUKURU_STATE_DIR` has to be set — it decides where the
+  file is read from, so it cannot be set inside it.
+
+### Performance
+
+Two probes were being paid for far more often than necessary. Measured on the
+reference Windows host, against the bundled QEMU 11.1.0:
+
+| | before | after |
+|---|---|---|
+| `is_available()`, repeated | ~110 ms and 2 processes **per call** | 2 processes per 5 s window; 200 calls in 0.02 ms |
+| acceleration probe, per backend start | 6.13 s | 0.10 s once measured |
+| **installed build, start to a healthy `/health`** | **11.15 s** | **1.78 s** |
+
+The last row is the one a user feels, measured on this machine's own installed
+0.1.2 by deleting the cache and starting the shipped executable.
+
+The engine availability check was reached by five endpoints, several of them
+polled, and a user's log showed `qemu-system-x86_64 --version` starting several
+times a second with the dashboard open. It is now cached for five seconds —
+short enough that a user who has just fixed the cause sees the engine recover
+without restarting anything.
+
+The acceleration probe was 6.13 s of an 8.4 s cold start, and the reason is its
+shape: QEMU started with `-S` never exits, so the *timeout* is the success
+signal. A working accelerator is the slow answer and a broken one is instant,
+so **only a success is cached** — keyed on the binary's identity and version,
+cleared when a launch fails, and expiring on its own after two weeks. A host
+that gains an accelerator still speeds up by itself, with no cache to find.
+
+And it was being paid more than once per start. Both memos were plain
+read-modify-writes, and the endpoints that reach them are polled by the browser
+and read by the reconciler's thread — so a single start on a real install
+logged **three** "whpx operational" lines: three six-second QEMU processes
+racing through the same probe, each finding the on-disk cache empty because
+none had finished writing it. Both are now behind a lock, so the first caller
+measures and the rest wait for its answer. Caught by reading the log of the
+installed build, not by a test.
+
 ## [0.1.1] — 2026-09-10
 
 ### Fixed

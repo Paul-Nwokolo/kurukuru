@@ -255,25 +255,168 @@ def _support_checks(support: object) -> list[Check]:
     return checks
 
 
+def _application_control_checks(data: dict, *, engine_ok: bool) -> list[Check]:
+    """Whether Windows will let this install run its own bundled programs.
+
+    The check that did not exist when it was needed. On a fresh Windows 11
+    machine Smart App Control is on by default and refuses anything it does
+    not recognise; Kurukuru is not code-signed, so it refuses Kurukuru. What
+    the user saw was an engine that reported unavailable with a working QEMU
+    sitting beside it, and a status code in the billions.
+
+    The verdict depends on whether the engine actually got blocked, because
+    the same state means two different things. Enforcing *and* the engine is
+    down is the diagnosis. Enforcing while everything works means this install
+    has been allowed through — worth knowing before the next upgrade replaces
+    the files it was allowed on, but not a fault today.
+    """
+    sac = data.get("smart_app_control") or {}
+    state = str(sac.get("state") or "unknown")
+    detail = str(sac.get("detail") or "")
+
+    if state in ("unsupported", "off"):
+        # Nothing to say when the feature is absent or off — except when
+        # something clearly blocked the engine anyway, in which case the
+        # useful fact is that it was *not* Smart App Control.
+        if state == "off" and not engine_ok:
+            return [
+                Check(
+                    "Application control",
+                    PASS,
+                    "Smart App Control is off",
+                    "So it is not what stopped QEMU. If QEMU failed with a "
+                    "0xC0E90002 status, this machine has some other "
+                    "application-control policy — on a work machine that is "
+                    "managed by your IT administrator, who has to allow it.",
+                )
+            ]
+        return []
+
+    if state == "unknown":
+        return [
+            Check(
+                "Application control",
+                WARN,
+                detail or "Smart App Control's state could not be read",
+                "Not a fault in itself. It matters only if Kurukuru or QEMU "
+                "will not start, which this cannot now rule in or out.",
+            )
+        ]
+
+    if state == "enforced":
+        return [
+            Check(
+                "Application control",
+                FAIL if not engine_ok else WARN,
+                detail,
+                (
+                    "This is why QEMU will not run. Kurukuru's build is not "
+                    "code-signed, so Smart App Control refuses to load it — "
+                    "nothing is wrong with your install or your QEMU. To use "
+                    "Kurukuru, turn Smart App Control off in Windows Security "
+                    "-> App & browser control -> Smart App Control. That is a "
+                    "machine-wide security setting protecting everything else "
+                    "you run, so weigh it rather than just clicking through."
+                    if not engine_ok
+                    else "Kurukuru is running, so this install has been let "
+                    "through. Worth knowing before an upgrade: new files have "
+                    "to earn that again, and a future release may be blocked "
+                    "where this one was not."
+                ),
+            )
+        ]
+
+    # Evaluation mode: blocking nothing yet, may start.
+    return [
+        Check(
+            "Application control",
+            WARN,
+            detail,
+            "Nothing to do today. If Kurukuru stops working after a Windows "
+            "update, this is the first thing to re-check.",
+        )
+    ]
+
+
+def _override_checks(data: dict) -> list[Check]:
+    """Whether someone has pointed this install at a QEMU by hand.
+
+    Kurukuru bundles QEMU and resolves it beside its own executable, so an
+    override is almost always a leftover. The 0.1.0 release note told people
+    to set these two variables to work around the bug where nothing pointed at
+    the bundle — advice that was right for 0.1.0 and has been actively harmful
+    since 0.1.1, which resolves the bundle correctly on its own. Left in place
+    it replaces a working answer with a hardcoded path that an upgrade, a move
+    or a different install shape can invalidate.
+    """
+    overrides = data.get("qemu_overrides") or {}
+    if not isinstance(overrides, dict) or not overrides:
+        return []
+
+    checks: list[Check] = []
+    for env, info in overrides.items():
+        if not isinstance(info, dict):
+            continue
+        in_use = str(info.get("in_use") or "?")
+        would_be = str(info.get("would_be") or "?")
+        exists = bool(info.get("exists"))
+        checks.append(
+            Check(
+                "QEMU override",
+                FAIL if not exists else WARN,
+                f"{env} points at {in_use}"
+                + ("" if exists else " — and there is no file there"),
+                # Not `setx VAR ""`. Windows rejects that as invalid syntax and
+                # leaves the old value completely untouched, so somebody can
+                # follow the instruction, see nothing they read as an error,
+                # and still be overridden. This project's own 0.1.0 release
+                # note gave that advice.
+                f"Kurukuru would otherwise use {would_be}. If you set this to "
+                f"work around the 0.1.0 bundled-QEMU bug, that workaround is "
+                f"for 0.1.0 only and should be removed: this build finds its "
+                f"own QEMU. Remove it in PowerShell with\n"
+                f"       [Environment]::SetEnvironmentVariable(\"{env}\", $null, \"User\")\n"
+                f"     then sign out and back in, so the startup task stops "
+                f"inheriting it.",
+            )
+        )
+    return checks
+
+
 def _backend_checks(client: ApiClient) -> list[Check]:
     """Everything only the backend's host can answer."""
     try:
         data = client.diagnostics()
     except CliError as exc:
+        # Two very different causes wear the same failure here, and the old
+        # remedy named only the rarer one — so a user who had simply not
+        # signed in was told their install was out of date and to reinstall
+        # it. Told apart by the exit code rather than by reading the message:
+        # 401 has a code of its own precisely so callers need not match on
+        # prose, and `doctor` should be the last place that does.
+        unauthenticated = exc.code is ExitCode.UNAUTHENTICATED
         return [
             Check(
                 "Diagnostics",
                 FAIL,
                 exc.message,
-                "The backend answered /health but not /diagnostics — it is "
-                "probably an older build. Reinstall it from this checkout.",
+                f"Sign in first: '{CLI_NAME} auth login'."
+                if unauthenticated
+                else "The backend answered /health but not /diagnostics — it "
+                "is probably an older build than this CLI. Upgrade it.",
             )
         ]
 
     checks: list[Check] = []
     engine = data.get("engine") or {}
+    engine_ok = bool(engine.get("available") and engine.get("version"))
 
-    if engine.get("available") and engine.get("version"):
+    # Before QEMU, because it explains QEMU. An enforcing Smart App Control is
+    # the reason the engine is unavailable, not a separate finding, and a
+    # reader who meets "install QEMU" first will act on that instead.
+    checks.extend(_application_control_checks(data, engine_ok=engine_ok))
+
+    if engine_ok:
         checks.append(Check("QEMU", PASS, str(engine["version"])))
         checks.extend(_support_checks(engine.get("support")))
     else:
@@ -282,12 +425,19 @@ def _backend_checks(client: ApiClient) -> list[Check]:
                 "QEMU",
                 FAIL,
                 str(engine.get("error") or "qemu-system-x86_64 could not be run"),
-                "Install QEMU and make sure qemu-system-x86_64 and qemu-img are on "
-                "the backend's PATH, then restart it. On Windows the installer does "
-                "not add them: set KURUKURU_QEMU_SYSTEM_BINARY and KURUKURU_QEMU_IMG_BINARY "
-                "to their full paths instead.",
+                # The installed build bundles QEMU and finds it for itself, so
+                # "install QEMU" is advice for a checkout, not for the audience
+                # most likely to be reading this. Both are named, in the order
+                # that matches who hits it.
+                "On an installed build QEMU ships with Kurukuru and is found "
+                "automatically — if this fails there, the check above is the "
+                "usual reason, and reinstalling is the fix for a damaged "
+                "bundle. Running from a checkout, install QEMU and put "
+                "qemu-system-x86_64 and qemu-img on the backend's PATH.",
             )
         )
+
+    checks.extend(_override_checks(data))
 
     if engine.get("accel_available"):
         checks.append(Check("Accelerator", PASS, str(engine.get("accel"))))

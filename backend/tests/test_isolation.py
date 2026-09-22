@@ -25,6 +25,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -248,6 +249,45 @@ def _run_pytest(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
     )
 
 
+@contextmanager
+def _borrowed_keys_dir():
+    """Make ``REAL_STATE_DIR / "keys"`` exist, and leave the tree as found.
+
+    Two tests below have to write into the real state tree to prove the guard
+    notices — and on a machine that has never run Kurukuru, neither that
+    directory *nor its parent* exists. ``mkdir(parents=True)`` quietly creates
+    both, and the cleanup here used to remove only the leaf.
+
+    The parent left behind is not harmless, and it produced a failure that
+    looked like anything but this one: the state root is part of the
+    fingerprint :func:`conftest.no_real_state_writes` compares, so a run that
+    created it once drifted that fingerprint exactly once, and blamed whatever
+    unrelated test happened to straddle the change. Scattered teardown errors
+    in the CLI and event suites, reproducible only in a full run, and only on
+    a machine with no real install — a developer's own machine always had the
+    directory already, which is why this survived.
+
+    So every directory this creates is recorded and removed in reverse, and
+    only the ones that were not there to begin with.
+    """
+    created: list[Path] = []
+    directory = REAL_STATE_DIR / "keys"
+    for candidate in (REAL_STATE_DIR, directory):
+        if not candidate.exists():
+            created.append(candidate)
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        yield directory
+    finally:
+        for candidate in reversed(created):
+            try:
+                candidate.rmdir()
+            except OSError:
+                # Something else put a file in it, which is worth leaving
+                # alone and is not this fixture's business to resolve.
+                pass
+
+
 @pytest.mark.real_state
 def test_a_test_that_writes_to_the_real_state_fails_the_run(tmp_path):
     """The whole point, end to end.
@@ -263,31 +303,26 @@ def test_a_test_that_writes_to_the_real_state_fails_the_run(tmp_path):
     The generated subprocess test itself is not marked: it is what the guard
     has to catch, running under its own, separate, non-exempt pytest process.
     """
-    keys_dir = REAL_STATE_DIR / "keys"
-    pre_existing = keys_dir.exists()
-    keys_dir.mkdir(parents=True, exist_ok=True)
+    with _borrowed_keys_dir() as keys_dir:
+        result = _run_pytest(
+            tmp_path,
+            f"""
+            from pathlib import Path
 
-    result = _run_pytest(
-        tmp_path,
-        f"""
-        from pathlib import Path
+            def test_leaks():
+                stray = Path({str(REAL_STATE_DIR / "keys")!r}) / "leaked-by-test.tmp"
+                stray.write_text("this should fail the run")
+                # Deliberately not cleaned up: the guard is what must notice.
+            """,
+        )
 
-        def test_leaks():
-            stray = Path({str(REAL_STATE_DIR / "keys")!r}) / "leaked-by-test.tmp"
-            stray.write_text("this should fail the run")
-            # Deliberately not cleaned up: the guard is what must notice.
-        """,
-    )
-
-    stray = keys_dir / "leaked-by-test.tmp"
-    try:
-        assert result.returncode != 0, result.stdout
-        assert "wrote to the real install" in result.stdout
-        assert "test_leaks" in result.stdout
-    finally:
-        stray.unlink(missing_ok=True)
-        if not pre_existing:
-            keys_dir.rmdir()
+        stray = keys_dir / "leaked-by-test.tmp"
+        try:
+            assert result.returncode != 0, result.stdout
+            assert "wrote to the real install" in result.stdout
+            assert "test_leaks" in result.stdout
+        finally:
+            stray.unlink(missing_ok=True)
 
 
 def test_an_ordinary_test_passes_under_the_same_harness(tmp_path):
@@ -313,11 +348,7 @@ def test_the_real_state_marker_opts_out(tmp_path):
     filesystem, so this outer test has to guarantee the directory it writes
     into actually exists first.
     """
-    keys_dir = REAL_STATE_DIR / "keys"
-    pre_existing = keys_dir.exists()
-    keys_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
+    with _borrowed_keys_dir():
         result = _run_pytest(
             tmp_path,
             f"""
@@ -333,6 +364,3 @@ def test_the_real_state_marker_opts_out(tmp_path):
         )
 
         assert result.returncode == 0, result.stdout
-    finally:
-        if not pre_existing:
-            keys_dir.rmdir()

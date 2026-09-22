@@ -17,8 +17,8 @@ export function IsosTable() {
   const { data: isos, isLoading } = useIsos()
   const { data: settings } = useSettings()
 
-  const isoDir = settings
-    ?.find((g) => g.name === 'Paths')
+  const isoDir = settings?.groups
+    .find((g) => g.name === 'Paths')
     ?.settings.find((s) => s.key === 'iso_dir')?.value
 
   return (

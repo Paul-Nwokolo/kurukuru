@@ -880,7 +880,13 @@ def test_engine_seed_matches_the_generated_cloud_init(eng, tmp_path: Path, monke
 
     assert read_seed_file(eng._dir("web") / "seed.iso", "user-data") == document
     assert document.startswith("#cloud-config\n")
-    assert "iaas" in document and "ssh_authorized_keys" in document
+    # The *configured* default, not a literal. This asserted "iaas" until
+    # 0.1.2 renamed it, which made a test about "the seed carries our login"
+    # fail for a reason that had nothing to do with seeds.
+    from kurukuru.config import get_settings
+
+    assert get_settings().default_vm_user in document
+    assert "ssh_authorized_keys" in document
 
 
 # --------------------------------------------------------------------------- #

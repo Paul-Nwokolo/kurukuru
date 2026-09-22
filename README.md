@@ -347,8 +347,12 @@ Three things worth knowing about how `.env` is read:
    a complete command including `-i` and the orchestrator's private key:
 
    ```
-   ssh -i "C:\Users\you\.kurukuru\keys\id_ed25519" -p 2200 iaas@127.0.0.1
+   ssh -i "C:\Users\you\.kurukuru\keys\id_ed25519" -p 2200 kurukuru@127.0.0.1
    ```
+
+   <sub>Instances created before 0.1.2 use `iaas@`, which is the user their
+   guests actually have. Copy SSH gives each instance its own, so it is always
+   the right one.</sub>
 
    Paste it into any terminal. QEMU guests are reached through a loopback port
    forward, which is why the port is part of the address.
@@ -366,7 +370,25 @@ Each of these is a failure that actually happened during development.
 
 ### `HypervisorUnavailableError` / "QEMU binary not found"
 
-`qemu-system-x86_64` is not on `PATH`. Either add it, or point at it directly:
+**On an installed build, do not set these variables.** Kurukuru bundles QEMU
+and finds it beside its own executable; an override replaces a resolution that
+is already right. If you set `KURUKURU_QEMU_SYSTEM_BINARY` to work around the
+0.1.0 bug where nothing pointed at the bundle, **that workaround is for 0.1.0
+only** — clear it and let 0.1.1 and later resolve for themselves:
+
+```powershell
+[Environment]::SetEnvironmentVariable("KURUKURU_QEMU_SYSTEM_BINARY", $null, "User")
+[Environment]::SetEnvironmentVariable("KURUKURU_QEMU_IMG_BINARY",    $null, "User")
+```
+
+(Not `setx VAR ""` — Windows rejects that as invalid syntax and leaves the
+old value in place, so it looks like it worked and changes nothing.)
+
+then sign out and back in, so the startup task stops inheriting them.
+`kurukuru doctor` reports an override that is still in place.
+
+**Running from a checkout**, `qemu-system-x86_64` is not on `PATH`. Either add
+it, or point at it directly:
 
 ```powershell
 $env:KURUKURU_QEMU_SYSTEM_BINARY = "C:\Program Files\qemu\qemu-system-x86_64.exe"
@@ -375,6 +397,14 @@ $env:KURUKURU_QEMU_IMG_BINARY    = "C:\Program Files\qemu\qemu-img.exe"
 
 `GET /health` reports the engine's own view, including the detected version —
 check there first.
+
+### The engine is unavailable and QEMU printed nothing
+
+Run `kurukuru doctor`. If it reports **Smart App Control**, Windows is refusing
+to load the bundled QEMU because this build is not code-signed — nothing is
+wrong with your install. The log line for it now names the cause; a bare
+`exit 3236495362` is from a build before 0.1.2 and is the same thing
+(`0xC0E90002`, an application-control block).
 
 ### `python -m venv .venv` fails with an `ensurepip` error
 

@@ -26,6 +26,10 @@
   #define StageDir "..\..\..\build\stage"
 #endif
 
+; The install's identity, used both by [Setup] below and by the all-users
+; detection in [Code]. Defined once because it is now read in two places and a
+; silent mismatch there would make the detection never fire.
+#define AppIdGuid      "7B3E2F14-9C5A-4D71-A2E6-5F8B1C0D4A93"
 #define AppName        "Kurukuru"
 #define AppTagline     "local cloud infrastructure"
 #define AppPublisher   "Paul Nwokolo"
@@ -34,7 +38,9 @@
 #define TaskName       "Kurukuru"
 
 [Setup]
-AppId={{7B3E2F14-9C5A-4D71-A2E6-5F8B1C0D4A93}
+; The doubled brace is Inno's escape for a literal "{"; without it the GUID
+; is read as a constant name and the compile fails.
+AppId={{{#AppIdGuid}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -42,9 +48,25 @@ AppPublisher={#AppPublisher}
 AppSupportURL={#AppUrl}
 VersionInfoVersion={#AppVersion}
 
-; Per-user. No UAC prompt, and no write outside the user's own profile.
+; Per-user, and **not offered as a choice**.
+;
+; This used to carry PrivilegesRequiredOverridesAllowed=dialog, which put an
+; "Install for me / for all users" page in front of every user. All-users was
+; never a supported shape and nothing about the product works in it:
+;
+;   * The state directory is %USERPROFILE%\.kurukuru — one user's home. A
+;     machine-wide install still writes there, so "all users" installs a
+;     program that manages one user's VMs.
+;   * The CLI token's ACL (kurukuru.fs_permissions) is granted to a single
+;     account, deliberately.
+;   * The logon task is registered for the installing user alone.
+;
+; A real user took that choice and was stranded: an install under Program
+; Files, a PATH entry pointing at it, and a 0.1.0-era workaround naming a
+; %LOCALAPPDATA% path that did not exist on their machine. Removing the
+; question is the fix — an untested install shape should not be one click away
+; from the tested one.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 
 ; %LOCALAPPDATA%\Programs\Kurukuru. Short on purpose: the frozen backend nests
 ; dependency metadata several directories deep, and Windows' 260-character path
@@ -100,6 +122,11 @@ Source: "{#StageDir}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; Flags: ignorever
 [Icons]
 Name: "{group}\{#AppName}";            Filename: "{app}\{#AppExeName}"; Parameters: "dashboard"; IconFilename: "{app}\kurukuru.ico"; Comment: "{#AppName} — {#AppTagline}"
 Name: "{group}\{#AppName} console";    Filename: "{cmd}"; Parameters: "/K ""set PATH={app};%PATH%"""; Comment: "A prompt with {#AppName} on PATH"
+; Restart, as a thing you can click. Settings are read once at startup, so
+; changing one means restarting — and an installed user has no terminal and no
+; visible process to restart. Two of them asked. The window stays open
+; (`/K`) so the result, success or not, is readable rather than a flash.
+Name: "{group}\Restart {#AppName}";    Filename: "{cmd}"; Parameters: "/K """"{app}\{#AppExeName}"" restart"""; IconFilename: "{app}\kurukuru.ico"; Comment: "Restart {#AppName} so a changed setting takes effect"
 Name: "{autodesktop}\{#AppName}";      Filename: "{app}\{#AppExeName}"; Parameters: "dashboard"; IconFilename: "{app}\kurukuru.ico"; Tasks: desktopicon
 
 [Registry]
@@ -143,6 +170,205 @@ Filename: "{app}\{#AppExeName}"; Parameters: "dashboard --wait";     Description
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe";     Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\startup-task.ps1"" -Uninstall";     Flags: runhidden waituntilterminated; RunOnceId: "RemoveStartupTask"
 
 [Code]
+{ ---------------------------------------------------------------------------
+  Stopping what is holding the files, before anything tries to replace them.
+
+  Both an upgrade and an uninstall failed in the field with "blocked" files,
+  and the reason is structural rather than bad luck: the backend runs as a
+  logon task, so on any machine where Kurukuru has been used it is *running*
+  when its own installer starts. It holds kurukuru.exe, the frozen runtime
+  beside it, and — if a VM is up — the bundled qemu-system-x86_64.exe too.
+
+  Inno's default behaviour is to carry on and leave a partial install behind,
+  which is the worst of the three possible outcomes. So: stop the task, end
+  the processes, and only then touch a file. If something still will not go,
+  say so plainly instead of half-removing the product.
+  --------------------------------------------------------------------------- }
+
+const
+  { Long enough for uvicorn to finish shutting down, short enough that nobody
+    thinks the installer has hung. Measured against a backend with a VM
+    running, which is the slow case. }
+  StopGraceMs = 5000;
+
+{ A blank line in a message box.
+
+  Named rather than written inline because ISPP treats a '#' in the first
+  column as a preprocessor directive, so a continuation line may not begin
+  with #13#10 — which it naturally wants to, and which fails the build with
+  "Unknown preprocessor directive" pointing at a line of perfectly good
+  Pascal. }
+function Gap(): string;
+begin
+  Result := Chr(13) + Chr(10) + Chr(13) + Chr(10);
+end;
+
+function RunHidden(const FileName, Params: string; var ResultCode: Integer): Boolean;
+begin
+  Result := Exec(FileName, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+{ Ask the scheduled task to stop, so the backend gets to close its database
+  cleanly rather than being killed with a write in flight. }
+procedure StopStartupTask();
+var
+  ResultCode: Integer;
+begin
+  RunHidden(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+            '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ' +
+            '"Stop-ScheduledTask -TaskName ''' + '{#TaskName}' + ''' ' +
+            '-ErrorAction SilentlyContinue"',
+            ResultCode);
+end;
+
+{ End anything still holding a file we are about to replace.
+
+  QEMU is included and that is a deliberate, stated cost: a running VM is
+  killed, which is why the wizard says so before it happens and why the docs
+  tell people to stop their VMs first. The alternative — leaving QEMU running
+  and failing on its DLLs — is a broken install *and* a VM whose disk was
+  open while its emulator's files were being replaced underneath it. }
+procedure StopKurukuruProcesses();
+var
+  ResultCode: Integer;
+begin
+  StopStartupTask();
+  { /T so the backend's own children go with it. Failures are ignored: "no
+    such process" is the expected answer on a first install. }
+  RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM {#AppExeName}', ResultCode);
+  RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM qemu-system-x86_64.exe', ResultCode);
+  RunHidden(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM qemu-img.exe', ResultCode);
+  { Handles are released asynchronously after a process dies; replacing a file
+    in that window still fails. This is the same class of race the engine's
+    qemu_port_release_timeout_seconds exists for. }
+  Sleep(StopGraceMs);
+end;
+
+{ Whether a file we must replace is still locked, and by implication whether
+  proceeding would produce a partial install.
+
+  Tested by renaming the executable to itself: on Windows that fails for a
+  file with an open image section and succeeds otherwise, without modifying
+  anything. Checking only the main executable rather than all 165 shipped
+  files — if the backend is gone, the rest follow, and a per-file scan would
+  turn a fast check into a slow one for no extra certainty. }
+function MainExeIsLocked(): Boolean;
+var
+  Target: string;
+begin
+  Target := ExpandConstant('{app}\{#AppExeName}');
+  if not FileExists(Target) then
+  begin
+    Result := False;
+    exit;
+  end;
+  Result := not RenameFile(Target, Target);
+end;
+
+{ An existing machine-wide install from a build that still offered the choice.
+
+  Detected rather than migrated. Moving it would mean relocating an install
+  this product has never tested, from a directory the current user may not be
+  able to write, while its PATH entry and its scheduled task both point at the
+  old location — so the honest action is to stop and say what to remove. }
+function FindAllUsersInstall(var Location: string): Boolean;
+var
+  Key: string;
+begin
+  { Substituted from the #define at the top of this file rather than read
+    back with SetupSetting, which returns the raw [Setup] text — including
+    Inno's '{{' escape for a single brace — and would therefore carry one
+    brace too many and never match. }
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' +
+         '{' + '{#AppIdGuid}' + '}_is1';
+  Result := RegQueryStringValue(HKEY_LOCAL_MACHINE, Key, 'InstallLocation', Location);
+  if not Result then
+    { A 32-bit view on a 64-bit machine, for an install written by an older
+      compiler configuration. }
+    Result := RegQueryStringValue(HKLM32, Key, 'InstallLocation', Location);
+end;
+
+function InitializeSetup(): Boolean;
+var
+  Location: string;
+begin
+  Result := True;
+  if FindAllUsersInstall(Location) then
+  begin
+    MsgBox('Kurukuru is already installed for all users on this computer:' +
+           Gap() + Location + Gap() +
+           'That install shape is no longer supported — Kurukuru manages one ' +
+           'signed-in user''s VMs out of that user''s own home directory, and ' +
+           'an all-users install gets the program, the PATH entry and the ' +
+           'startup task wrong in ways that are hard to see.' + Gap() +
+           'Uninstall it first (Settings > Apps > Installed apps > Kurukuru, ' +
+           'which will ask for an administrator), then run this installer ' +
+           'again. Your virtual machines are in your home directory and are ' +
+           'not affected by removing it.',
+           mbCriticalError, MB_OK);
+    Result := False;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  StopKurukuruProcesses();
+  if MainExeIsLocked() then
+    { Returning a non-empty string aborts *before* a single file is written,
+      which is the whole point: the previous behaviour was to start copying,
+      fail part-way, and leave an install that was neither the old version
+      nor the new one. }
+    Result := 'Kurukuru is still running and its files cannot be replaced.' +
+              Gap() +
+              'Close the Kurukuru dashboard and stop any running virtual ' +
+              'machines, then run this installer again. If nothing appears ' +
+              'to be running, signing out and back in will clear it.' +
+              Gap() +
+              'Nothing has been changed on your computer.';
+end;
+
+{ Take the install directory back out of the user's PATH on uninstall.
+
+  (Written without Inno's app-directory constant in this comment on purpose:
+  a brace pair inside a Pascal comment closes it, and the compiler then
+  reports a syntax error several lines further down.)
+
+  Inno appends to PATH with an [Registry] entry and has no matching "remove
+  what you appended" — an appended value is not a value it owns, so uninstall
+  leaves it. docs/INSTALL.md has been claiming "It also removes the startup
+  task and the PATH entry" since 0.1.0, and half of that was untrue: every
+  uninstall left a PATH entry pointing at a directory that no longer exists.
+
+  Found while verifying the locked-file fix above, by noticing that two test
+  installs had accumulated two dead PATH entries.
+
+  Rewrites the value rather than deleting it, and only ever drops the one
+  segment it put there. }
+procedure RemoveFromPath(const Directory: string);
+var
+  CurrentPath, Rebuilt, Segment: string;
+  Parts: TArrayOfString;
+  I: Integer;
+begin
+  if not RegQueryStringValue(HKCU, 'Environment', 'Path', CurrentPath) then
+    exit;
+  Parts := StringSplitEx(CurrentPath, [';'], #0, stExcludeEmpty);
+  Rebuilt := '';
+  for I := 0 to GetArrayLength(Parts) - 1 do
+  begin
+    Segment := Trim(Parts[I]);
+    if (Segment <> '') and (CompareText(Segment, Directory) <> 0) then
+    begin
+      if Rebuilt <> '' then
+        Rebuilt := Rebuilt + ';';
+      Rebuilt := Rebuilt + Segment;
+    end;
+  end;
+  if Rebuilt <> CurrentPath then
+    RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Rebuilt);
+end;
+
 function NeedsAddPath(Param: string): Boolean;
 var
   CurrentPath: string;
@@ -174,13 +400,59 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
+    { Before anything is deleted. The [UninstallRun] entry above removes the
+      scheduled task, but it runs after this step on some paths and it does
+      not touch a backend that is *already running* — which, because the task
+      starts one at every logon, it always is. Uninstalling over that left
+      files behind and an entry in Apps & Features for a product that was
+      half gone. }
+    StopKurukuruProcesses();
+    if MainExeIsLocked() then
+    begin
+      MsgBox('Kurukuru is still running and cannot be removed yet.' + Gap() +
+             'Close the Kurukuru dashboard and stop any running virtual ' +
+             'machines, then uninstall again. If nothing appears to be ' +
+             'running, sign out and back in first.' + Gap() +
+             'Nothing has been removed, so your install is still working.',
+             mbCriticalError, MB_OK);
+      { Aborts the uninstall outright. A partial removal is strictly worse
+        than none: it leaves a product that will not start and will not
+        uninstall, which is the state the user reported. }
+      Abort();
+    end;
+
+    RemoveFromPath(ExpandConstant('{app}'));
+
     Dir := StateDir();
     if DirExists(Dir) then
     begin
-      if MsgBox('Also delete your virtual machines and their data?' + #13#10#13#10 +
-                Dir + #13#10#13#10 +
+      { **An unattended uninstall keeps the data and does not ask.**
+
+        Measured, because the assumption was wrong in both directions. Running
+        `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES` against an install whose
+        state directory exists does *not* auto-answer this prompt: the dialog
+        appears and the uninstaller waits for a human who, by definition, is
+        not there. An unattended removal — a deployment script, an MDM push,
+        a packaging tool — hangs indefinitely.
+
+        The other direction would have been worse, so it is worth being
+        explicit rather than relying on a default button: whatever a suppressed
+        message box returns, nobody's virtual machines should be deleted by a
+        run that was told not to ask questions. Silence is not consent to
+        destroy 20 GB of somebody's work.
+
+        So when there is no one to ask, the answer is the safe one: keep it,
+        and say so in the log. `kurukuru` is gone; the data waits for a
+        reinstall, or for the user to delete the directory themselves. }
+      if UninstallSilent() then
+      begin
+        Log('Unattended uninstall: keeping ' + Dir +
+            ' (nothing is deleted without being asked).');
+      end
+      else if MsgBox('Also delete your virtual machines and their data?' + Gap() +
+                Dir + Gap() +
                 'This holds every VM disk, imported image, volume, ISO and the ' +
-                'database. It cannot be undone.' + #13#10#13#10 +
+                'database. It cannot be undone.' + Gap() +
                 'Choose No to keep it — reinstalling will pick it up again.',
                 mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
       begin

@@ -2,6 +2,7 @@ import { AlertCircle, CheckCircle2, Cpu, HardDrive, KeyRound, Settings2 } from '
 import { useDiagnostics, useSettings } from '../hooks/queries'
 import { AccountSection } from './AccountSection'
 import { PathValue } from '../ui/Feedback'
+import { PRODUCT_NAME } from '../ui/product'
 import { formatBytes } from '../lib/format'
 
 /**
@@ -17,8 +18,10 @@ import { formatBytes } from '../lib/format'
  * reads); the configuration comes from /settings.
  */
 export function SettingsView() {
-  const { data: groups, isLoading } = useSettings()
+  const { data: settings, isLoading } = useSettings()
   const { data: diag } = useDiagnostics()
+  const groups = settings?.groups
+  const config = settings?.configuration
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -126,12 +129,42 @@ export function SettingsView() {
         </section>
       )}
 
+      {/*
+        How to change any of this — answered for the build being run, not for
+        the one the developer happens to be sitting in front of.
+
+        This used to say "put it in backend/.env" and "restart the backend"
+        unconditionally. An installed user has neither: no backend/ directory
+        to edit, and no terminal holding a process to stop. Two of them asked
+        what to do, and the honest answer was "sign out and back in", which is
+        not an answer. The backend now says which kind of build it is, where
+        its configuration file lives, and what to run.
+      */}
       <div className="rounded-lg border border-transitional/30 bg-transitional-quiet px-4 py-3 text-xs text-transitional">
-        These values are read once when the backend starts. Set the environment
-        variable shown against a setting (or put it in{' '}
-        <code className="rounded bg-surface px-1 py-0.5">backend/.env</code>) and
-        restart the backend for it to take effect. Paths in particular are load-bearing:
-        moving the instance store while VMs exist strands their disks.
+        These values are read once when {PRODUCT_NAME} starts.{' '}
+        {config?.installed ? (
+          <>
+            To change one, put it in{' '}
+            <PathValue value={config.config_file} /> as{' '}
+            <code className="rounded bg-surface px-1 py-0.5">NAME=value</code>{' '}
+            using the variable name shown against the setting, then restart —
+            from the Start Menu (<strong>Restart {PRODUCT_NAME}</strong>) or by
+            running{' '}
+            <code className="rounded bg-surface px-1 py-0.5">
+              {config.restart_command}
+            </code>
+            . Setting the environment variable instead also works and wins over
+            the file.
+          </>
+        ) : (
+          <>
+            Set the environment variable shown against a setting, or put it in{' '}
+            <code className="rounded bg-surface px-1 py-0.5">backend/.env</code>
+            , then restart the backend for it to take effect.
+          </>
+        )}{' '}
+        Paths in particular are load-bearing: moving the instance store while
+        VMs exist strands their disks.
       </div>
 
       {isLoading ? (

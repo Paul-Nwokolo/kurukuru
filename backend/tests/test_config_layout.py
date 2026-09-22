@@ -204,3 +204,36 @@ def test_the_state_dir_is_where_the_database_lands(monkeypatch):
 
     assert settings.database_path == Path(os.sep) / "opt" / "iaas" / DATABASE_LEAF
     assert settings.database_path.parent == Path(settings.state_dir).expanduser()
+
+
+# --------------------------------------------------------------------------- #
+# Clearing a QEMU override
+# --------------------------------------------------------------------------- #
+def test_a_blank_qemu_override_falls_back_to_the_default(monkeypatch):
+    """An empty override means "I cleared this", not "run a binary called ''".
+
+    This is a trap of the project's own making. The 0.1.0 release note told
+    people to set these two variables; the advice has been wrong since 0.1.1,
+    so "how do I undo it" is a question this product created. On Windows the
+    obvious spelling, ``setx VAR ""``, is rejected as invalid syntax and leaves
+    the old value in place — and an empty value arrived here as ``""``, a path
+    that cannot resolve, so the engine reported unavailable and doctor said an
+    override pointed at nothing.
+    """
+    from kurukuru.config import Settings, _default_qemu_img, _default_qemu_system
+
+    monkeypatch.setenv("KURUKURU_QEMU_SYSTEM_BINARY", "")
+    monkeypatch.setenv("KURUKURU_QEMU_IMG_BINARY", "   ")
+
+    settings = Settings()
+
+    assert settings.qemu_system_binary == _default_qemu_system()
+    assert settings.qemu_img_binary == _default_qemu_img()
+
+
+def test_a_real_qemu_override_still_wins(monkeypatch):
+    """The fallback must not swallow an override somebody meant."""
+    from kurukuru.config import Settings
+
+    monkeypatch.setenv("KURUKURU_QEMU_SYSTEM_BINARY", "C:/somewhere/qemu.exe")
+    assert Settings().qemu_system_binary == "C:/somewhere/qemu.exe"

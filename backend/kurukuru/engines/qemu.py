@@ -29,6 +29,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -46,7 +47,8 @@ from kurukuru.engines.base import (
     LaunchOptions,
     SnapshotInfo,
 )
-from kurukuru.engines.capabilities import QemuSupport, cached_support
+from kurukuru.engines import accel_cache
+from kurukuru.engines.capabilities import QemuSupport, cached_support, parse_version
 from kurukuru.engines.images import BaseImageError, ensure_base_image
 from kurukuru.engines.ports import (
     PortAllocationError,
@@ -65,6 +67,7 @@ from kurukuru.engines.qmp import (
 )
 from kurukuru.engines.seed import SeedIsoError, build_meta_data, build_seed_iso
 from kurukuru.models import InstanceStatus
+from kurukuru.win_status import describe_exit_code
 
 logger = logging.getLogger("kurukuru.qemu")
 
@@ -106,6 +109,23 @@ HARDWARE_ACCELS = frozenset(HOST_ACCELS.values())
 #: an instance that is Running *and still booting* can spend this, and only
 #: until it answers.
 _READY_PROBE_SECONDS = 5.0
+
+#: How long :meth:`QemuEngine.is_available` may reuse its answer.
+#:
+#: Five seconds, chosen against the two things it has to sit between. The
+#: dashboard polls ``/health`` every 15s and several other endpoints reach the
+#: same probe, so anything at this order collapses a burst of concurrent polls
+#: into a single pair of subprocess launches. And it is short enough that a
+#: user who has just fixed the cause — allowed the binary through Smart App
+#: Control, cleared a bad override — sees the engine recover on the next
+#: refresh instead of having to restart the backend.
+#:
+#: Caching this at all is a measured fix, not a tidy-up: a user's log showed
+#: the version probe running several times a second with the dashboard open.
+_AVAILABILITY_TTL_SECONDS = 5.0
+
+#: Sentinel for "not computed yet" where None is itself a valid answer.
+_UNSET: object = object()
 
 _RUNTIME_FILE = "runtime.json"
 _DISK_FILE = "disk.qcow2"
@@ -337,6 +357,24 @@ class QemuEngine(ComputeEngine):
         self._system_binary = self._settings.qemu_system_binary
         self._img_binary = self._settings.qemu_img_binary
         self._accel: str | None = None  # probed lazily, then cached
+        #: Serialises the six-second accelerator probe. Without it, concurrent
+        #: callers each ran their own — see :meth:`accel`.
+        self._accel_lock = threading.Lock()
+        #: ``(answer, monotonic time it was taken)``, or None before the first
+        #: probe. See :meth:`is_available` for why this expires.
+        self._available: tuple[bool, float] | None = None
+        #: Same reasoning as the accelerator lock, at a smaller scale: two
+        #: subprocesses rather than a six-second one, but the endpoints that
+        #: reach this are polled concurrently and the point of caching it was
+        #: to stop a burst costing one launch each.
+        self._available_lock = threading.Lock()
+        #: The emulator's raw version string, memoised for the lifetime of the
+        #: process. ``_UNSET`` rather than None as the empty state, because
+        #: None is a real answer here — "the binary would not tell us" — and
+        #: re-running a subprocess to learn that again each time is the thing
+        #: being avoided. Hence ``str | None | object`` rather than the tidier
+        #: ``str | None``: the sentinel is part of the value.
+        self._binary_version_cache: str | None | object = _UNSET
 
     # ------------------------------------------------------------------ #
     # Paths
@@ -439,9 +477,17 @@ class QemuEngine(ComputeEngine):
 
         if proc.returncode != 0:
             stderr = (proc.stderr or proc.stdout or "").strip()
+            # A Windows status code is appended in hex with a name and a plain
+            # sentence. Printed as a bare signed decimal it does not read as a
+            # status code at all, and the one time that reached a user it sent
+            # them chasing a PATH problem they did not have — see
+            # kurukuru.win_status. When there is no stderr (a process Windows
+            # refused to start writes none) this is the whole diagnostic.
+            explanation = describe_exit_code(proc.returncode)
+            detail = f": {stderr}" if stderr else ""
             raise ComputeEngineError(
                 f"'{Path(cmd[0]).name} {cmd[1] if len(cmd) > 1 else ''}' "
-                f"failed (exit {proc.returncode}): {stderr}",
+                f"failed (exit {proc.returncode}){explanation}{detail}",
                 stderr=stderr,
                 returncode=proc.returncode,
             )
@@ -534,10 +580,26 @@ class QemuEngine(ComputeEngine):
         another host's is guaranteed to fail. Falling back to TCG keeps the
         tool alive on a host with no accelerator — just very slowly — rather
         than hard-failing every launch.
+
+        **"Once" needs a lock, which it did not have.** The plain
+        ``if self._accel is None`` memo is a read-modify-write across a six
+        second gap, and this is called from several endpoints that a browser
+        polls concurrently plus the reconciler's own thread. Measured on a
+        real install: a single backend start logged *three* "whpx operational"
+        lines, three QEMU processes racing through the same probe and each
+        finding the on-disk cache still empty, because none of them had
+        finished to write it yet.
+
+        So the first caller probes and the rest wait for its answer.
+        Double-checked: the common case is an already-resolved value and takes
+        no lock at all.
         """
-        if self._accel is None:
-            self._accel = self._probe_accel()
-        return self._accel
+        if self._accel is not None:
+            return self._accel
+        with self._accel_lock:
+            if self._accel is None:
+                self._accel = self._probe_accel()
+            return self._accel
 
     def native_accel(self) -> str | None:
         """The hardware accelerator this platform *could* use, before probing.
@@ -548,7 +610,16 @@ class QemuEngine(ComputeEngine):
         return HOST_ACCELS.get(sys.platform)
 
     def _probe_accel(self) -> str:
-        """Ask QEMU whether the platform's accelerator is usable, once."""
+        """Ask QEMU whether the platform's accelerator is usable, once.
+
+        Measured at **6.0s** on this host, and that is not a slow probe so
+        much as the shape of the question: QEMU started with ``-S`` never
+        exits, so the timeout *is* the success signal and an accelerator that
+        works is the only case that pays for it. An unusable one exits at once.
+
+        Which is why the cache underneath only ever stores a success. See
+        :mod:`kurukuru.engines.accel_cache`.
+        """
         candidate = self.native_accel()
         if candidate is None:
             logger.warning(
@@ -567,6 +638,20 @@ class QemuEngine(ComputeEngine):
             logger.warning("Acceleration probe: %s — falling back to TCG", blocked)
             return "tcg"
 
+        # A previously measured success for this exact binary, if there is one.
+        # Read before the probe and keyed on the binary's own identity, so an
+        # upgraded or replaced QEMU is measured afresh rather than inheriting
+        # an answer about a file that is no longer there.
+        cached = accel_cache.load(self._root, self._system_binary, self._binary_version)
+        if cached:
+            logger.info(
+                "Acceleration: %s (from a previous measurement; delete %s to "
+                "re-measure)",
+                cached,
+                self._root / "accel-probe.json",
+            )
+            return cached
+
         cmd = [
             self._system_binary,
             "-machine", "q35",
@@ -582,6 +667,12 @@ class QemuEngine(ComputeEngine):
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=6, check=False)
         except subprocess.TimeoutExpired:
             logger.info("Acceleration probe: %s operational", candidate)
+            # Only the success is stored — see the module docstring. A failure
+            # is instant to re-derive, and re-deriving it is what lets a host
+            # that has just had its accelerator enabled speed up by itself.
+            accel_cache.store(
+                self._root, self._system_binary, self._binary_version(), candidate
+            )
             return candidate
         except FileNotFoundError:
             logger.warning("Acceleration probe: '%s' not found", self._system_binary)
@@ -595,6 +686,36 @@ class QemuEngine(ComputeEngine):
             (proc.stderr or proc.stdout or "").strip()[:300],
         )
         return "tcg"
+
+    def _binary_version(self) -> str | None:
+        """The emulator's version string, read directly and cheaply.
+
+        Deliberately **not** ``self.version()``. That goes through
+        ``support()``, which calls ``accel()`` — and this is called from
+        inside the accelerator probe, so the obvious reuse is an infinite
+        recursion rather than a saving.
+
+        Measured at well under a tenth of a second, which is what makes it
+        affordable as part of the accelerator cache's key.
+        """
+        if self._binary_version_cache is not _UNSET:
+            return self._binary_version_cache  # type: ignore[return-value]
+        version: str | None = None
+        try:
+            proc = subprocess.run(
+                [self._system_binary, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=self._settings.cli_timeout_seconds,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            proc = None
+        if proc is not None and proc.returncode == 0:
+            parsed = parse_version(proc.stdout or "")
+            version = parsed.raw if parsed else None
+        self._binary_version_cache = version
+        return version
 
     @staticmethod
     def _kvm_unavailable_reason() -> str | None:
@@ -842,13 +963,68 @@ class QemuEngine(ComputeEngine):
     # ComputeEngine interface
     # ------------------------------------------------------------------ #
     def is_available(self) -> bool:
+        """Whether both QEMU tools run. Cached for a few seconds.
+
+        Two subprocess launches, and it is reached from ``/health``,
+        ``/engines``, ``/host/capacity``, ``/diagnostics`` and every launch
+        request. A user's log showed ``qemu-system-x86_64 --version`` starting
+        several times a second while the dashboard was open, which is a
+        process spawn per poll per endpoint to answer a question whose answer
+        changes only when somebody installs or uninstalls QEMU.
+
+        Cached with a short TTL rather than for the process's life: a *failed*
+        answer must be able to recover without a restart. Somebody who allows
+        the binary through Smart App Control, or fixes a path, should see the
+        engine come back on the next poll rather than be told to restart a
+        backend they may not know how to restart.
+
+        The window is deliberately shorter than the dashboard's 15-second
+        health poll, so a recovery is visible within one or two refreshes
+        while a burst of concurrent requests still collapses into one probe.
+        """
+        now = time.monotonic()
+        cached = self._available
+        if cached is not None and now - cached[1] < _AVAILABILITY_TTL_SECONDS:
+            return cached[0]
+
+        with self._available_lock:
+            # Re-checked inside the lock: while this caller waited, another
+            # may have just measured, and repeating it would defeat the point.
+            now = time.monotonic()
+            cached = self._available
+            if cached is not None and now - cached[1] < _AVAILABILITY_TTL_SECONDS:
+                return cached[0]
+            return self._measure_availability(cached, now)
+
+    def _measure_availability(
+        self, cached: tuple[bool, float] | None, now: float
+    ) -> bool:
+        """Run the two version probes and record the answer. Caller holds the lock."""
         try:
             self._run([self._system_binary, "--version"], timeout=self._settings.cli_timeout_seconds)
             self._run([self._img_binary, "--version"], timeout=self._settings.cli_timeout_seconds)
-            return True
+            available = True
         except ComputeEngineError as exc:
-            logger.warning("QEMU unavailable: %s", exc)
-            return False
+            # Logged only when the answer *changes*, for the same reason the
+            # probe is cached: this used to emit a warning per poll, which is
+            # how a real log ends up unreadable at the moment it matters most.
+            if cached is None or cached[0]:
+                logger.warning("QEMU unavailable: %s", exc)
+            available = False
+        else:
+            if cached is not None and not cached[0]:
+                logger.info("QEMU is available again")
+
+        self._available = (available, now)
+        return available
+
+    def invalidate_availability(self) -> None:
+        """Forget the cached availability answer.
+
+        For callers that have just changed something the probe measures, and
+        for tests, which must not inherit a previous case's answer.
+        """
+        self._available = None
 
     def version(self) -> str | None:
         """The installed build's version string, or None if it cannot be read.
@@ -984,6 +1160,15 @@ class QemuEngine(ComputeEngine):
                 elapsed = self._wait_for_qmp(name, runtime)
         except ComputeEngineError:
             self._force_off(name, runtime)
+            # The stored accelerator answer said this works, and a VM that
+            # would not come up is the only evidence that can contradict it —
+            # a host whose Windows Hypervisor Platform was turned off since
+            # the measurement looks exactly like this. Clearing costs one slow
+            # probe on the next start and is the only thing that can notice.
+            # Deliberately unconditional: narrowing it to "errors that mention
+            # the accelerator" would be matching on QEMU's prose.
+            if runtime.accel in HARDWARE_ACCELS:
+                accel_cache.clear(self._root)
             raise
         logger.info(
             "Instance '%s' up in %.1fs (accel=%s, source=%s, ssh=%s:%d)",
