@@ -2990,6 +2990,20 @@ signing is necessary but not sufficient: Smart App Control consults the
 Intelligent Security Graph first, so a valid signature buys *reputation that
 accrues to a publisher across releases* rather than immediate trust.
 
+**And that signing the installer lifts the block at all is an inference, not a
+measurement.** It rests on Microsoft's documented behaviour that a trusted
+installer's reputation passes to the files it writes, recorded as a
+`$KERNEL.SMARTLOCKER.ORIGINCLAIM` attribute — which would mean the 120
+unsigned QEMU binaries inherit trust rather than needing signatures of their
+own, and is why "sign the installer, ship QEMU unsigned inside it" is the
+shape SignPath's terms permit. Nothing here has been observed: this project
+has no machine with Smart App Control enforcing, and the report that uncovered
+the problem came from a user's. Given that most of 0.1.2 exists because
+something was true on a fresh machine and not on this one, the distinction is
+recorded rather than smoothed over. It is stated as an expectation in the
+application (`docs/history/SIGNPATH_APPLICATION_DRAFT.md`) and will be
+re-measured once there is something signed to measure.
+
 **The guest username moved, finally.** Decision 49 deferred it and named the
 prerequisite. Done in that order, and the order is the entire safety argument:
 

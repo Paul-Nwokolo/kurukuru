@@ -9,12 +9,36 @@ one question to ask them up front rather than discover later.
 
 ## Before submitting
 
-1. **The build must run in CI.** SignPath Foundation requires that "binary
-   artifacts must be built from source code in a verifiable way", with
-   provenance over the repository, branch and build agent. A laptop build does
-   not qualify. `.github/workflows/release.yml` does this; it needs at least
-   one green run on a tag before the application is credible.
-2. **Ask about the bundled QEMU before relying on the answer.** Their terms
+1. **The build must run in CI.** ✅ Done. SignPath Foundation requires that
+   "binary artifacts must be built from source code in a verifiable way", with
+   provenance over the repository, branch and build agent; a laptop build does
+   not qualify. `.github/workflows/release.yml` builds the installer on
+   `windows-latest`, downloads the pinned QEMU and verifies its SHA-256 before
+   executing it, then installs the artefact and runs it. Green as of
+   2026-09-22. It still wants one run triggered by a real tag rather than by
+   `workflow_dispatch`, which the next release will provide.
+2. **Product metadata on every signed artifact.** ✅ Done, and it was missing.
+   SignPath requires a matching ProductName and a consistent ProductVersion.
+   The installer had both (Inno writes them from `AppName`/`AppVersion`), but
+   **`kurukuru.exe` had no version resource at all** — blank ProductName,
+   blank ProductVersion, in 0.1.0, 0.1.1 and 0.1.2 alike, because PyInstaller
+   adds none unless handed one. It is now generated from `product.py` at build
+   time, so the frozen executable and the installer cannot disagree:
+
+   | | ProductName | ProductVersion | CompanyName |
+   |---|---|---|---|
+   | `kurukuru.exe` | Kurukuru | 0.1.2 | Paul Nwokolo |
+   | `Kurukuru-0.1.2-Setup.exe` | Kurukuru | 0.1.2 | Paul Nwokolo |
+
+   `unins000.exe` carries the same ProductName and ProductVersion; its
+   FileVersion is Inno Setup's own (`51.1054.0.0`), which is a property of
+   their binary and not something we set.
+3. **The download page must mention SignPath.** ✅ Done, honestly. Their form
+   requires the page to carry the attribution; ours cannot claim signing that
+   has not happened, so the README's new **Code signing** section says
+   releases are currently unsigned, that we have applied, and that the section
+   will carry the required attribution once approved.
+4. **Ask about the bundled QEMU before relying on the answer.** Their terms
    permit including unsigned upstream OSS binaries in a signed package, and
    separately forbid signing binaries that are not yours. Kurukuru is the
    first of those and not the second — but it bundles 120 files it did not
@@ -71,6 +95,20 @@ shape.
 > disable a machine-wide security feature, which we would rather not ask
 > anyone to do.
 >
+> **What we expect signing to achieve, stated as the inference it is.** We
+> believe signing the installer lifts this block, on the basis of Microsoft's
+> documented behaviour that a trusted installer's reputation passes to the
+> files it writes — recorded as a `$KERNEL.SMARTLOCKER.ORIGINCLAIM` attribute —
+> so the unsigned QEMU binaries the installer places would inherit that trust
+> rather than needing signatures of their own. We also understand reputation
+> accrues over time rather than applying to a new certificate immediately.
+>
+> We have **not verified this**: we have no machine with Smart App Control
+> enforcing to test on, and the report that uncovered the problem came from a
+> user's machine rather than ours. So we are telling you what we expect and why,
+> not what we have measured, and we will measure it once we can sign
+> something.
+>
 > **One thing we want to raise up front.**
 >
 > Our installer bundles a trimmed QEMU: 2 executables and 118 DLLs we did not
@@ -80,9 +118,12 @@ shape.
 >
 > We read your terms as permitting this — "you may include unsigned binaries
 > of upstream OSS projects, e.g. DLL files, in your signed packages" — and we
-> would like that confirmed before we depend on it, because it is the whole
-> reason the application is worth making: signing only `kurukuru.exe` while
-> the bundle stayed untrusted would not lift the block we are trying to lift.
+> would like that confirmed before we depend on it. It matters because of the
+> inference above: if a signed installer's trust does *not* reach the files it
+> writes, then signing `kurukuru.exe` alone would leave the bundled QEMU
+> untrusted and the block in place, and the application would not have achieved
+> what we applied for. We would rather establish that with you now than
+> discover it afterwards.
 >
 > Every bundled file's SHA-256 is recorded in a manifest inside the build
 > (`qemu-manifest.json`) and re-verified immediately before packaging, so we
@@ -109,6 +150,13 @@ shape.
 > - Privacy: no telemetry, no network calls except downloading the Ubuntu
 >   cloud image the user asks for. Binds loopback by default.
 > - MFA is enabled on the maintainer's GitHub account.
+>
+> **Roles.** Your process expects an author, a reviewer and an approver to be
+> assigned. Kurukuru has one maintainer, so all three are me (Paul Nwokolo). I
+> am saying so explicitly rather than leaving it to be inferred from the
+> repository: there is no second person to separate those duties, and if the
+> programme requires them to be held by different people then this project does
+> not qualify and I would rather hear that now.
 
 ---
 

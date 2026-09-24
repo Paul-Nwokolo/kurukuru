@@ -105,7 +105,41 @@ Read this before you rely on it.
   full administrator. Projects organise resources; they do not isolate them.
 - **One host.** No clustering, no remote hypervisors.
 - **SQLite, single writer.** Right for one machine, not for a shared service.
-- **Unsigned installer.** See above.
+- **Unsigned installer.** See [Code signing](#code-signing) below — on a clean
+  Windows 11 machine this stops the product running at all, not just warning.
+
+---
+
+## Code signing
+
+**Releases are not code-signed.** Nothing in them is: not the installer, not
+`kurukuru.exe`, and not the QEMU binaries bundled beside it.
+
+That has two consequences, and the second is the serious one:
+
+- **SmartScreen warns** on first run — *"Windows protected your PC"*, with the
+  Run button behind **More info**. Annoying, and you can proceed.
+- **Smart App Control refuses.** It is on by default on a clean Windows 11
+  install, and it blocks programs it does not recognise — so Windows will not
+  load the bundled QEMU and Kurukuru does not work at all. The status code is
+  `0xC0E90002`. `kurukuru doctor` reads Smart App Control's state and says when
+  it is the cause. The only way round it today is turning Smart App Control off
+  in **Windows Security → App & browser control**, which is a machine-wide
+  security setting and worth weighing rather than clicking through.
+
+**We have applied to the [SignPath Foundation](https://signpath.org/), which
+provides free code signing for open-source projects.** This section will carry
+the attribution their programme requires once the application is approved.
+Until then this is a statement of intent, not of fact: assume every artefact is
+unsigned and verify downloads by their published SHA-256.
+
+Why it is not simply bought instead: Microsoft's own
+[Azure Artifact Signing](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)
+is limited to individuals in the USA and Canada, and this project is
+maintained from Nigeria. An OV certificate is the paid fallback. The
+measurements behind that choice — including which of the 185 shipped binaries
+carry a valid signature today, and which do not — are in
+[docs/DECISIONS.md](docs/DECISIONS.md) under decision 62.
 
 ---
 

@@ -30,6 +30,21 @@ Design decisions behind these changes are recorded in
   too large for the Recycle Bin, nothing is removed and the uninstaller says
   so, rather than silently falling back to a permanent delete.
 
+- **`kurukuru.exe` had no version resource at all** — blank ProductName,
+  blank ProductVersion, blank FileVersion — in 0.1.0, 0.1.1 and 0.1.2 alike,
+  because PyInstaller adds none unless it is handed one and this build never
+  did. Windows showed an empty Details tab for it, and anything inventorying
+  software on a machine saw an anonymous binary. The installer was always
+  fine; Inno writes its own from `AppName` and `AppVersion`.
+
+  Nothing looked at it, which is why it survived: the dashboard reports the
+  version over HTTP and `kurukuru version` reads installed package metadata.
+  Preparing for code signing is what surfaced it — a signing service requires
+  a matching ProductName and a consistent ProductVersion on every artifact in
+  a release, and an empty field is not a match. Now generated from
+  `product.py` at build time, so the frozen executable and the installer
+  cannot disagree about what they are.
+
 - **The release installer is now built in CI**, from a QEMU downloaded and
   hash-verified by the build rather than whatever was installed on the
   author's machine. That immediately found six files — `libSvtAv1Enc-3`,

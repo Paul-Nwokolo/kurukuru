@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import build_installer
 from build_installer import (
     clear_previous_artefacts,
     MANIFEST_NAME,
@@ -233,3 +234,65 @@ def test_clearing_leaves_unrelated_files_alone(tmp_path):
 def test_clearing_a_directory_that_does_not_exist_is_not_an_error(tmp_path):
     """First build on a fresh machine. Nothing to clear is not a failure."""
     assert clear_previous_artefacts(tmp_path / "never-created") == []
+
+
+# --------------------------------------------------------------------------- #
+# The version resource on the frozen executable
+# --------------------------------------------------------------------------- #
+def test_the_version_resource_carries_a_matching_name_and_version(tmp_path):
+    """ProductName and ProductVersion, generated from the one definition.
+
+    `kurukuru.exe` shipped in 0.1.0, 0.1.1 and 0.1.2 with **no version resource
+    at all** — blank ProductName, blank ProductVersion — because PyInstaller
+    adds none unless handed one. Nothing looked at it: the installer carries
+    its own metadata, the dashboard reports the version over HTTP, and
+    `kurukuru version` reads installed package metadata. Code signing is what
+    surfaced it, since SignPath requires a matching ProductName and a
+    consistent ProductVersion on every signed artifact.
+    """
+    resource = build_installer.write_version_resource(tmp_path)
+    text = resource.read_text(encoding="utf-8")
+
+    release = build_installer.version()
+    name = build_installer.product_string("PRODUCT_NAME")
+    publisher = build_installer.installer_define("AppPublisher")
+
+    assert f"StringStruct('ProductName', '{name}')" in text
+    assert f"StringStruct('ProductVersion', '{release}')" in text
+    assert f"StringStruct('FileVersion', '{release}')" in text
+    assert f"StringStruct('CompanyName', '{publisher}')" in text
+
+
+def test_the_binary_version_quad_is_four_integers(tmp_path, monkeypatch):
+    """Win32 wants four numbers, whatever the release string looks like.
+
+    A working tree reports "0.0.0-dev", and a suffix is not a number. The
+    string fields keep the full version because that is the one a human reads;
+    the fixed-info quad has to be numeric or the resource will not compile.
+    """
+    import re
+
+    for release, expected in (
+        ("0.1.2", "0, 1, 2, 0"),
+        ("0.0.0-dev", "0, 0, 0, 0"),
+        ("1.2.3.4", "1, 2, 3, 4"),
+        ("2.0", "2, 0, 0, 0"),
+    ):
+        monkeypatch.setattr(build_installer, "version", lambda r=release: r)
+        text = build_installer.write_version_resource(tmp_path).read_text(encoding="utf-8")
+        assert f"filevers=({expected})" in text, release
+        assert f"prodvers=({expected})" in text, release
+        # And the human-readable field keeps the suffix.
+        assert f"StringStruct('FileVersion', '{release}')" in text
+
+
+def test_the_publisher_agrees_with_the_installer_script():
+    """One publisher, read from the file Inno stamps the installer from.
+
+    Two artifacts in one release disagreeing about who published them is
+    exactly the inconsistency a signing service checks for.
+    """
+    assert build_installer.installer_define("AppPublisher")
+    assert build_installer.installer_define("AppName") == build_installer.product_string(
+        "PRODUCT_NAME"
+    )
