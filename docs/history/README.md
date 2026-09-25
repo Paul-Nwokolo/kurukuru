@@ -30,6 +30,7 @@ current behaviour see [`../ARCHITECTURE.md`](../ARCHITECTURE.md),
 | [frontend_review.md](frontend_review.md) | External review, dashboard | Every finding addressed before 0.1.0 (see below) |
 | [backend_review.md](backend_review.md) | External review, backend | Every finding addressed before 0.1.0 (see below) |
 | [ROADMAP_v2.md](ROADMAP_v2.md) | Strategic direction | Current as of the Multipass retirement |
+| [SIGNPATH_APPLICATION_DRAFT.md](SIGNPATH_APPLICATION_DRAFT.md) | Free code-signing application | **Submitted and declined** on public visibility, not on anything technical. Kept as sent; see DECISIONS 64 |
 
 ## External reviews
 

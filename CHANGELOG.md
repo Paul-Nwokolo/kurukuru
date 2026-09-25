@@ -30,6 +30,13 @@ Design decisions behind these changes are recorded in
   too large for the Recycle Bin, nothing is removed and the uninstaller says
   so, rather than silently falling back to a permanent delete.
 
+- **The README now states the code-signing position plainly.** It previously
+  said an application to the SignPath Foundation was outstanding; that
+  application was declined — on public visibility, not on anything technical —
+  so the section says what is true instead: every published artefact is
+  unsigned, and on a machine with Smart App Control enforcing Kurukuru will not
+  run. See [DECISIONS.md](docs/DECISIONS.md) #64.
+
 - **`kurukuru.exe` had no version resource at all** — blank ProductName,
   blank ProductVersion, blank FileVersion — in 0.1.0, 0.1.1 and 0.1.2 alike,
   because PyInstaller adds none unless it is handed one and this build never

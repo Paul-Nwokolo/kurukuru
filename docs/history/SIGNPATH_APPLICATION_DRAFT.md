@@ -1,9 +1,22 @@
-# SignPath Foundation application — draft
+# SignPath Foundation application — submitted, declined
 
-**Status: draft. Nothing has been submitted and nothing has been bought.**
+**Status: submitted and declined. Nothing has been bought.**
 
-This is the text to send, plus the two things that must be true first and the
-one question to ask them up front rather than discover later.
+Declined on **public visibility** — not on the code, the licence, the build, or
+the bundled-QEMU question this text was careful to raise. The programme looks
+for stars, forks, contributors, external references and sustained activity, and
+invited a reapplication once the project has broader recognition. See
+[decision 64](../DECISIONS.md).
+
+**Kept as submitted, deliberately.** A reapplication should start from what was
+actually sent rather than from a reconstruction of it, and the question in the
+"one thing we want to raise up front" section is still unanswered: the decline
+did not reach it. The checklist below is also worth keeping — the two
+preconditions it records (a CI build, and product metadata on every artifact)
+were real gaps that this application found, and both are now fixed regardless
+of the outcome.
+
+Everything below is the text as it stood when it went.
 
 ---
 
@@ -37,7 +50,9 @@ one question to ask them up front rather than discover later.
    requires the page to carry the attribution; ours cannot claim signing that
    has not happened, so the README's new **Code signing** section says
    releases are currently unsigned, that we have applied, and that the section
-   will carry the required attribution once approved.
+   will carry the required attribution once approved. (That section has since
+   been rewritten to match the decline — it no longer says an application is
+   outstanding. This item records what it said when the application went.)
 4. **Ask about the bundled QEMU before relying on the answer.** Their terms
    permit including unsigned upstream OSS binaries in a signed package, and
    separately forbid signing binaries that are not yours. Kurukuru is the

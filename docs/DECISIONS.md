@@ -2985,7 +2985,9 @@ Canada only. An OV certificate is ~$150-300/year worldwide and, since June 2023,
 requires the key on a hardware token. EV is no longer worth its premium: its one
 advantage, instant SmartScreen bypass, was removed in 2024. **SignPath
 Foundation** signs qualifying open-source projects free, which this is (Apache-2.0
-over GPLv2 QEMU, no proprietary components), and is the route to take. Note that
+over GPLv2 QEMU, no proprietary components), and was the route taken — applied
+for, and **declined on public visibility rather than on anything technical**.
+See decision 64; the position today is that nothing is signed. Note that
 signing is necessary but not sufficient: Smart App Control consults the
 Intelligent Security Graph first, so a valid signature buys *reputation that
 accrues to a publisher across releases* rather than immediate trust.
@@ -3180,12 +3182,63 @@ is a file somebody can read.
 auto-answer this prompt. An unattended uninstall used to hang on it forever;
 it now keeps the data without asking.
 
+## 64. The signing application was declined on visibility, so the answer is visibility
+
+**Context.** Decision 62 established that nothing this project ships is
+code-signed, that Smart App Control therefore blocks it outright on a clean
+Windows 11 machine, and that the SignPath Foundation — which signs qualifying
+open-source projects free — was the route worth taking. The groundwork was
+done: the installer is built in CI from a hash-verified QEMU (decision 62's own
+precondition), and every shipped artifact now carries a matching ProductName
+and ProductVersion, which it did not before.
+
+**The application was declined.** Not on the code, the licence, the build or
+the bundled QEMU question that was expected to be the sticking point. On
+**public visibility**: the programme looks for stars, forks, contributors,
+external references and sustained activity, and Kurukuru has three releases and
+essentially no audience. They invited a reapplication once the project has
+broader recognition.
+
+**Decision: reapply later, and buy nothing now.**
+
+The paid alternatives were already priced in decision 62 and none of them
+changes because of this. Azure Artifact Signing remains closed to individuals
+outside the USA and Canada. An OV certificate remains available worldwide at
+$150–300 a year plus a hardware token. Neither is a *bad* option; both are the
+wrong answer to the problem actually in front of the project, which is that
+almost nobody has used it.
+
+Buying a certificate to work around a decline for lack of users would be
+spending money to remove a symptom of having no users. The certificate would
+sign the same installer for the same handful of people, and — per decision 62 —
+Smart App Control consults reputation before signature anyway, so a new
+certificate with no history behind it is not an instant fix even when bought.
+The thing that unlocks both the free programme *and* the reputation a signature
+needs is the same thing: more people using it.
+
+**What this costs, stated plainly rather than filed away.** Until signing is in
+place, Kurukuru cannot be installed at all on a machine with Smart App Control
+enforcing — which is the default on a clean Windows 11 install. Everything
+0.1.2 did here was to make that *legible* rather than to fix it: the status code
+is reported in hex with a name, `doctor` reads Smart App Control's state and
+says when it is the cause, and the README says so without hedging. That remains
+the honest position, and it is a real limit on who can use this, not a
+formality.
+
+**What was kept.** `docs/history/SIGNPATH_APPLICATION_DRAFT.md` is retained as
+submitted, including the unresolved question about bundling 120 unsigned
+upstream QEMU binaries. A reapplication starts from that text rather than
+rewriting it, and the question is still worth asking when it does — the decline
+did not answer it.
+
 ## Known limitations
 
-- **Nothing is code-signed.** SmartScreen warns on the installer, and Smart App
-  Control — on by default on a clean Windows 11 install — blocks the product
-  outright. See decision 62 for the measurements and the route out; `doctor`
-  reports it when that is what is happening.
+- **Nothing is code-signed, and there is no date for it.** SmartScreen warns on
+  the installer, and Smart App Control — on by default on a clean Windows 11
+  install — blocks the product outright, so it cannot be installed there at
+  all. The free-signing application was declined for lack of public visibility
+  and will be made again when that changes (decision 64); the measurements are
+  in decision 62, and `doctor` reports it when that is what is happening.
 - **No authorization.** Authentication exists (decisions 45-48); roles and
   project isolation do not. Every account is a full administrator.
 - **No transport encryption.** Plain HTTP, so anything beyond loopback needs

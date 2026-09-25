@@ -127,19 +127,22 @@ That has two consequences, and the second is the serious one:
   in **Windows Security → App & browser control**, which is a machine-wide
   security setting and worth weighing rather than clicking through.
 
-**We have applied to the [SignPath Foundation](https://signpath.org/), which
-provides free code signing for open-source projects.** This section will carry
-the attribution their programme requires once the application is approved.
-Until then this is a statement of intent, not of fact: assume every artefact is
-unsigned and verify downloads by their published SHA-256.
+**Signing is planned, and not in place.** An application to the
+[SignPath Foundation](https://signpath.org/), which signs qualifying
+open-source projects free, was declined — not on the code or the build, but on
+public visibility: they look for stars, forks, contributors, external
+references and sustained activity, and invited a reapplication once the project
+has broader recognition. That is the plan. Nothing is bought in the meantime.
 
-Why it is not simply bought instead: Microsoft's own
-[Azure Artifact Signing](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options)
-is limited to individuals in the USA and Canada, and this project is
-maintained from Nigeria. An OV certificate is the paid fallback. The
-measurements behind that choice — including which of the 185 shipped binaries
-carry a valid signature today, and which do not — are in
-[docs/DECISIONS.md](docs/DECISIONS.md) under decision 62.
+So the position today is simple, and worth stating without hedging: **every
+artefact this project publishes is unsigned, and on a machine with Smart App
+Control enforcing, Kurukuru will not run.** Verify downloads by their published
+SHA-256. This section will carry the attribution a signing programme requires
+if and when one is in place.
+
+The measurements behind all of this — which of the 185 shipped binaries carry a
+valid signature today, and which do not — are in
+[docs/DECISIONS.md](docs/DECISIONS.md) under decisions 62 and 64.
 
 ---
 
