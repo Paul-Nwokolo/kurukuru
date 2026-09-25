@@ -434,8 +434,16 @@ export function LaunchModal({ open, onClose, onOpenConsole }: LaunchModalProps) 
               it in the ISO directory, and pick it below. Expect the install to take
               considerably longer than a Linux cloud image, and to run it from the
               console.{' '}
+              {/* Precise about which Windows, because "Server and 10 are
+                  supported" was not true: a Windows 10 install has completed
+                  end to end here and passed a validation scorecard, while
+                  Server 2022 only ever reached Setup and the Server 2025 media
+                  on hand is dead. Offering Server as supported in the one
+                  place somebody commits to a 40 GB install is the wrong place
+                  to be optimistic. */}
               <span className="text-text">
-                Windows Server and Windows 10 are supported; Windows 11 is not
+                Windows 10 installs and runs. Windows Server has not completed an
+                install here, and Windows 11 cannot
               </span>{' '}
               — it requires a TPM, which QEMU cannot emulate on a Windows host.
             </p>

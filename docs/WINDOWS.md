@@ -20,7 +20,7 @@ reboot — proof the defect fires on the mechanism (`system_reset`) rather than
 on anything specific to Setup**, which matters because it means the workaround
 has to stay scoped to every Windows reboot, not just the installer's.
 Everything below records the measurements and the workaround's design; see
-DECISIONS #56 for the full account of the completed install and the
+DECISIONS #57 for the full account of the completed install and the
 post-install validation scorecard run against it.
 
 Last updated after the first completed install. Earlier revisions of this
@@ -84,7 +84,7 @@ completed in the same ~9 minutes with zero stalling, the guest hit the
 `restart_instance()`'s fresh-process recovery brought it back every time —
 twice, in fact, since Windows' own OOBE finalisation triggers a second,
 independent internal reboot that hit the identical hang. The install then
-reached a normal, logged-in Windows 10 desktop. See DECISIONS #56 for the
+reached a normal, logged-in Windows 10 desktop. See DECISIONS #57 for the
 full account, including the post-install validation scorecard (network,
 volumes, restart, clone, ACPI stop) run against the completed guest.
 

@@ -263,9 +263,13 @@ See [WINDOWS.md](WINDOWS.md).
 
 ## Known limitations
 
-- **Windows guests are a work in progress.** Windows 11 cannot be installed at
-  all — it requires TPM 2.0, which cannot be emulated on a Windows host. See
-  [DECISIONS.md](DECISIONS.md).
+- **Windows guests: 10 yes, Server not yet, 11 never.** A Windows 10 install has
+  completed end to end and passed a validation scorecard — one install, not a
+  body of evidence, and it needs two automatic restarts on the way through to
+  work around an upstream QEMU defect. Windows Server has not completed an
+  install here. Windows 11 cannot be installed at all: it requires TPM 2.0,
+  which cannot be emulated on a Windows host. See
+  [WINDOWS.md](WINDOWS.md) for the evidence and [DECISIONS.md](DECISIONS.md).
 - **No TLS.** Plain HTTP on loopback. Anything beyond this machine needs a
   TLS-terminating proxy in front of it.
 - **No roles.** Every account is a full administrator.

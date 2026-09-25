@@ -3239,6 +3239,12 @@ did not answer it.
   all. The free-signing application was declined for lack of public visibility
   and will be made again when that changes (decision 64); the measurements are
   in decision 62, and `doctor` reports it when that is what is happening.
+- **Windows guests: 10 yes, Server not yet, 11 never.** A Windows 10 install has
+  completed end to end and passed the scorecard (decision 57) — one install, and
+  it needs the reboot watchdog to work around an upstream QEMU defect (decision
+  55) on the way through. Windows Server has not completed an install; the only
+  Server 2025 media on hand is confirmed dead on two hosts. Windows 11 is
+  impossible on a Windows host at all: no TPM emulation.
 - **No authorization.** Authentication exists (decisions 45-48); roles and
   project isolation do not. Every account is a full administrator.
 - **No transport encryption.** Plain HTTP, so anything beyond loopback needs

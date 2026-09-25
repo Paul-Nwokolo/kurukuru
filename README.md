@@ -94,10 +94,13 @@ that works even for VMs with no network.
 
 Read this before you rely on it.
 
-- **Windows guests are in progress.** They boot their installer and can be
-  driven through Setup, but no Windows install has ever completed here. Windows
-  11 is permanently out of reach on a Windows host: it needs TPM 2.0, which
-  QEMU excludes on Windows at build time. Linux guests work properly.
+- **Windows 10 guests install and run; Server does not yet.** A Windows 10
+  install has completed end to end through the engine and passed a five-item
+  validation scorecard. That is *one* completed install, not a reliability
+  claim, and it needs a workaround for an upstream QEMU defect on the way
+  through — see [Windows guests](#windows-guests). Windows Server has not
+  completed an install here. Windows 11 is permanently out of reach on a
+  Windows host: it needs TPM 2.0, which QEMU excludes on Windows at build time.
 - **No transport encryption.** Plain HTTP on loopback. Beyond this machine,
   credentials and VM framebuffers would cross the wire in the clear — put a
   TLS-terminating proxy in front of it. See [docs/SECURITY.md](docs/SECURITY.md).
@@ -542,39 +545,62 @@ The short version is under [Honest limitations](#honest-limitations); in full:
   [docs/SECURITY.md](docs/SECURITY.md).
 - **Windows-validated only.** Other platforms are unexercised. (That is the
   *host*. Windows **guests** are a separate matter — see below.)
-- **Linux guests only, in practice.** Windows guests get the right virtual
-  hardware and boot their installer, but no Windows install has ever completed.
-  Treat Windows support as in progress, not available.
-  See [Windows guests](#windows-guests).
+- **Linux guests are the well-trodden path.** Windows 10 has completed an
+  install and passed the post-install scorecard; it is one install rather than a
+  body of evidence, and Windows Server has not got there. See
+  [Windows guests](#windows-guests).
 - **SQLite, single process.** Fine for one machine; not a multi-writer design.
 
 ### Windows guests
 
-**In progress, and not usable yet — no Windows install has ever completed on
-this project.** A Windows instance launches, gets the right virtual hardware,
-boots its installer, and can be driven through Setup as far as choosing a disk.
-The install phase past that point has never finished.
+**Windows 10 installs and runs.** A real Windows 10 install has completed end
+to end through `provision_instance` — not a hand-written QEMU command line — to
+a normal, logged-in desktop, and then passed a five-item validation scorecard.
 
-What is established, each verified against a running installer rather than
-inferred:
+Stated precisely, because the difference matters: that is **one** completed
+install. It is enough to say Windows 10 works; it is not enough to call it
+well-trodden, and this host is bimodal (see the warning below), so treat a
+single success the way this project treats any single measurement.
 
-- **The device profile is right.** Windows guests get an AHCI/SATA disk
-  (`ich9-ahci` + `ide-hd`), an Intel `e1000e` NIC and standard VGA. Setup's disk
-  page lists the drive with **no "Load driver" step** — the whole reason for
-  choosing AHCI over virtio.
-- **Setup boots and can be driven** through every screen to disk selection.
-- **Console input needs USB HID.** A QMP keystroke never reaches a PS/2 keyboard
-  with no display client attached; Windows guests now get `qemu-xhci` +
-  `usb-kbd` + `usb-tablet`.
-- **Windows 11 is out of reach on a Windows host, permanently.** It requires TPM
-  2.0, and QEMU excludes TPM emulation on Windows hosts at build time, so no
-  upgrade adds it. Server and Windows 10 are unaffected.
+What was verified against the completed guest, each exercised through the API
+rather than inferred:
 
-The leading suspect for the remaining failure is the **VNC console** the engine
-attaches to every VM, which is measurably ruinous under this host's accelerator
-— identical command lines reach Setup in 21 s without it and never with it. That
-is not yet proven to explain the install-phase stall, and it puts the feature in
-direct conflict with its own access path, since Windows guests have no SSH.
+- **Network** — DHCP lease from QEMU's SLIRP gateway, 4/4 ping, 0% loss. The NIC
+  comes up as an Intel 82574L with its inbox driver bound and no install step.
+- **Volumes** — attached with `set_volumes()`, partitioned and formatted through
+  `diskpart`, and still the same letter with an intact marker file after a
+  restart.
+- **Restart** — `restart_instance()` round-tripped in ~27 s with a graceful ACPI
+  stop from an idle desktop.
+- **Clone** — `clone_disk()` + `boot_cloned_instance()` produced an
+  independently running guest on its own ports, with no shared state.
+- **ACPI stop** — both branches seen: the fast graceful stop, and the full 90 s
+  timeout followed by a forced kill.
+
+**Expect two automatic restarts during the install, and know why.** QEMU's
+`system_reset` under WHPX does not bring a Windows guest back — deterministically,
+36/36 trials across two QEMU builds — which is an unreported upstream defect,
+now filed as
+[qemu#4410](https://gitlab.com/qemu-project/qemu/-/issues/4410). A Windows
+install triggers it twice: once at Setup's own internal reboot, and again at
+Windows' first-boot OOBE finalisation. Both are recovered by respawning a fresh
+QEMU process against the same disk, which is what `kurukuru/reboot_watchdog.py`
+exists to do. It is a heuristic workaround for somebody else's bug, and it is
+scoped to *every* Windows reboot rather than the installer's, because the defect
+proved to be in the reboot mechanism rather than in anything Setup does.
+
+**Windows Server has not completed an install here.** Server 2022 reaches Setup;
+the only Server 2025 media on hand is confirmed dead across two hosts and needs
+replacing before the question can even be asked. Do not read Windows 10's result
+as covering Server.
+
+**Windows 11 is out of reach on a Windows host, permanently.** It requires TPM
+2.0, and QEMU excludes TPM emulation on Windows hosts at build time, so no
+upgrade adds it.
+
+**Access is the console.** Windows reads none of cloud-init, so it gets no
+injected SSH key and no seed — the browser console is the way in until RDP is
+enabled inside the guest, which the port-forward preset covers.
 
 **A warning for anyone measuring here:** this host is bimodal — the same command
 line either succeeds in seconds or not at all — and three separate hypotheses in

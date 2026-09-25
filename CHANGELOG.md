@@ -30,6 +30,22 @@ Design decisions behind these changes are recorded in
   too large for the Recycle Bin, nothing is removed and the uninstaller says
   so, rather than silently falling back to a permanent delete.
 
+- **The documentation said no Windows install had ever completed, which stopped
+  being true before 0.1.0 shipped.** A Windows 10 install completed end to end
+  through the engine and passed a five-item validation scorecard (recorded in
+  DECISIONS #57 and `docs/WINDOWS.md`), but the README, `docs/INSTALL.md`, the
+  dashboard's launch dialog and the 0.1.0 and 0.1.1 release notes all still said
+  otherwise — three of them in the section a reader checks precisely to find out
+  whether Windows works.
+
+  All corrected, and scoped rather than upgraded wholesale: Windows 10 installs
+  and runs, as **one** completed install rather than a body of evidence, and it
+  takes two automatic restarts to work around an upstream QEMU defect. Windows
+  Server has *not* completed an install — the dashboard claimed Server was
+  "supported", which was never established — and Windows 11 remains impossible.
+  The published 0.1.0 and 0.1.1 notes carry dated corrections rather than being
+  rewritten, since what they said was true when they shipped.
+
 - **The README now states the code-signing position plainly.** It previously
   said an application to the SignPath Foundation was outstanding; that
   application was declined — on public visibility, not on anything technical —
