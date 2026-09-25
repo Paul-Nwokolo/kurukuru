@@ -88,3 +88,10 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Saved copies of other people's web pages, downloaded while working on
+# something. Not ours to redistribute, and stale the moment they edit them.
+# This one arrived while reading SignPath's terms and `git add -A` picked it up
+# twice before it was ignored.
+signpath_terms.html
+*.download.html
