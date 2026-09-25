@@ -78,7 +78,7 @@ STARTUP_TASK_NAME = "Kurukuru"
 #: The *installed* distribution's metadata is still the authority at runtime
 #: when there is one — see ``cli_version()`` — because a wheel built from an
 #: older tree genuinely is that older version, whatever this file now says.
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 
 #: Root of everything this tool keeps on disk, before ``~`` is expanded.
 #: :mod:`kurukuru.config` re-exports it as ``DEFAULT_STATE_DIR`` and roots every
