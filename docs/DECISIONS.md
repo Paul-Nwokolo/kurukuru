@@ -3231,6 +3231,142 @@ upstream QEMU binaries. A reapplication starts from that text rather than
 rewriting it, and the question is still worth asking when it does — the decline
 did not answer it.
 
+## 65. Starlette 0.49.3, not 1.x: the one reachable advisory sat below a major bump all along
+
+**Context.** ROADMAP 0.2.0 §1 recorded that FastAPI 0.115.12 pins
+`starlette<0.47.0`, that every open Starlette advisory was fixed at 0.47.2 or
+later, and so that the fixes sat "on the far side of a major upgrade" — 961
+tests to re-validate against a new major version of the framework. Deferred
+twice on that basis. The advisory set was months old, so Phase 17 re-ran the
+audit before touching a pin.
+
+**The audit, re-run.** `pip-audit` over the venv's exact installed set (a
+`pip freeze`, so transitive packages are audited at the versions actually
+present, not just the top-level pins):
+
+| Advisory | What | Fixed in | Reachable here? |
+|---|---|---|---|
+| PYSEC-2026-1942 | `FileResponse` `Range` parse is quadratic | 0.49.1 | **Yes** — the dashboard's asset route, unauthenticated |
+| PYSEC-2026-1941 | `UploadFile` rollover blocks the event loop | 0.47.2 | No — no route takes a form or file; `python-multipart` is not installed |
+| PYSEC-2026-161 | Host header injected into the reconstructed `request.url` | 1.0.1 | No — see below |
+| PYSEC-2026-248 | A path not starting `/` moves `request.url.hostname` | 1.3.0 | No — nothing reads `request.url.hostname` |
+| PYSEC-2026-249 | url-encoded forms ignore `max_fields`/`max_part_size` | 1.3.1 | No — nothing calls `request.form()` |
+| PYSEC-2026-2280 | `HTTPEndpoint` dispatches on an attacker-chosen method name | 1.1.0 | No — FastAPI does not use `HTTPEndpoint` |
+| PYSEC-2026-2281 | `StaticFiles` resolves a UNC path on Windows (NTLM leak) | 1.1.0 | No — `StaticFiles` is not used; `kurukuru.safe_paths` serves the dashboard and refuses UNC before resolving |
+| PYSEC-2026-1845 | pytest's `/tmp/pytest-of-{user}` on UNIX | pytest 9.0.3 | No — a dev dependency, never shipped, and the suite runs on Windows |
+
+Seven Starlette advisories, not the four recorded, and the newest fixes are in
+1.3.x. But exactly **one is reachable**, and it is fixed at **0.49.1**.
+
+*Why the two `request.url` advisories do not reach the auth guard.* The guard
+keys its tables on `scope["route"].path` — the matched route *template* — and
+only falls back to `conn.url.path` when no route matched, which cannot happen
+for an application-level dependency (it only runs on a matched route). FastAPI
+0.120.4 still sets `scope["route"]` for both HTTP and WebSocket routes; that was
+checked in the installed source, not assumed. TrustedHostMiddleware also runs
+outermost and refuses any Host not on the loopback list before a URL is ever
+built.
+
+**What we believed going in was wrong in its premise.** "Behind a FastAPI major
+bump" assumed FastAPI had a major to bump. It has not: it is still 0.x (0.142.2
+at the time of writing). Its Starlette ceiling moved up through minor releases —
+`<0.48` at 0.116.1, `<0.49` at 0.116.2, **`<0.50` at 0.120.1**, `<1.0` at
+0.128.3, uncapped from 0.133.0. So the reachable fix is available from FastAPI
+0.120.1 onward with no Starlette major at all.
+
+**Decision: FastAPI 0.120.4 + Starlette 0.49.3, and no further.** 0.120.4 is
+the last patch of the first series that admits Starlette 0.49; 0.49.3 is the
+last patch of 0.49. Taking Starlette 1.x would close five advisories that do
+not reach this application, at the cost of a framework major (1.0 removed
+long-deprecated APIs) and FastAPI ≥0.133. That is a major upgrade for its own
+sake, which the brief ruled out. Starlette is now pinned explicitly — it was
+transitive — because it is the package the security fix lives in.
+
+**Measured, not taken from the changelog.** The Range parse, timed on this host
+through Starlette's own `FileResponse`:
+
+| `Range: bytes=` + | 0.46.2 | 0.49.3 |
+|---|---|---|
+| 8,000 digits | 0.26 s | 0.05 s (first call) |
+| 16,000 digits | 0.81 s | 0.002 s |
+| 32,000 digits | **4.69 s** | 0.002 s |
+| `-` + 16,000 digits | **500** — unhandled `ValueError` from `int()` | 400, 0.002 s |
+
+Quadratic, synchronous, on the event loop: each request stalls every other
+request the server is handling, including the console. The last row is a
+second finding the advisory does not mention — on 0.46.2 that header was not
+slow but fatal.
+
+**What changed for us, crossing 0.115.12 → 0.120.4 and 0.46.2 → 0.49.3.** Every
+release note was read, not just the endpoints'. The ones that touch this code:
+
+- **FastAPI 0.118.0** — code after `yield` in a dependency now runs *after* the
+  response is sent. `get_session` is a yield dependency and the guard depends
+  on it for every route. It only closes the session; every handler commits
+  before returning, so there is nothing to delay. The console WebSocket opens
+  its own short-lived sessions and was already unaffected.
+- **FastAPI 0.120.3** — dependency resolution internals refactored. The guard
+  relies on FastAPI injecting `HTTPConnection` by exact type (`security.guard`'s
+  docstring); the WebSocket console tests exercise exactly that and pass.
+- **Starlette 0.48.0** — RFC 9110 status names (`HTTP_422_UNPROCESSABLE_ENTITY`
+  and friends deprecated). None are used.
+- **Starlette 0.49.0** — multiple `Cookie` headers merged in `Request.cookies`,
+  and `BaseHTTPMiddleware` no longer pollutes exception context.
+  `SecurityHeadersMiddleware` is a `BaseHTTPMiddleware`; covered below.
+- Lifespan, TestClient, static serving, middleware ordering: no change in this
+  range.
+
+No application code changed. The suite went 1058 passed / 4 skipped before
+and after, with no new warnings.
+
+**What a green suite was not proving.** Every existing test reaches the app as a
+legitimate client — loopback Host, no foreign Origin — so it passes *through*
+the browser defences without asking them to refuse anything. Each surface the
+brief named was broken on purpose and the suite run against it:
+
+| Deliberate break | Before Phase 17 | After |
+|---|---|---|
+| Console drops the first VNC byte | caught | caught |
+| Guard skips `/images` | caught | caught |
+| FastAPI's default `/docs` + `/openapi.json` re-enabled | 1 of 3 routes caught by the coverage test | all 3 |
+| CSRF check disabled | caught | caught |
+| `TrustedHostMiddleware` removed | **1058 passed** | caught |
+| CORS opened to every origin | **1058 passed** | caught |
+| `SecurityHeadersMiddleware` removed | **1058 passed** | caught |
+| Unknown `/api` path falls through to the SPA | caught | caught |
+| `index.html` cached immutable | caught | caught |
+| Starlette 0.46.2 reinstalled | no test existed | both Range tests fail |
+| noVNC attach ordering reversed (`check:console`) | caught | caught |
+
+`tests/test_browser_defences.py` closes the four silent rows: a rebound Host
+refused on HTTP *and* at the WebSocket handshake, a preflight and a simple
+request from another local port granted nothing, the security headers on a 200
+and on a 401, and the hostile Range headers. Its first draft of the WebSocket
+test asserted only "disconnected" — and passed with TrustedHost removed,
+because the endpoint refuses a ticketless caller too. It now asserts a
+*handshake denial* (`WebSocketDenialResponse`, 400), which only the Host check
+produces.
+
+The coverage test's partial catch was its own bug, from Phase 16 rather than
+this upgrade: it requested `/api` + the stripped key, so for a route registered
+*outside* the prefix it asked the guarded `/api/docs` twin and got its 401. It
+now requests the path the application registered. `test_dashboard`'s
+everything-under-the-prefix test had been catching the full set all along,
+which is why the gap never mattered — but a guard should catch what it claims
+to.
+
+**Found, not fixed.** TrustedHostMiddleware splits the Host header on its
+*first* colon, so every IPv6 literal — `[::1]` and `[::1]:7842` alike — arrives
+at the comparison as `"["`. The `::1` and `[::1]` entries in `_allowed_hosts`
+have never matched anything, on 0.46.2 or 0.49.3. Reachable only by binding
+`--host ::1`; the default is 127.0.0.1. Recorded under known limitations rather
+than fixed in a phase whose brief was dependencies only.
+
+**Remaining advisories, and why they stay.** The five Starlette advisories fixed
+only in 1.x, and pytest's, each unreachable for the reason in the table. They
+are the 1.x upgrade's business if it is ever wanted for its own sake; nothing
+in this application needs it today.
+
 ## Known limitations
 
 - **Nothing is code-signed, and there is no date for it.** SmartScreen warns on
@@ -3251,5 +3387,9 @@ did not answer it.
   a TLS-terminating proxy in front of it. See docs/SECURITY.md.
 - **SQLite, single writer.** Fine now; a multi-process deployment would need
   more.
+- **An IPv6 Host header is always refused.** Starlette's TrustedHostMiddleware
+  splits the header on its first colon, so `[::1]` never matches the allow-list
+  (decision 65). Only reachable by binding `--host ::1`; the default is
+  127.0.0.1.
 - **Concurrent-launch name race.** See decision 6 — closable with a partial
   unique index if it ever matters.

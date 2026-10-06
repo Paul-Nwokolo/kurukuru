@@ -626,19 +626,6 @@ indistinguishable from one nobody noticed.
   unrelated reason. A success message still fades after four seconds; an error
   stays until dismissed. Per-instance reconcile is the part still missing.
 
-- **Starlette is pinned behind its own security fixes, and that is the first
-  task of 0.2.0.** FastAPI 0.115.12 requires `starlette<0.47.0`; the advisories
-  open against 0.46.2 are fixed in 0.47.2 and later, several only in 1.x. So
-  every remedy sits on the far side of a FastAPI major upgrade, which is not a
-  thing to attempt in a release week. The two that could matter here were dealt
-  with directly instead: the Windows UNC path-resolution bug does not apply,
-  because the dashboard is served by this project's own handler rather than
-  Starlette's `StaticFiles` — but the same mistake *was* in that handler and in
-  the ISO resolver, and both now share one containment check that establishes
-  where a path lands before the filesystem is touched. What remains deferred is
-  a quadratic `Range`-header parse in `FileResponse`, whose worst case is CPU
-  burn on the machine already running the server.
-
 Guest-facing surfaces are bound to `127.0.0.1` by design — VNC, QMP and the SSH
 port forward — so the console proxy is the only path to a VM's screen. That is a
 deliberate invariant with a test guarding it, not an accident of configuration.

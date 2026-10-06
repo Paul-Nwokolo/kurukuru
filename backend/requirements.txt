@@ -1,5 +1,10 @@
 # --- Core API framework ---
-fastapi==0.115.12
+fastapi==0.120.4
+# Pinned explicitly although FastAPI brings it in, because it is the package the
+# security fixes live in (PYSEC-2026-1942, the FileResponse Range DoS, closed at
+# 0.49.1). Left transitive, it is whatever FastAPI's range resolves to on the
+# day — see DECISIONS #65 for the advisories this version does and does not close.
+starlette==0.49.3
 uvicorn[standard]==0.34.2
 
 # --- Database / ORM (SQLModel = SQLAlchemy + Pydantic) ---

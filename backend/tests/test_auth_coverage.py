@@ -81,9 +81,16 @@ def test_every_route_is_closed_or_deliberately_public(anon_client, path, method)
     if key in TICKET_ROUTES:
         return
 
-    # The client's base URL already carries the prefix, so the request is made
-    # with the stripped path.
-    response = anon_client.request(method, _concrete(key))
+    # Requested at the path the application *registered*, as an absolute URL so
+    # the client's prefixed base URL is not joined onto it. Requesting the
+    # stripped key under the prefix instead checks a different route whenever
+    # one is registered outside the prefix: Phase 17 re-enabled FastAPI's own
+    # /docs and /openapi.json, and this test answered for them by requesting
+    # the guarded /api/docs twin and getting its 401. Only
+    # /docs/oauth2-redirect, which has no twin, was caught.
+    base = anon_client.base_url
+    origin = f"{base.scheme}://{base.netloc.decode('ascii')}"
+    response = anon_client.request(method, origin + _concrete(path))
 
     assert response.status_code == 401, (
         f"{method} {path} answered {response.status_code} to an anonymous caller. "

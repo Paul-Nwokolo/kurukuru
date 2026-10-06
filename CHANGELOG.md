@@ -11,6 +11,42 @@ Design decisions behind these changes are recorded in
 [docs/DECISIONS.md](docs/DECISIONS.md), and what is planned next is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
+## [Unreleased]
+
+### Security
+
+- **Starlette 0.46.2 → 0.49.3 (with FastAPI 0.115.12 → 0.120.4), closing
+  PYSEC-2026-1942 / CVE-2025-62727 / GHSA-7f5h-v6xp-fcq8.** A crafted `Range`
+  header made Starlette's `FileResponse` parse it in quadratic time,
+  synchronously, on the event loop. The dashboard's asset route serves files
+  through `FileResponse` without authentication, so any page open in the user's
+  browser could stall the whole server — every API call and every open console
+  — for ~4.7 s per request on the development machine; a `-`-prefixed variant
+  crashed the handler with a 500 instead. Both are now answered in about 2 ms.
+  PYSEC-2026-1941 (`UploadFile` rollover) closes with it; it was not reachable.
+
+  The upgrade the roadmap expected — a FastAPI major — turned out not to exist:
+  FastAPI is still 0.x, and the reachable fix arrives at Starlette 0.49.1,
+  which FastAPI admits from 0.120.1. Five advisories fixed only in Starlette
+  1.x remain, each unreachable here; the table is in
+  [DECISIONS.md](docs/DECISIONS.md) #65. No application code changed.
+
+### Added
+
+- **Tests that the browser defences refuse things.** With TrustedHost removed,
+  CORS opened to every origin, or the security headers gone, the previous suite
+  still passed in full, because every test reached the app as a legitimate
+  client. `tests/test_browser_defences.py` sends the rebound Host, the
+  foreign-origin preflight and the hostile `Range` header, and each test was
+  watched to fail with its defence broken.
+
+### Fixed
+
+- **The route-coverage test checked the wrong route for anything registered
+  outside `/api`.** It requested the prefixed copy, so FastAPI's own `/docs`
+  and `/openapi.json` read as closed when re-enabled. It now requests the path
+  the application registered.
+
 ## [0.1.3] — 2026-09-25
 
 ### Fixed

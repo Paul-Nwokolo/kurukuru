@@ -10,29 +10,20 @@ Nothing here is a commitment to a date. The ordering is by what unblocks what.
 
 ## 0.2.0
 
-### 1. Upgrade FastAPI, and Starlette with it
+### 1. ~~Upgrade FastAPI, and Starlette with it~~ — done in 0.1.4, smaller than planned
 
-**The first task, before features.** FastAPI 0.115.12 requires
-`starlette<0.47.0`, and every open Starlette advisory is fixed at 0.47.2 or
-later — several only in 1.x. So the fixes are all on the far side of a major
-upgrade, and 0.1.0 shipped pinned with that written down rather than attempted
-in a release week.
+The premise here was that every Starlette fix sat behind a FastAPI major bump.
+FastAPI has no major to bump — it is still 0.x — and its Starlette ceiling rose
+through minor releases. The one advisory reachable in this application
+(PYSEC-2026-1942, the quadratic `Range` parse on the dashboard's asset route) is
+fixed at Starlette 0.49.1, which FastAPI admits from 0.120.1. So 0.1.4 ships
+FastAPI 0.120.4 + Starlette 0.49.3 and stops there.
 
-What it closes: a quadratic `Range`-header parse in `FileResponse`
-(PYSEC-2026-1942), reachable unauthenticated through the dashboard's asset
-route. The worst case is CPU burn on the machine already running the server,
-triggered by a page the user visited — see the browser-as-client threat model
-in [SECURITY.md](SECURITY.md).
-
-What it will cost: 961 backend tests to re-validate against a major version of
-the framework the whole API is built on. That is the work, and it is why it is
-first rather than squeezed in beside something else.
-
-Two other Starlette advisories were assessed and do not apply: the
-`HTTPEndpoint` method-lookup issue (FastAPI does not use `HTTPEndpoint`) and the
-`StaticFiles` UNC SSRF on Windows (the dashboard is served by this project's own
-handler). The second is worth reading anyway — the same mistake *was* present
-here, in `dashboard` and `isos`, and is fixed in `kurukuru.safe_paths`.
+Five Starlette advisories fixed only in 1.x remain, each assessed unreachable;
+the table and the reasoning are in [DECISIONS #65](DECISIONS.md). A move to
+Starlette 1.x is no longer a security item. If it is ever taken, take it for
+its own reasons, and expect it to be the major upgrade this section used to
+describe.
 
 ### 2. Roles, and audit by actor
 

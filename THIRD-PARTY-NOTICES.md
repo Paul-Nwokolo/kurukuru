@@ -80,7 +80,7 @@ the exact version of every one.
 
 ## Backend dependencies
 
-FastAPI, uvicorn, SQLModel, SQLAlchemy, pydantic, Typer, Rich, httpx, psutil,
+FastAPI, Starlette, uvicorn, SQLModel, SQLAlchemy, pydantic, Typer, Rich, httpx, psutil,
 PyYAML, pycdlib and argon2-cffi, all MIT-, BSD- or LGPL-licensed. Pinned in
 `backend/pyproject.toml` and `backend/requirements.txt`.
 

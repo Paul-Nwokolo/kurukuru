@@ -143,26 +143,31 @@ attacker's name in it. Requests whose `Host` is not the bound address or a
 loopback name are refused with a 400. The allowed list is derived from the bind
 address, so binding a LAN address deliberately still works.
 
-### Known, deferred
+### Framework advisories
 
-**A quadratic `Range`-header parse in Starlette's `FileResponse`**
-(PYSEC-2026-1942). Reachable unauthenticated through the dashboard's asset
-route; the worst case is CPU burn on the machine already running the server, by
-a page the user visited. It is not fixed because it cannot be: FastAPI
-0.115.12 requires `starlette<0.47.0` and the fix landed in 0.49.1, so it is on
-the far side of a FastAPI major upgrade. That upgrade is the first task of
-0.2.0 — see the README's deferred gaps.
+**The quadratic `Range`-header parse in Starlette's `FileResponse`**
+(PYSEC-2026-1942) is fixed in 0.1.4. It was reachable unauthenticated through
+the dashboard's asset route, and it was worse than CPU burn: the parse ran
+synchronously on the event loop, so one request with a 32,000-digit header
+stalled the whole server for ~4.7 s on the development machine — every API
+call and every open console with it — and a `-`-prefixed variant crashed the
+handler with a 500. Starlette 0.49.3 answers both in about 2 ms.
+`tests/test_browser_defences.py` holds the line, and was watched to fail
+against 0.46.2.
 
-Two other Starlette advisories were assessed and do not apply: the `HTTPEndpoint`
-method-lookup issue (FastAPI does not use `HTTPEndpoint`) and the `StaticFiles`
-UNC SSRF on Windows (the dashboard is served by this project's own handler).
-That second one is worth reading twice, because the same mistake *was* present
-here — in the dashboard's asset resolver and in the ISO resolver, both of which
-resolved a joined path before checking it was inside the root. On Windows that
-turns a request path naming a UNC share into an outbound SMB connection to a
-host the caller chose, from an unauthenticated route. Both now use
-`kurukuru.safe_paths.resolve_within`, which decides containment before touching
-the filesystem.
+Five Starlette advisories fixed only in 1.x remain open against 0.49.3, and
+none reaches this application: nothing reads `request.url`'s host or calls
+`request.form()`, `HTTPEndpoint` and `StaticFiles` are not used, and the
+Host-header injection is refused first by the Host check above. Each is in the
+table in [DECISIONS #65](DECISIONS.md) with its reason.
+
+The `StaticFiles` UNC SSRF is worth reading twice, though, because the same
+mistake *was* present here — in the dashboard's asset resolver and in the ISO
+resolver, both of which resolved a joined path before checking it was inside
+the root. On Windows that turns a request path naming a UNC share into an
+outbound SMB connection to a host the caller chose, from an unauthenticated
+route. Both now use `kurukuru.safe_paths.resolve_within`, which decides
+containment before touching the filesystem.
 
 ## What is *not* protected
 
