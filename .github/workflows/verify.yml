@@ -262,8 +262,16 @@ jobs:
           created = host_admin.create_owner("ci", secrets.token_urlsafe(18), "ci")
           auth_store.save(created.token, "")
           EOF
-          kurukuru doctor > doctor.txt; echo "doctor exit: $?"
+          # Actions runs bash with -e, and doctor is *meant* to exit 1 here (no
+          # QEMU on this runner is a FAIL) -- so its status is captured, not
+          # allowed to end the step before the checks below run. 3 would mean
+          # the backend was unreachable, which is a different failure.
+          set +e
+          kurukuru doctor > doctor.txt; code=$?
+          set -e
+          echo "doctor exit: $code"
           cat doctor.txt
+          test "$code" -eq 1
           grep -q "sudo apt install qemu-system-x86 qemu-utils" doctor.txt
           grep -q "KVM" doctor.txt
           if grep -qiE "windows|powershell|smart app|setx|\.exe|recycle bin" doctor.txt; then

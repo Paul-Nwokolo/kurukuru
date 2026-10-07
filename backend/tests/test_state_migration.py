@@ -23,6 +23,7 @@ import sqlite3
 import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -463,12 +464,20 @@ def holds_a_port() -> Iterator[tuple[int, int]]:
     )
     process = subprocess.Popen([sys.executable, "-c", script])
     try:
-        deadline = 200
-        while deadline:
+        # Waited on by time, not by a count of attempts. This used to be 200
+        # connect attempts with no pause: on Windows a refused connect takes
+        # about a second, so that was ample; on Linux it is refused in
+        # microseconds, all 200 were spent before the child Python had even
+        # started, and the test then migrated past a "running" VM whose port
+        # nobody held yet. First seen on the Phase 18 Linux CI job.
+        deadline = time.monotonic() + 30
+        while True:
             with socket.socket() as check:
                 if check.connect_ex(("127.0.0.1", port)) == 0:
                     break
-            deadline -= 1
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"the stand-in QEMU never bound 127.0.0.1:{port}")
+            time.sleep(0.05)
         yield process.pid, port
     finally:
         process.kill()
