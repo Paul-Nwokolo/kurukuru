@@ -42,6 +42,14 @@ Design decisions behind these changes are recorded in
 
 ### Fixed
 
+- **Upgrading no longer carries the previous version's files forward.** The
+  installer copied over the top and never removed anything the new version had
+  stopped shipping: installing this release over 0.1.2 left 51 of 0.1.2's
+  files behind, among them FastAPI 0.115.12's package metadata beside 0.120.4's
+  and a module FastAPI has since replaced. It now clears the three directories
+  it owns outright (`_internal`, `dashboard`, `qemu`) before copying. Your data
+  is in `~/.kurukuru` and is not touched.
+
 - **The test suite no longer writes into your real `~/.kurukuru`.** Two of
   the harness's self-tests proved the isolation guard by creating and
   deleting a file in the real `keys` directory (and, on a machine with no

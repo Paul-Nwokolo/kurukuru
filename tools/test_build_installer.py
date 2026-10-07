@@ -296,3 +296,70 @@ def test_the_publisher_agrees_with_the_installer_script():
     assert build_installer.installer_define("AppName") == build_installer.product_string(
         "PRODUCT_NAME"
     )
+
+
+def _iss_section(name: str) -> list[str]:
+    text = (build_installer.REPO / "packaging" / "windows" / "kurukuru.iss").read_text(
+        encoding="utf-8"
+    )
+    lines, inside = [], False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            inside = stripped == f"[{name}]"
+            continue
+        if inside and stripped and not stripped.startswith(";"):
+            lines.append(stripped)
+    return lines
+
+
+def test_every_directory_installed_wholesale_is_cleared_first():
+    """An upgrade must not carry the last version's files forward.
+
+    Inno's [Files] copies over the top and never removes a file the new version
+    stopped shipping. 0.1.2 -> 0.1.4 left 51 behind, including FastAPI
+    0.115.12's dist-info next to 0.120.4's and its ``_compat.py`` next to the
+    ``_compat`` package that replaced it — in the release whose whole point
+    was the framework upgrade. Every directory [Files] fills recursively is a
+    directory this product owns outright, so each must be wiped by
+    [InstallDelete] first. Derived from [Files] rather than listed, so a new
+    one is covered the day it is added.
+    """
+    import re
+
+    wholesale = set()
+    for entry in _iss_section("Files"):
+        if "recursesubdirs" not in entry:
+            continue
+        dest = re.search(r'DestDir:\s*"([^"]+)"', entry).group(1)
+        if dest == "{app}":
+            # The frozen app's own tree: what it fills under {app} is _internal.
+            wholesale.add("{app}\\_internal")
+        else:
+            wholesale.add(dest)
+
+    cleared = {
+        re.search(r'Name:\s*"([^"]+)"', entry).group(1)
+        for entry in _iss_section("InstallDelete")
+        if "filesandordirs" in entry
+    }
+
+    assert wholesale, "found no recursive [Files] entries — has the script's shape changed?"
+    assert wholesale <= cleared, (
+        f"Installed wholesale but never cleared before an upgrade: {sorted(wholesale - cleared)}"
+    )
+
+
+def test_install_delete_never_reaches_beyond_the_product_directories():
+    """The other direction, and the one that would destroy something.
+
+    A wipe of ``{app}`` itself, or of anything outside it, could take a file
+    the user put there, or worse. Only named subdirectories of ``{app}`` that
+    the product rebuilds in full are allowed.
+    """
+    import re
+
+    for entry in _iss_section("InstallDelete"):
+        name = re.search(r'Name:\s*"([^"]+)"', entry).group(1)
+        assert name.startswith("{app}\\") and name.count("\\") == 1, entry
+        assert name.split("\\", 1)[1] in {"_internal", "dashboard", "qemu"}, entry

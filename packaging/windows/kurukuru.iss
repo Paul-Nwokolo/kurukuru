@@ -107,6 +107,24 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "startup"; Description: "Start {#AppName} when I sign in"; GroupDescription: "Startup"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts"; Flags: unchecked
 
+[InstallDelete]
+; Clear what the previous version shipped before copying this one. [Files]
+; copies over the top and never removes a file the new version no longer
+; ships, so every upgrade used to accumulate the last one's leftovers: 0.1.2 ->
+; 0.1.4 left 51 files, among them FastAPI 0.115.12's dist-info beside 0.120.4's
+; (so anything asking the install which FastAPI it carries could be told the old
+; one) and its `fastapi\_compat.py` beside the `_compat\` package that replaced
+; it. Measured by diffing the disk against this installer's own log (DECISIONS
+; #65).
+;
+; Only the three directories this product owns outright, all rebuilt in full
+; by every release. Nothing a user creates lives under the install directory -
+; state is in ~/.kurukuru - and PrepareToInstall has already stopped Kurukuru
+; and refused to continue if its files are locked, which Inno runs before this.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\dashboard"
+Type: filesandordirs; Name: "{app}\qemu"
+
 [Files]
 ; The frozen backend and the CLI, the built dashboard, and QEMU with the
 ; manifest recording the SHA-256 of every file in it.

@@ -3422,6 +3422,33 @@ watcher, re-run across the module, reports no change to the real tree.
 Nothing uses `real_state` now, and CONTRIBUTING says no test writes, creates or
 deletes anything there; the guard only stats it.
 
+**Every upgrade was carrying the last version forward.** Live check 5 installed
+the CI-built 0.1.4 over the 0.1.2 on the development machine, and
+`fastapi-0.115.12.dist-info` was sitting in `_internal` beside
+`fastapi-0.120.4.dist-info`. Diffing the files on disk against the installer's
+own log — every file it wrote is listed there, which makes the measurement
+exact rather than a guess from timestamps (Inno keeps the build machine's) —
+gave 51 files 0.1.4 never wrote: old dist-info for six packages, five
+superseded dashboard bundles, four QEMU DLLs this build no longer ships, and
+`fastapi\_compat.py`, the module FastAPI 0.119 turned into a `_compat\`
+package.
+
+The application was almost certainly unaffected: `--collect-all fastapi` ships
+the source beside the compiled archive, and PyInstaller's archive importer
+runs before the filesystem, so the new package wins. But a security release
+whose subject is a framework upgrade should not leave the old framework's
+metadata in place for anything that asks the install what it carries, and the
+mechanism — `[Files]` copies over the top and removes nothing — would have done
+the same on every future upgrade. `[InstallDelete]` now clears `_internal`,
+`dashboard` and `qemu` before copying: the three directories the product owns
+outright and rebuilds in full each release. Nothing a user creates lives under
+the install directory, and `PrepareToInstall`, which Inno runs first, has
+already stopped Kurukuru and refused to continue if its files are locked. Two
+tests guard it from both sides: every directory `[Files]` fills recursively
+must be cleared (derived from `[Files]`, not listed), and nothing outside those
+three may be — a wipe of the install directory itself fails. Both watched to
+fail.
+
 **Decision: the IPv6 Host gap is recorded and deliberately not fixed in
 0.1.4.** TrustedHostMiddleware splits the Host header on its *first* colon, so
 every IPv6 literal — `[::1]` and `[::1]:7842` alike — arrives at the comparison
