@@ -64,6 +64,26 @@ REAL_STATE_DIR = Path(DEFAULT_STATE_DIR).expanduser()
 #: prevent that; this is how we would find out if they stopped working.
 LEGACY_REAL_STATE_DIR = Path(LEGACY_STATE_DIR).expanduser()
 
+#: The real home, resolved once at import — before any test can redirect it.
+REAL_HOME = Path.home()
+
+#: Places in a real home the product writes to on Linux (DECISIONS #69, #71)
+#: and so places a test can escape to. Phase 18 found the gap the hard way: a
+#: test whose "is this path absolute?" check misread a Windows path fell back to
+#: Path.home() and wrote a systemd unit into the developer's ~/.config — and
+#: this guard, which watched only the state tree, said nothing.
+#:
+#: Directory *listings* only, and only these. Not the whole home directory: on
+#: Windows ``~`` has registry transaction logs appearing and disappearing
+#: during a run, and a guard that blames an innocent test gets deleted. The two
+#: parents are here because creating them is exactly what that escape did.
+REAL_HOME_WATCHED = (
+    REAL_HOME / ".config" / "kurukuru",
+    REAL_HOME / ".config" / "systemd",
+    REAL_HOME / ".config" / "systemd" / "user",
+    REAL_HOME / ".local" / "share" / "kurukuru",
+)
+
 #: The live database. ``_REAL_DB`` is the path connections are refused to;
 #: the WAL sidecars are named alongside it because a write lands there first,
 #: which is what makes watching the ``.db`` file's mtime insufficient — see
@@ -142,6 +162,7 @@ def _real_state_fingerprint() -> dict[str, object]:
             REAL_STATE_DIR / "keys",
             REAL_STATE_DIR / "cloud-init",
             LEGACY_REAL_STATE_DIR,
+            *REAL_HOME_WATCHED,
         ),
         ignore=_DB_SIDECAR_NAMES,
     )

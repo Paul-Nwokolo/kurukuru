@@ -3717,6 +3717,17 @@ writes, enables and starts `~/.config/systemd/user/kurukuru.service`.
 release, no system-wide service, no bundled QEMU. Each can follow if there is
 demand; none is needed to answer whether the packaging works.
 
+**The PyPI name is not registered, and that is a hazard rather than a detail.**
+Checked on 2026-10-07: `https://pypi.org/pypi/kurukuru/json` answers 404. So
+`pipx install kurukuru` — the obvious command, and the one this phase's brief
+first wrote — fails today, and the day anyone else registers the name it
+silently installs *their* package. That is not hypothetical in this project:
+during Phase 18 a `pip wheel backend` with a relative path fetched an unrelated
+PyPI package called `backend`. So no document here says `pipx install kurukuru`;
+INSTALL-LINUX installs from a locally built wheel by path. Registering the name
+is a publishing decision for the maintainer, and is the precondition for ever
+writing that command.
+
 **The kvm group.** `doctor` tells apart: no `/dev/kvm`; not in its group (gives
 `sudo usermod -aG kvm $USER`); in the group but this process started before
 that (running `usermod` again is the wrong fix); and denied for some other

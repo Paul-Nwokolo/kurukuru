@@ -105,6 +105,35 @@ plain sentence — "typically under 150 MB while idle" — turns a number that
 needs expertise into one that does not.
 
 Worth measuring before writing, so the figure is a fact rather than a guess.
+### 6. Narrow the Linux/KVM open questions on CI's nested KVM — its own phase
+
+**Proposed, not started.** Phase 18 found that GitHub's Ubuntu runners expose
+`/dev/kvm` (`doctor` on the runner reported it, owned by the `kvm` group, with
+the runner user outside it). That is nested virtualization inside a cloud VM:
+it is **not bare metal**, and nothing run there may be recorded as settling a
+Linux question. What it can do is narrow the eight open questions in
+PORTABILITY's Phase 18 section cheaply and repeatably, before anyone spends a
+bare-metal session on them.
+
+Scope, if taken:
+
+- A separate workflow (or a job behind `workflow_dispatch` only), never in the
+  per-push `verify` run — it boots real VMs, takes minutes, and depends on a
+  runner feature GitHub can change.
+- Put the runner user in the `kvm` group (or a udev rule), install the
+  distribution's QEMU, install the wheel with pipx, and run the Linux scorecard:
+  `launch web --wait && ssh web whoami`, stop, start, terminate.
+- Record per run: boot time, `-cpu host` accepted or not, a QMP `screendump` of
+  the cloud image on `std` with a framebuffer colour count, and whether a
+  `system_reset` hangs (alternating runs, decision 40).
+- Every result is written up as **"observed on nested KVM (GitHub runner)"**,
+  next to the open question it narrows, which stays open until bare metal.
+
+Out of scope for that phase: changing any default on the strength of a nested
+result — the display default, the reboot watchdog's platform gate, `-cpu host`.
+Those wait for bare metal, the way the WHPX display conclusion should have
+waited and did not.
+
 ## Considered, not scheduled
 
 Suggestions from an external backend review. Logged with what they would be

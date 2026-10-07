@@ -40,8 +40,11 @@ runs on.
 
 ## Install
 
-**No wheel is published yet.** Build one from a checkout (needs Node.js for the
-dashboard):
+**No wheel is published yet, and Kurukuru is not on PyPI.** Do not run
+`pipx install kurukuru`: the name is unregistered there, so today that command
+fails — and if anyone ever registers it, it would install their package, not
+this one. Build a wheel from a checkout instead (needs Node.js for the
+dashboard) and install it by path:
 
 ```bash
 git clone https://github.com/Paul-Nwokolo/kurukuru.git && cd kurukuru

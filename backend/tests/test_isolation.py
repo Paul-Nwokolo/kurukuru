@@ -341,6 +341,32 @@ def test_a_test_that_writes_to_the_real_state_fails_the_run(tmp_path):
     assert (_fake_keys(home) / "leaked-by-test.tmp").exists()
 
 
+def test_a_test_that_writes_a_unit_into_the_real_home_fails_the_run(tmp_path):
+    """The Phase 18 escape, end to end: a test that wrote a systemd unit into
+    the developer's real ~/.config/systemd/user, creating the directories on
+    the way. The guard watched only the state tree and said nothing; it now
+    watches the home locations the product writes to on Linux. Run against the
+    subprocess's fake home, like the leak test above."""
+    home = _fake_home(tmp_path)
+    result = _run_pytest(
+        tmp_path,
+        """
+        from tests.conftest import REAL_HOME
+
+        def test_escapes_to_home():
+            units = REAL_HOME / ".config" / "systemd" / "user"
+            units.mkdir(parents=True)
+            (units / "kurukuru.service").write_text("[Service]")
+        """,
+        home=home,
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "wrote to the real install" in result.stdout
+    assert "systemd" in result.stdout
+    assert (home / ".config" / "systemd" / "user" / "kurukuru.service").exists()
+
+
 def test_an_ordinary_test_passes_under_the_same_harness(tmp_path):
     """The control. A guard that fails everything proves nothing."""
     result = _run_pytest(
