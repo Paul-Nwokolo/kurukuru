@@ -240,6 +240,48 @@ def dashboard(
     webbrowser.open(url)
 
 
+def _restart_linux_service(out: Output, host: str, port: int, wait: bool) -> None:
+    """The Linux counterpart of restarting the startup task: the user unit.
+
+    The refusal this replaced told a Linux user that the command "manages the
+    Windows startup task" — accurate before Phase 18, and Windows-shaped advice
+    on a Linux host after it, when there is a service to restart.
+    """
+    from kurukuru import linux_service
+
+    try:
+        status = linux_service.status()
+    except linux_service.ServiceError as exc:
+        raise CliError(str(exc), ExitCode.FAILURE) from exc
+    if not status["installed"]:
+        raise CliError(
+            "There is no Kurukuru user service on this machine, so there is "
+            "nothing for this command to restart.",
+            ExitCode.FAILURE,
+            hint=(
+                f"If you are running '{CLI_NAME} serve' in a terminal, stop it "
+                f"with Ctrl-C and start it again. To run it in the background "
+                f"instead: '{CLI_NAME} service install'."
+            ),
+        )
+    out.note(f"Restarting {linux_service.UNIT_NAME}...")
+    try:
+        linux_service.systemctl("restart", linux_service.UNIT_NAME)
+    except linux_service.ServiceError as exc:
+        raise CliError(str(exc), ExitCode.FAILURE) from exc
+    if not wait:
+        out.note("Asked it to start again.")
+        return
+    if _wait_for_backend(host, port, timeout=60.0):
+        out.note(f"Kurukuru is answering on http://{host}:{port}/ again.")
+        return
+    raise CliError(
+        f"The service was restarted, but nothing is answering on http://{host}:{port}/ yet.",
+        ExitCode.UNREACHABLE,
+        hint=f"See why: journalctl --user -u {linux_service.UNIT_NAME} -n 50",
+    )
+
+
 def restart(
     wait: Annotated[
         bool,
@@ -269,16 +311,15 @@ def restart(
     settings = _serve_settings()
     host = "127.0.0.1" if not _is_loopback(settings.host) else settings.host
 
+    if sys.platform.startswith("linux"):
+        _restart_linux_service(out, host, settings.port, wait)
+        return
     if sys.platform != "win32":
         raise CliError(
-            f"'{CLI_NAME} restart' manages the Windows startup task, and this "
-            f"host is not Windows.",
+            f"'{CLI_NAME} restart' restarts the background service, and this "
+            f"platform has none.",
             ExitCode.USAGE,
-            hint=(
-                "Restart however you started it — Ctrl-C and run "
-                f"'{CLI_NAME} serve' again, or restart the service if you "
-                f"wrote a unit for it."
-            ),
+            hint=f"Stop '{CLI_NAME} serve' with Ctrl-C and run it again — that is the restart.",
         )
 
     if not _startup_task_exists():

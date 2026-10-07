@@ -13,6 +13,28 @@ Design decisions behind these changes are recorded in
 
 ## [Unreleased]
 
+### Added
+
+- **A Linux install path — packaging only; Linux is not claimed as supported.**
+  A wheel with the dashboard inside it (`tools/build_wheel.py`), installed
+  with pipx; `kurukuru service install | status | uninstall` for a systemd
+  *user* service; `kurukuru data remove`, which trashes the data or renames it
+  aside and never deletes. **No VM has been booted under KVM from this install
+  path.** Checked in CI on Ubuntu as far as a machine without a trustworthy
+  hypervisor allows; the open questions are in
+  [PORTABILITY.md](docs/PORTABILITY.md). See
+  [INSTALL-LINUX.md](docs/INSTALL-LINUX.md) and DECISIONS #69–72.
+- **On Linux, state follows the XDG spec for new installs**:
+  `~/.local/share/kurukuru` and `~/.config/kurukuru`. An existing
+  `~/.kurukuru` keeps being used where it is and is never moved.
+- **`doctor` on Linux speaks Linux**: your distribution's QEMU package, the
+  kvm group with the exact command and the re-login it needs, which state tree
+  is in use, and whether the service will survive logout. No Windows-only
+  advice reaches a Linux host; a test holds it to that.
+- **A Linux CI job** runs the backend and tools suites on Ubuntu, lists every
+  skipped test, and fails if the POSIX-only or qemu-img tests skipped — plus a
+  job that installs the wheel with pipx and runs the installed copy.
+
 ### Fixed
 
 - **The published checksum file now verifies with `sha256sum -c` everywhere.**

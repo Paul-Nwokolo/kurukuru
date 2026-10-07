@@ -18,8 +18,11 @@ monthly bill, or a hypervisor GUI.
 default.</sub>
 
 **Windows only, today.** It runs on Windows 10 and 11 with hardware
-acceleration. Linux and macOS have code paths but no installer and, for the
-accelerated ones, no validation — see [Platform support](#platform-support).
+acceleration. Linux now has a packaged install — a pipx-installed wheel and a
+systemd user service, [INSTALL-LINUX.md](docs/INSTALL-LINUX.md) — but **no VM
+has been booted under KVM from it**, so that is a packaging milestone, not
+Linux support. macOS has code paths and nothing else. See
+[Platform support](#platform-support).
 
 **One machine, one account, and an unsigned installer.** It manages VMs on the
 computer it runs on, for the person signed in to it: there is no remote mode,
@@ -158,6 +161,7 @@ valid signature today, and which do not — are in
 | **Windows 11** + Windows Hypervisor Platform | Validated. The reference platform |
 | **Ubuntu 24.04** (software emulation) | Validated: install, full VM lifecycle, SSH, console, ISO boot, image import, the CLI, and the test suite all pass |
 | **Ubuntu 24.04** + KVM | **Untested.** The code selects KVM and `-cpu host`, and neither has ever run |
+| **Linux packaging** (pipx + systemd user service) | **Packaging only.** The wheel installs, the backend serves the dashboard, state follows XDG, and `doctor` gives Linux advice — checked in CI on Ubuntu. Not one VM has been booted from this install path; the open questions are in [PORTABILITY.md](docs/PORTABILITY.md#phase-18--linux-packaging-without-kvm) |
 | **macOS / HVF** | **Untested.** Code paths exist; nobody has run them |
 
 The Linux validation ran on a host with no hardware virtualization available
@@ -639,6 +643,8 @@ ergonomics.
 ## Documentation
 
 - [INSTALL.md](docs/INSTALL.md) — installing, upgrading, uninstalling, and what the installer touches.
+- [INSTALL-LINUX.md](docs/INSTALL-LINUX.md) — the Linux packaging: pipx, the systemd user service, the
+  kvm group, where data lives, and exactly what has and has not been verified there.
 
 - [Architecture](docs/ARCHITECTURE.md) — layering, state machine, reconciler,
   QEMU specifics, and how to add an engine.

@@ -4,7 +4,7 @@ Everything in this project was written and validated on Windows 11. This is the
 record of where that shows: every place the code assumed its host, what the
 assumption would have done on Linux, and what was changed.
 
-**Status: Parts A and B complete.** Part A was a static audit on the Windows
+**Status: Parts A and B complete; Phase 18 packaging built, its WSL2 checks pending, and Linux still not claimed as working.** Part A was a static audit on the Windows
 dev machine; Part B ran the whole thing on Ubuntu 24.04. Both are recorded
 here — Part A's findings first, then [what the live run
 found](#part-b--live-validation-on-linux), which includes three defects the
@@ -753,6 +753,84 @@ box's 10.0.94, which independently confirms the "8.0+ expected" claim.
    works around a Windows SLIRP DNS defect; cloud-init's package install
    succeeded here with the default in place, so it was never tested empty.
 6. **macOS/HVF** remains entirely unexercised.
+
+---
+
+## Phase 18 — Linux packaging, without KVM
+
+**Linux is not claimed as working.** This phase built the packaging — a wheel,
+a pipx install, a systemd user service, XDG paths, data-safe uninstall, and
+`doctor` advice that speaks Linux — and verified it as far as a machine without
+a trustworthy hypervisor can. Not one VM was booted under KVM. A packaged
+install that has never booted a VM is a packaging milestone, not Linux support.
+
+### Where it was verified, and where it could not be
+
+| Venue | What it can honestly answer | What it cannot |
+|---|---|---|
+| Unit tests, on both OSes | Every branch of the state-dir policy, the kvm-group diagnosis, the distro → package map, the unit file text and systemctl calls, data removal — all with injected platform, environment and lookups, so the Linux logic runs on Windows and the Windows logic on Linux | Anything about a real kernel, systemd or filesystem |
+| GitHub Ubuntu runner (CI) | The backend and tools suites on a real Linux; a pipx install of the built wheel; the installed backend serving the API and the packaged dashboard; state under `~/.local/share/kurukuru`, never `~/.kurukuru`; key dir 0700 and key 0600; `doctor`'s Linux advice with no Windows-only wording | systemd user services (the runner account has no login session to speak of); VM behaviour |
+| WSL2 (Ubuntu) | systemd user service install, start, stop, restart, logs; lingering; `data remove` on a real tree with and without a trash; what `KillMode=process` does to a plain child process | **VM behaviour of any kind**: nested virtualization under Hyper-V is unreliable, networking is NAT'd behind a virtual adapter, and there is no display path |
+| Bare metal with `/dev/kvm` | Everything in the open-questions list below | — |
+
+**WSL2 status: pending.** WSL was not installed on the development machine when
+this phase began (the `.wslconfig` cap — 4 GB, 4 processors, 2 GB swap — is in
+place for when it is). The WSL2 column is the next step, not a result.
+
+### Found by running on Linux for the first time
+
+The first CI run on Ubuntu found three things the Windows suite could not:
+
+22. **A test fixture raced on Linux and passed on Windows** — degrades (suite) —
+    *fixed*. `test_state_migration`'s stand-in QEMU was awaited with 200
+    `connect` attempts and no pause. A refused connect takes ~1 s on Windows,
+    so that was ample; on Linux it is refused in microseconds, the loop ended
+    before the child started, and the test migrated past a "running" VM whose
+    port nobody held. Same class as finding 18: a harness timing assumption
+    baked in on Windows. Now waits on a time budget and raises if the port
+    never binds. The migration code was correct.
+23. **The installer tooling read Windows paths as Linux paths** — degrades
+    (tools) — *fixed*. `verify_upgrade` parsed `kurukuru.iss`'s
+    backslash-separated paths and on Linux produced names with literal
+    backslashes. Separators are normalised; its tests run on both platforms.
+    The one genuinely Windows-only tool test (the 260-character path budget)
+    is skipped elsewhere with that reason.
+24. **The CLI kept its own copies of the state directory** — would have broken
+    Linux — *fixed before it shipped*. `auth_store` and `naming` each had a
+    private `"~/.kurukuru"` literal. With the XDG default, the CLI's token and
+    config would have lived in a different tree from the backend's. Both now
+    call the one resolver, and a test asserts they agree.
+
+Also found while building it, and fixed: the distro lookup matched Rocky Linux
+(`ID_LIKE="rhel centos fedora"`) to Fedora before reaching the RHEL case, and
+would have told a RHEL user to install a package that is not in their
+repositories. Caught by its own test.
+
+### Observed, not settled: GitHub's Ubuntu runner has `/dev/kvm`
+
+`doctor` on the CI runner reported `/dev/kvm belongs to the 'kvm' group, and
+runner is not in it` — the runner image exposes KVM through nested
+virtualization. That makes it a cheaper venue than bare metal for some of the
+questions below, and it is recorded here so nobody forgets it. It is **not**
+bare metal: it is a VM inside a cloud provider's hypervisor, with its own
+timing and device behaviour, so a result there narrows a question and does not
+close it. Nothing was attempted on it in this phase.
+
+### Open questions for the bare-metal session
+
+Each needs a physical host with `/dev/kvm`. None may be answered from WSL2,
+and a WSL2 result must not stand in for any of them.
+
+| # | Question | What would settle it |
+|---|---|---|
+| 1 | Do VMs launch, boot and run under KVM from a pipx install? | The full scorecard from INSTALL-LINUX: `kurukuru launch web --wait && kurukuru ssh web whoami`, boot time against WHPX's 13–23 s, console, stop, start, terminate |
+| 2 | Does `-cpu host` work? Chosen in Phase 9 on reasoning, never executed | Launch with it under KVM; confirm the guest's `/proc/cpuinfo` shows the host model and that it boots no slower than `max` |
+| 3 | Should the display default differ under KVM? `std` VGA is the default because of a WHPX dirty-tracking limitation | Boot the Ubuntu cloud image on `std` under KVM, inject a keystroke, diff the framebuffer via QMP `screendump` — the method that settled the WHPX question |
+| 4 | Does qemu#4410 (the `system_reset` hang) happen under KVM at all? This decides whether the reboot watchdog is Windows-host-only | Run `tools/reset_measure.py`'s alternating-runs protocol under KVM; at least three runs each way (decision 40) |
+| 5 | Do running VMs survive a service restart (`KillMode=process`) and a logout without lingering? | Restart the unit with a VM running and confirm the backend re-adopts it; log out with lingering off and check what logind's `KillUserProcesses` does to the QEMU process |
+| 6 | Console and port forwards on a real network stack | Open the console in a browser and type; add a forward live and connect through it |
+| 7 | (carried from Part B) Whether Linux guests need the forced resolvers `qemu_guest_nameservers` works around on Windows SLIRP | Launch with the list empty and check cloud-init's package install |
+| 8 | (carried from Part B) psutil's numbers under cgroups, for containerised deployment | Run inside a container with a memory limit and compare `/api/capacity` with the limit |
 
 ---
 ## Guiding rule, and where it was applied

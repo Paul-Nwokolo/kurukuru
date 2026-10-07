@@ -818,6 +818,44 @@ def test_doctor_without_a_host_block_keeps_naming_both_platforms(cli, monkeypatc
     assert "Windows Hypervisor Platform" in flat and "/dev/kvm" in flat
 
 
+def _as_linux(monkeypatch):
+    import kurukuru.cli.serve as serve_module
+
+    monkeypatch.setattr(serve_module.sys, "platform", "linux")
+    return serve_module
+
+
+def test_restart_on_linux_without_a_service_says_how_to_get_one(monkeypatch):
+    """It used to say it "manages the Windows startup task" — accurate before
+    Linux had a service, and Windows-shaped advice on Linux after."""
+    _as_linux(monkeypatch)
+    from kurukuru import linux_service
+
+    monkeypatch.setattr(linux_service, "status", lambda **kw: {"installed": False, "unit_path": "/x"})
+    result = runner.invoke(cli_app, ["restart"])
+
+    flat = " ".join(result.output.split())
+    assert result.exit_code == ExitCode.FAILURE
+    assert "kurukuru service install" in flat
+    assert not [w for w in _WINDOWS_WORDS if w.lower() in flat.lower()], flat
+
+
+def test_restart_on_linux_restarts_the_user_unit_and_waits(monkeypatch):
+    serve_module = _as_linux(monkeypatch)
+    from kurukuru import linux_service
+
+    calls = []
+    monkeypatch.setattr(linux_service, "status", lambda **kw: {"installed": True})
+    monkeypatch.setattr(linux_service, "systemctl", lambda *args, **kw: calls.append(args) or "")
+    monkeypatch.setattr(serve_module, "_wait_for_backend", lambda host, port, timeout: True)
+
+    result = runner.invoke(cli_app, ["restart"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("restart", linux_service.UNIT_NAME)]
+    assert "answering" in result.output
+
+
 def test_doctor_json_is_a_list_of_checks(cli, monkeypatch):
     monkeypatch.setattr(ApiClient, "diagnostics", lambda self: HEALTHY_DIAGNOSTICS)
     checks = json.loads(cli("doctor", "--json").stdout)

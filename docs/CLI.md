@@ -77,7 +77,8 @@ The API URL is resolved in this order, and the first one that answers wins:
 
 1. `--api-url http://host:7842`
 2. `KURUKURU_API_URL` in the environment
-3. `~/.kurukuru/cli.toml`
+3. `cli.toml` — in `~/.kurukuru`, or on a Linux install using XDG in
+   `~/.config/kurukuru` ([INSTALL-LINUX.md](INSTALL-LINUX.md#where-your-data-lives))
 4. `http://127.0.0.1:7842`
 
 ```toml
@@ -510,6 +511,30 @@ Kurukuru is answering on http://127.0.0.1:7842/ again.
 The Start Menu has the same thing as **Restart Kurukuru**. From a checkout
 there is no task, and `restart` says so rather than reporting a success it did
 not achieve — stop `kurukuru serve` and start it again instead.
+
+On Linux `restart` restarts the systemd user service, `kurukuru.service`, and
+waits for the backend to answer; with no service installed it says so and
+points at `kurukuru service install`.
+
+### Linux: the background service and your data
+
+```bash
+kurukuru service install     # write, enable and (re)start the systemd user unit
+kurukuru service status      # installed? active? enabled? lingering?
+kurukuru service uninstall   # stop and remove the unit — data untouched
+kurukuru data remove         # measure, ask, then trash or rename aside
+```
+
+Linux only; on Windows each says that the installer and uninstaller do these
+jobs. `service install` installs the `kurukuru` you ran it with, by absolute
+path, and is safe to re-run after an upgrade. It reports whether lingering is
+on, because without it the service stops when you log out.
+
+`data remove` refuses while the backend is running, lists what is in the state
+directory with a size against each kind of thing, and asks (default No). It
+moves the tree to the trash (`gio trash`, then `trash-put`) or, with no trash,
+renames it to `<dir>.removed-<timestamp>` and prints the `rm -rf` for you.
+It never deletes anything. Details: [INSTALL-LINUX.md](INSTALL-LINUX.md).
 
 `capacity` shows what the host can still give:
 
