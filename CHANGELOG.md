@@ -11,7 +11,19 @@ Design decisions behind these changes are recorded in
 [docs/DECISIONS.md](docs/DECISIONS.md), and what is planned next is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-## [0.1.4] — 2026-10-06
+## [Unreleased]
+
+### Fixed
+
+- **The published checksum file now verifies with `sha256sum -c` everywhere.**
+  It used to end in a Windows line ending, which some `sha256sum` builds (Git
+  for Windows', for one) read as part of the filename and reported as FAILED,
+  though the hash was right. Every release build now checks the file on Linux
+  before attaching it. 0.1.4's file has been replaced with the corrected one;
+  the installer it attests is unchanged. See [DECISIONS.md](docs/DECISIONS.md)
+  #68.
+
+## [0.1.4] — 2026-10-07
 
 ### Security
 

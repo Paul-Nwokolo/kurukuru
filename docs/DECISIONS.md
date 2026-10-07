@@ -3574,6 +3574,46 @@ PyInstaller and Inno build them — `python.exe` with the icon embedded through
 refused — plus a test that `--icon` is on the command and the frozen exe is
 checked. Each watched to fail.
 
+## 68. Checksum files are written with LF, and checked on Linux before they are attached
+
+**Context.** The anonymous download-and-hash for 0.1.4 matched — and then
+`sha256sum -c` on the published checksum file failed. The release workflow
+wrote it with PowerShell's `Set-Content`, which ends the line in CRLF, so GNU
+coreutils 8.32's `sha256sum -c` (Git for Windows' build) looked for a file named
+`Kurukuru-0.1.4-Setup.exe\r` and reported FAILED. 0.1.3's file had the same
+ending. The hashes were right in both; only the one-step verification a careful
+user runs was broken — and to that user a checksum that fails reads as
+tampering.
+
+**Decision.**
+
+- The workflow writes the file with `[IO.File]::WriteAllText` and an explicit
+  LF.
+- A Linux job downloads the built artefact, runs `sha256sum -c`, rejects any
+  carriage return in the file, and only then attaches to the release. Attach
+  moved out of the Windows job, so a checksum that does not verify is never
+  published.
+- 0.1.4's checksum file was replaced in place: hours old, `latest`, and the
+  hash it attests unchanged — only the line ending. Verified afterwards by an
+  anonymous download into an empty directory: `Kurukuru-0.1.4-Setup.exe: OK`.
+  0.1.3's assets were left alone — superseded, and quietly editing assets on an
+  older published release is a habit worth not starting; its notes gained a
+  line pointing at 0.1.4 and saying what is wrong with its checksum file.
+
+**Measured, and it changed what the guard is.** Proven against a deliberate
+break — a branch writing the file with CRLF again — the Linux job failed and
+attach never ran. But it failed on the carriage-return check, not on
+`sha256sum -c`: the runner's newer coreutils accepted the CRLF file and printed
+`OK`. `sha256sum -c` alone would never have caught the regression on the
+machine CI uses. The explicit check is the guard; `sha256sum -c` stays because
+it is the check users run and it still proves the hash. The job prints its
+`sha256sum` version so the next reader does not have to rediscover this.
+
+`tools/test_workflow_scripts.py` had assumed PowerShell for every `run:` block,
+including the Linux jobs', and so parsed bash as PowerShell — harmless while
+those were one-line `npm` calls. It now follows the runner: bash on Ubuntu,
+pwsh on Windows.
+
 ## Known limitations
 
 - **Nothing is code-signed, and there is no date for it.** SmartScreen warns on

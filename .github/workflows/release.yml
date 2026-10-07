@@ -107,8 +107,8 @@ jobs:
           # LF, written directly. Set-Content ends the line with CRLF, and
           # `sha256sum -c` then looks for a file whose name ends in a carriage
           # return: 0.1.3's and 0.1.4's published checksum files both failed
-          # it on Linux and macOS while their hashes were right. The
-          # `checksum` job below verifies the real file on Linux.
+          # GNU coreutils 8.32's `sha256sum -c` while their hashes were right.
+          # The `checksum` job below checks the real file on Linux.
           [IO.File]::WriteAllText("$($exe.FullName).sha256", "$hash  $($exe.Name)`n")
           "name=$($exe.Name)"      >> $env:GITHUB_OUTPUT
           "path=$($exe.FullName)"  >> $env:GITHUB_OUTPUT
@@ -302,11 +302,15 @@ jobs:
 
   checksum:
     # The checksum file is checked where the people who verify it are: on
-    # Linux, with `sha256sum -c`. The Windows runner never cared about the
-    # line ending, so 0.1.3 and 0.1.4 both published a file that failed this
-    # check on every non-Windows machine — which reads as tampering to exactly
-    # the careful user who bothered to run it. Attaching happens here, *after*
-    # the check, so a file that does not verify is never published.
+    # Linux, with `sha256sum -c`. 0.1.3 and 0.1.4 both published a file ending
+    # in CRLF, which GNU coreutils 8.32's `sha256sum -c` (Git for Windows', for
+    # one) rejects as a missing file — reading as tampering to exactly the
+    # careful user who bothered to run it. Attaching happens here, *after* the
+    # check, so a file that does not verify is never published.
+    #
+    # The carriage-return check is the guard, not `sha256sum -c` alone:
+    # measured on the deliberate-break run, this runner's newer coreutils
+    # accepted the CRLF file ("OK") and only the explicit check failed it.
     name: checksum verifies on Linux, then attach
     needs: installer
     runs-on: ubuntu-latest
@@ -323,6 +327,7 @@ jobs:
         working-directory: artefact/dist
         run: |
           ls -l
+          sha256sum --version | head -1
           sha256sum -c ./*.sha256
           # And no carriage return anywhere in it, said explicitly: the failure
           # above names a file that "does not exist", which is a confusing way
