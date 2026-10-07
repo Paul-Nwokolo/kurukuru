@@ -130,6 +130,15 @@ jobs:
       - name: Tools tests
         run: python -m pytest tools -q
 
+      - name: Defence tests fail when their defence is broken
+        # A test that refuses something proves nothing until it has been seen
+        # to fail with the refusal gone. Phase 17 deleted three defences one at
+        # a time and the full suite stayed green for each (DECISIONS #65). This
+        # applies every break in tools/prove_defences.py and fails the job if a
+        # test named as proving it passes. Runs after the suites so a plain
+        # regression reports as itself first.
+        run: python tools/prove_defences.py
+
   frontend:
     name: frontend verify
     runs-on: ubuntu-latest

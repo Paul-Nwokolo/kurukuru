@@ -3274,6 +3274,19 @@ at the time of writing). Its Starlette ceiling moved up through minor releases �
 0.128.3, uncapped from 0.133.0. So the reachable fix is available from FastAPI
 0.120.1 onward with no Starlette major at all.
 
+**Wrong on both counts, and the record was the reason.** The plan was built
+against four advisories behind a FastAPI major; the audit found seven, behind
+neither. Nothing in the record was false when written — it was months old. This
+is the second time a recorded finding has outlived its truth and steered a plan:
+the first was "no Windows install has ever completed", which stayed in the
+README, the launch dialog and two sets of release notes after decision 57 had
+made it false, until 0.1.3 corrected it.
+
+**So a dependency phase starts by re-running `pip-audit` over the installed
+set**, not by reading the advisory list from this file, the roadmap or a
+previous release's notes. A recorded list says where to look first; it is never
+the input to a plan.
+
 **Decision: FastAPI 0.120.4 + Starlette 0.49.3, and no further.** 0.120.4 is
 the last patch of the first series that admits Starlette 0.49; 0.49.3 is the
 last patch of 0.49. Taking Starlette 1.x would close five advisories that do
@@ -3333,12 +3346,14 @@ brief named was broken on purpose and the suite run against it:
 | `TrustedHostMiddleware` removed | **1058 passed** | caught |
 | CORS opened to every origin | **1058 passed** | caught |
 | `SecurityHeadersMiddleware` removed | **1058 passed** | caught |
+| TrustedHost allow-list matches nothing real | no test existed | all 4 loopback cases fail |
+| Assets served without `Range` support | no test existed | caught |
 | Unknown `/api` path falls through to the SPA | caught | caught |
 | `index.html` cached immutable | caught | caught |
 | Starlette 0.46.2 reinstalled | no test existed | both Range tests fail |
 | noVNC attach ordering reversed (`check:console`) | caught | caught |
 
-`tests/test_browser_defences.py` closes the four silent rows: a rebound Host
+`tests/test_browser_defences.py` closes the silent rows: a rebound Host
 refused on HTTP *and* at the WebSocket handshake, a preflight and a simple
 request from another local port granted nothing, the security headers on a 200
 and on a 401, and the hostile Range headers. Its first draft of the WebSocket
@@ -3346,6 +3361,28 @@ test asserted only "disconnected" — and passed with TrustedHost removed,
 because the endpoint refuses a ticketless caller too. It now asserts a
 *handshake denial* (`WebSocketDenialResponse`, 400), which only the Host check
 produces.
+
+**The property is enforced, not remembered.** The next person to touch
+middleware will not know these tests exist, so knowing is not left to them.
+`tools/prove_defences.py` holds every break in the table above (bar
+`check:console`, which has its own script) as data: the file, the edit, and the
+tests that edit **must** fail — by name, every case, because a break caught by
+some unrelated test proves nothing about the defence test it was meant for. CI
+runs it after the suites. `tools/test_prove_defences.py` checks it from the
+other side: every test function in the defence module must be named by some
+break, so a defence test cannot land without a proven break. Both meta-tests
+were watched to fail — once with an unproven test added, once with a break left
+applied.
+
+That second check exists because of something that happened while writing the
+tool. A run stopped mid-break left `console.py` dropping the RFB greeting's
+first byte — a `finally` does not run when the process is killed. The tool now
+backs a file up before editing it and restores any backup it finds when it
+starts, and the suite fails while any break's text is present in the source, so
+a tree left broken cannot pass on its way into a commit. The first version also
+hung: running a break's whole module under the shadowed Starlette 0.46.2 stalled
+on an unrelated WebSocket test. Breaks now run only the tests they name, under a
+timeout that reports a hang as *unproven* rather than waiting on it.
 
 The coverage test's partial catch was its own bug, from Phase 16 rather than
 this upgrade: it requested `/api` + the stripped key, so for a route registered
@@ -3355,12 +3392,22 @@ everything-under-the-prefix test had been catching the full set all along,
 which is why the gap never mattered — but a guard should catch what it claims
 to.
 
-**Found, not fixed.** TrustedHostMiddleware splits the Host header on its
-*first* colon, so every IPv6 literal — `[::1]` and `[::1]:7842` alike — arrives
-at the comparison as `"["`. The `::1` and `[::1]` entries in `_allowed_hosts`
-have never matched anything, on 0.46.2 or 0.49.3. Reachable only by binding
-`--host ::1`; the default is 127.0.0.1. Recorded under known limitations rather
-than fixed in a phase whose brief was dependencies only.
+**Decision: the IPv6 Host gap is recorded and deliberately not fixed in
+0.1.4.** TrustedHostMiddleware splits the Host header on its *first* colon, so
+every IPv6 literal — `[::1]` and `[::1]:7842` alike — arrives at the comparison
+as `"["`. The `::1` and `[::1]` entries in `_allowed_hosts` have never matched
+anything, on 0.46.2 or 0.49.3.
+
+It fails *closed*: an IPv6 Host is refused, never wrongly admitted, so it costs
+availability on one configuration and no security anywhere. It bites only on
+`--host ::1` — the default binds 127.0.0.1, and nothing in the product or the
+docs suggests binding IPv6. Fixing it means replacing a framework middleware
+with our own Host parsing, which is a change to the DNS-rebinding defence itself;
+a security release whose brief is "change dependencies and nothing else" is the
+wrong place to rewrite one. Revisit when IPv6 binding is something anyone asks
+for. It is listed under known limitations, and
+`test_the_loopback_names_are_accepted_with_or_without_a_port` says in its
+docstring why no IPv6 case is there.
 
 **Remaining advisories, and why they stay.** The five Starlette advisories fixed
 only in 1.x, and pytest's, each unreachable for the reason in the table. They

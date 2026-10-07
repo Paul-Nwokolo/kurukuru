@@ -79,6 +79,36 @@ Two things it checks that are easy to get wrong:
   dark grey at once. The *SVG* favicon has no such compromise — it carries a
   `prefers-color-scheme` rule and gets full-contrast ink either way.
 
+## `prove_defences.py` — do the defence tests fail when the defence is gone?
+
+Applies each deliberate break to the backend — TrustedHost removed, CORS opened
+to every origin, the security headers deleted, the vulnerable Starlette
+shadowed in — runs the tests that break must turn red, restores the file, and
+fails if any of them passed.
+
+```
+python tools/prove_defences.py
+python tools/prove_defences.py --only trustedhost cors
+python tools/prove_defences.py --list
+```
+
+**Run in CI, unlike its neighbour below**, because there is no allowlist to
+keep. Its one hand-kept list — the breaks — is checked from the other side by
+`test_prove_defences.py`: every test in `backend/tests/test_browser_defences.py`
+must be named by some break, so a defence test cannot land unproven, and the
+suite fails while any break's text is still in the source.
+
+Judged by name, not by exit code. A break caught by an unrelated test while the
+defence test it was meant to prove stays green is reported as unproven.
+
+A break is restored in a `finally`, and that is not enough on its own: a
+`finally` does not run when the process is killed, and the first version, killed
+mid-run, left `console.py` broken. So each edit is backed up first and the next
+run restores any backup it finds. The one break that cannot be an edit — the
+vulnerable Starlette — is installed into a temporary directory on `PYTHONPATH`;
+the venv is never touched. Each break has a timeout, because a hang proves
+nothing either. See DECISIONS #65.
+
 ## `find_vacuous_tests.py` — which tests would a failure also satisfy?
 
 Reports tests whose assertions are all satisfied by nothing having happened, so

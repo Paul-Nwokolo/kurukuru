@@ -121,7 +121,11 @@ seconds, so a timestamp check blamed whichever test straddled a reconcile pass.
 A guard that cries wolf gets deleted.
 
 If a test genuinely needs the real paths, mark it `@pytest.mark.real_state` and
-say why in the same commit. Nothing does today.
+say why in the same commit. Two tests do, both in `tests/test_isolation.py`
+and both on purpose: they are the harness's own self-tests, which write a stray
+file into the real `keys` directory from a subprocess to prove the guard fires,
+and remove it. You will see the directory's timestamp move on every full run;
+that is them, and nothing else (measured per test in Phase 17).
 
 `tests/test_isolation.py` tests the harness itself, including running a
 deliberately leaking test in a subprocess and asserting the run fails — a guard
@@ -287,6 +291,27 @@ write to `monitor_reachable` compared equal to itself, no commit was issued, and
 the change was discarded at the next rollback. A captured copy is worth only as
 much as whatever keeps it in step with what it copied — which is why
 `_SNAPSHOT_FIELDS` is now the single definition both are built from.
+
+**6. A test that refuses something must have a break that proves it.** The
+tests for the browser defences — Host validation, CORS, the security headers,
+the auth guard, CSRF — share a blind spot with every test written from the
+user's side: a legitimate request passes *through* a defence without asking it
+to refuse anything. Phase 17 removed TrustedHost, opened CORS to every origin
+and deleted the security headers one at a time, and the full suite stayed green
+for all three (DECISIONS #65).
+
+So these tests are not trusted on being present. `tools/prove_defences.py`
+holds each deliberate break — the file, the edit, and the tests that edit must
+fail, by name — and CI runs it. If you add a test to
+`backend/tests/test_browser_defences.py`, add the break that proves it in the
+same commit; `tools/test_prove_defences.py` fails the suite until you do. If
+you change middleware and a break's anchor no longer matches, update the
+anchor. Deleting the break deletes the proof.
+
+```bash
+python tools/prove_defences.py              # every break, ~2 minutes
+python tools/prove_defences.py --only cors  # one
+```
 
 The general shape: **prefer a check that can distinguish "working" from
 "not running at all".** Most false greens in this project were not wrong

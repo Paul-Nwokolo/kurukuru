@@ -95,3 +95,6 @@ desktop.ini
 # twice before it was ignored.
 signpath_terms.html
 *.download.html
+
+# tools/prove_defences.py backs a file up here while a deliberate break is applied
+*.prove-defences-orig
