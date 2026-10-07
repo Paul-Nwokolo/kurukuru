@@ -49,6 +49,7 @@ def test_the_budget_leaves_room_for_the_deepest_measured_path():
     assert MAX_BUILD_ROOT + 1 + _MEASURED_DEEPEST + _HEADROOM == MAX_PATH
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="the 260-character limit is a Windows rule, and C:/ is a relative path elsewhere")
 def test_the_path_that_actually_broke_this_project_is_refused(monkeypatch):
     """159 characters, which produced a 262-character path against a 260 limit.
 

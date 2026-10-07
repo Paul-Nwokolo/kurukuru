@@ -3614,6 +3614,137 @@ including the Linux jobs', and so parsed bash as PowerShell — harmless while
 those were one-line `npm` calls. It now follows the runner: bash on Ubuntu,
 pwsh on Windows.
 
+## 69. Linux state follows XDG for new installs; an existing `~/.kurukuru` is never moved
+
+**Context.** Phase 9 added `KURUKURU_STATE_DIR` and deferred the policy: should
+Linux *default* to the XDG Base Directory layout instead of a dotfile in
+`$HOME`? Phase 18 is the packaging phase, so it is decided here.
+
+**Decision.**
+
+- **Windows and macOS: `~/.kurukuru`, unchanged.** Every install before 0.1.5
+  has its VMs there, and neither platform has a convention this violates.
+- **Linux, new install: `$XDG_DATA_HOME/kurukuru`** (default
+  `~/.local/share/kurukuru`) for VMs, images, keys, the database and backups;
+  **`$XDG_CONFIG_HOME/kurukuru`** (default `~/.config/kurukuru`) for the two
+  hand-edited files, `kurukuru.env` and `cli.toml`. That is where the
+  platform's convention, and its backup and dotfile tooling, expect them.
+- **Linux, existing `~/.kurukuru`: that tree, where it is.** No Linux release
+  has ever shipped, but anyone who ran a source checkout has their VMs there.
+  The Windows rename migration (decision 49) moved a tree automatically,
+  because every Windows user had one and the old name was being retired. That
+  argument does not carry over: here the old location is still valid, the
+  population is a handful of developers who chose it, and a relocation the user
+  did not ask for is indistinguishable, from where they sit, from their VMs
+  disappearing. Choosing the XDG path *while* the old tree exists would be
+  worse still — one install split across two trees. So the old tree simply
+  keeps winning until its owner moves it, and `doctor` says which tree is in
+  use and gives the `mv` commands. Nothing moves it for them.
+- A relative `XDG_*_HOME` is ignored, as the spec requires — resolved against
+  the working directory, it would put VMs wherever the shell was when the
+  service started.
+
+**One resolver.** `kurukuru.product.default_state_dir()` and
+`default_config_dir()` are the policy; `config.py`, the CLI's token path and
+the CLI's `cli.toml` path all call them. Two of those were private
+`"~/.kurukuru"` literals — which on Linux would have put the CLI's token in one
+tree and the backend's in another. A test now asserts the CLI and the backend
+resolve the same tree. The policy takes the platform, environment and home
+directory as parameters, so every Linux branch runs on the Windows machine and
+every Windows branch on the Linux CI job (`tests/test_state_dir_policy.py`),
+including that resolving never creates, moves or touches anything.
+
+## 70. QEMU is not bundled on Linux
+
+**Context.** The Windows installer bundles a hash-verified QEMU because Windows
+has no package manager to get one from. Linux does.
+
+**Decision: use the distribution's QEMU, and say exactly which package.** The
+distribution patches it, builds it against KVM, and upgrades it with the
+system; bundling would mean shipping security fixes for an emulator on our own
+schedule. It also removes two problems in one move: the signing problem
+(decision 62 — 135 of 185 Windows PE files are QEMU's), and the stale-file class
+of bug decision 66 found, since pipx replaces the virtualenv wholesale and
+there is no bundle to layer over.
+
+What the product owes the user in exchange is a precise answer when QEMU is
+missing. `kurukuru.linux_host` reads `/etc/os-release` and `doctor` prints the
+install command for that family: `apt` for Debian and Ubuntu, `dnf` for Fedora,
+`pacman` for Arch, `zypper` for openSUSE. **RHEL and its rebuilds get the truth
+instead of a command**: their `qemu-kvm` installs `/usr/libexec/qemu-kvm` and no
+`qemu-system-x86_64`, so the generic answer would install something Kurukuru
+then reports missing. That case was caught by its own test — Rocky declares
+`ID_LIKE="rhel centos fedora"`, and the first version matched "fedora" before
+reaching the RHEL check. Only the Ubuntu command has been installed from; the
+others are each distribution's documented package names, and INSTALL-LINUX.md
+says so. Nothing downloads or builds QEMU.
+
+On Linux an explicit `KURUKURU_QEMU_*_BINARY` is a legitimate choice, so
+`doctor` reports it as a fact rather than with the Windows warning that it is a
+leftover from the 0.1.0 workaround.
+
+## 71. Linux installs with pipx and runs as a systemd *user* service
+
+**Decision.** `pipx install` of a wheel, plus `kurukuru service install`, which
+writes, enables and starts `~/.config/systemd/user/kurukuru.service`.
+
+- **A user service, not a system one** — for the reasons the Windows build uses
+  a logon task rather than a Windows service (decision 53): no root to install,
+  it runs as the user who owns the state directory so `fs_permissions`' modes
+  stay meaningful, and there is no second account whose home holds the VMs.
+- **A subcommand, not the "small shell script" the brief first named.** It knows
+  the absolute path of the very `kurukuru` being run — a user manager's PATH
+  rarely includes `~/.local/bin` — it is versioned with the code the unit
+  starts, and it is tested like everything else. Re-running it after an upgrade
+  rewrites the unit if the path changed and uses `restart`, because after an
+  upgrade the running backend is the old code.
+- **`KillMode=process`.** VMs are separate QEMU processes the backend re-adopts
+  through the filesystem, designed to survive a backend restart. systemd's
+  default `KillMode=control-group` would kill every one of them on each stop,
+  restart or upgrade, since they live in the unit's cgroup. Whether this holds
+  with real VMs on Linux is an open question; what systemd does to a plain
+  child process under each mode is a systemd fact, answerable in WSL2.
+- **Lingering is stated, not implied.** Without `loginctl enable-linger`,
+  systemd stops the user manager — and the backend — when the last session
+  ends. `service install`, `service status` and `doctor` all report it.
+- **The wheel carries the dashboard** inside the package (`kurukuru/_dashboard`,
+  copied in by `tools/build_wheel.py` at build time only, searched after a
+  checkout's own `frontend/dist` so a stale copy can never shadow a fresh
+  build). `build_wheel.py` inspects the wheel and refused a real one built
+  without it.
+
+**Not built, said plainly:** no `.deb` or `.rpm`, no published wheel and no PyPI
+release, no system-wide service, no bundled QEMU. Each can follow if there is
+demand; none is needed to answer whether the packaging works.
+
+**The kvm group.** `doctor` tells apart: no `/dev/kvm`; not in its group (gives
+`sudo usermod -aG kvm $USER`); in the group but this process started before
+that (running `usermod` again is the wrong fix); and denied for some other
+reason. The re-login requirement is said explicitly, including the trap that a
+lingering user manager survives logout and keeps its old groups until
+`systemctl restart user@$(id -u).service`.
+
+## 72. Removing Linux data trashes or renames aside; nothing deletes
+
+**Context.** 0.1.3 made the Windows uninstaller measure the state directory
+and send it to the Recycle Bin (decision 63), because 0.1.2's had deleted VMs
+and every backup with them. Linux has no Recycle Bin, and pipx has no uninstall
+hook to hang a prompt on.
+
+**Decision.** Uninstall is three explicit commands, and only one touches data:
+`kurukuru service uninstall` (removes the unit; data untouched), `kurukuru data
+remove`, and `pipx uninstall kurukuru`. `data remove` refuses while the backend
+is reachable — moving open disks and a live database is how a qcow2 gets
+corrupted — lists what is there with a size per kind, asks with a default of
+No, and then moves the tree: `gio trash` (the freedesktop trash, on most
+desktops), then `trash-put` (trash-cli), and otherwise a rename to
+`<dir>.removed-<timestamp>` beside it, which on one filesystem is atomic and
+copies nothing. It prints the `rm -rf` for the user to run when sure. A trash
+that fails falls through to the rename, never to anything worse. A test reads
+the module's source and fails on any `rmtree`, `unlink`, `os.remove` or
+`os.rmdir` — the property is that the code path cannot delete, not that it
+usually doesn't.
+
 ## Known limitations
 
 - **Nothing is code-signed, and there is no date for it.** SmartScreen warns on

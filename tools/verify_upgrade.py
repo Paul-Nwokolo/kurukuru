@@ -75,7 +75,11 @@ def expected_tree(stage: Path, iss: Path = ISS) -> dict[str, Path]:
         dest = re.search(r'DestDir:\s*"([^"]+)"', entry).group(1)
         recursive = "recursesubdirs" in entry
 
-        source = source.replace("{#StageDir}", str(stage))
+        # kurukuru.iss spells paths the Windows way. Normalised to "/" so the
+        # parser means the same thing on Linux, where "\\" is not a separator
+        # and the Phase 18 Linux CI job found it building paths with literal
+        # backslashes in their names. Windows accepts either.
+        source = source.replace("{#StageDir}", str(stage)).replace("\\", "/")
         base = Path(source)
         if not base.is_absolute():
             base = iss.parent / source  # e.g. startup-task.ps1, beside the script
