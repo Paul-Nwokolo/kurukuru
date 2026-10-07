@@ -3603,8 +3603,8 @@ tampering.
 **Measured, and it changed what the guard is.** Proven against a deliberate
 break — a branch writing the file with CRLF again — the Linux job failed and
 attach never ran. But it failed on the carriage-return check, not on
-`sha256sum -c`: the runner's newer coreutils accepted the CRLF file and printed
-`OK`. `sha256sum -c` alone would never have caught the regression on the
+`sha256sum -c`: the runner's GNU coreutils 9.4 accepted the CRLF file and
+printed `OK`, where 8.32 rejects it. `sha256sum -c` alone would never have caught the regression on the
 machine CI uses. The explicit check is the guard; `sha256sum -c` stays because
 it is the check users run and it still proves the hash. The job prints its
 `sha256sum` version so the next reader does not have to rediscover this.
