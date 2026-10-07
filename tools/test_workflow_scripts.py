@@ -46,14 +46,21 @@ def _steps():
     for workflow in WORKFLOWS:
         data = yaml.safe_load(workflow.read_text(encoding="utf-8"))
         for job_name, job in (data.get("jobs") or {}).items():
-            default_shell = ((job.get("defaults") or {}).get("run") or {}).get("shell")
+            # The runner's own default when nothing says otherwise: bash on
+            # Linux, pwsh on Windows. Assuming pwsh everywhere parsed the Linux
+            # jobs' scripts as PowerShell — harmless while they were one-line
+            # `npm` calls, wrong the moment one used bash syntax.
+            on_linux = "ubuntu" in str(job.get("runs-on", "")).lower()
+            default_shell = ((job.get("defaults") or {}).get("run") or {}).get("shell") or (
+                "bash" if on_linux else "pwsh"
+            )
             for index, step in enumerate(job.get("steps") or []):
                 if not step.get("run"):
                     continue
                 yield (
                     f"{workflow.name}:{job_name}:{step.get('name') or index}",
                     step["run"],
-                    step.get("shell") or default_shell or "pwsh",
+                    step.get("shell") or default_shell,
                 )
 
 
