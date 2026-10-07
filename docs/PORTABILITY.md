@@ -773,9 +773,38 @@ install that has never booted a VM is a packaging milestone, not Linux support.
 | WSL2 (Ubuntu) | systemd user service install, start, stop, restart, logs; lingering; `data remove` on a real tree with and without a trash; what `KillMode=process` does to a plain child process | **VM behaviour of any kind**: nested virtualization under Hyper-V is unreliable, networking is NAT'd behind a virtual adapter, and there is no display path |
 | Bare metal with `/dev/kvm` | Everything in the open-questions list below | — |
 
-**WSL2 status: pending.** WSL was not installed on the development machine when
-this phase began (the `.wslconfig` cap — 4 GB, 4 processors, 2 GB swap — is in
-place for when it is). The WSL2 column is the next step, not a result.
+**WSL2, as run.** WSL 3.0.1, Ubuntu 24.04.5, kernel
+6.18.40.1-microsoft-standard-WSL2, systemd 255 (`degraded` only by
+`systemd-binfmt`, a known WSL quirk); the `.wslconfig` caps took effect (3.8 GiB,
+2 GiB swap, 4 CPUs). Everything ran under `/home/paul_n` on ext4 — the only
+`/mnt/c` access was reading the wheel to copy it in, and no permission result
+comes from it. `/dev/kvm` exists there (`crw-rw---- root kvm`, the user not in
+the group); recorded, and no VM was launched on the strength of it.
+
+What it established is in INSTALL-LINUX's results table. In short: the pipx
+install, XDG placement and owner-only modes, `service install`/`status`/
+`restart`/`uninstall`, the unit starting itself with the user manager, live
+`doctor` output, every `data remove` path byte-identical, and uninstall leaving
+data untouched. `KillMode=process` was measured with a plain `sleep` standing in
+for QEMU: the child survived a restart, and under the default it was killed.
+
+Two things it found:
+
+25. **`doctor` asserted an open question as fact** — cosmetic — *fixed*. The
+    lingering line said the service stops at logout "and its VMs with it". What
+    happens to running QEMU at logout is open question 5. Reworded to say it is
+    unverified.
+26. **Under WSL, lingering cannot keep the service up** — documented, and now
+    detected. With `Linger=yes`, closing the last WSL window still left the
+    distribution `Stopped` a minute later: WSL ends the whole instance, so the
+    service runs only while a WSL session is open. `doctor` and `service install`
+    now detect WSL (`WSL_DISTRO_NAME`, or a kernel release naming Microsoft) and
+    say so instead of promising that lingering helps. What lingering does on a
+    real machine is still open — WSL cannot answer it.
+
+Also observed: WSL's own `wsl.exe` commands are not logind sessions until the
+distribution boots, when WSL opens one for the default user; and
+`loginctl enable-linger` for yourself needs root there.
 
 ### Found by running on Linux for the first time
 
@@ -826,7 +855,7 @@ and a WSL2 result must not stand in for any of them.
 | 1 | Do VMs launch, boot and run under KVM from a pipx install? | The full scorecard from INSTALL-LINUX: `kurukuru launch web --wait && kurukuru ssh web whoami`, boot time against WHPX's 13–23 s, console, stop, start, terminate |
 | 2 | Does `-cpu host` work? Chosen in Phase 9 on reasoning, never executed | Launch with it under KVM; confirm the guest's `/proc/cpuinfo` shows the host model and that it boots no slower than `max` |
 | 3 | Should the display default differ under KVM? `std` VGA is the default because of a WHPX dirty-tracking limitation | Boot the Ubuntu cloud image on `std` under KVM, inject a keystroke, diff the framebuffer via QMP `screendump` — the method that settled the WHPX question |
-| 4 | Does qemu#4410 (the `system_reset` hang) happen under KVM at all? This decides whether the reboot watchdog is Windows-host-only | Run `tools/reset_measure.py`'s alternating-runs protocol under KVM; at least three runs each way (decision 40) |
+| 4 | Does qemu#4410 (the `system_reset` hang) happen under KVM at all? This decides whether the reboot watchdog is Windows-host-only. **Today it runs on Linux too** — the WSL2 journal shows "Windows reboot watchdog every 30s" at startup — so until this is answered, a Linux host runs a workaround for a defect it may not have | Run `tools/reset_measure.py`'s alternating-runs protocol under KVM; at least three runs each way (decision 40) |
 | 5 | Do running VMs survive a service restart (`KillMode=process`) and a logout without lingering? | Restart the unit with a VM running and confirm the backend re-adopts it; log out with lingering off and check what logind's `KillUserProcesses` does to the QEMU process |
 | 6 | Console and port forwards on a real network stack | Open the console in a browser and type; add a forward live and connect through it |
 | 7 | (carried from Part B) Whether Linux guests need the forced resolvers `qemu_guest_nameservers` works around on Windows SLIRP | Launch with the list empty and check cloud-init's package install |

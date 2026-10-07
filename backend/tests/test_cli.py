@@ -808,6 +808,20 @@ def test_doctor_on_linux_tells_a_relogin_from_a_missing_group(cli, monkeypatch):
     assert "usermod" not in flat
 
 
+def test_doctor_under_wsl_does_not_promise_that_lingering_helps(cli, monkeypatch):
+    """Measured in Phase 18: Linger=yes, last WSL window closed, distribution
+    Stopped a minute later. "Survives logout" would be false there."""
+    wsl = {**SICK_LINUX_DIAGNOSTICS, "host": {
+        **SICK_LINUX_DIAGNOSTICS["host"],
+        "linux": {**SICK_LINUX_DIAGNOSTICS["host"]["linux"], "linger": True, "wsl": True},
+    }}
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: wsl)
+    flat = " ".join(cli("doctor").stdout.split())
+
+    assert "stops the whole distribution when its last window closes" in flat
+    assert "survives logout" not in flat
+
+
 def test_doctor_without_a_host_block_keeps_naming_both_platforms(cli, monkeypatch):
     """A backend older than 0.1.5 sends no host block; the remedies then stay
     the two-platform ones rather than guessing."""

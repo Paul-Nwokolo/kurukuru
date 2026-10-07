@@ -115,6 +115,13 @@ sudo loginctl enable-linger $USER
 `kurukuru service install`, `service status` and `doctor` all say whether
 lingering is on. If you only use Kurukuru while logged in, you do not need it.
 
+**Under WSL, lingering does not help.** WSL stops the whole distribution when
+its last window closes — measured with `Linger=yes`, the instance was
+`Stopped` a minute after the last terminal closed — so the service runs only
+while some WSL window is open. It starts again by itself the next time the
+distribution starts. `doctor` and `service install` say this when they detect
+WSL.
+
 What happens to *running VMs* at that moment has not been verified on Linux;
 see the open questions at the end.
 
@@ -186,9 +193,17 @@ Database backups live inside that directory, so removing it removes them too.
 | State under `~/.local/share/kurukuru`, not `~/.kurukuru`; key directory 0700, private key 0600 | GitHub Ubuntu runner | See CI |
 | `doctor` names the distribution's QEMU package and no Windows-only advice | GitHub Ubuntu runner; tests on every platform | See CI |
 | The backend and tools suites on Linux, with every skip listed | GitHub Ubuntu runner | See CI: `backend + tools (Linux, no KVM)` |
-| `kurukuru service install / uninstall / status`; restart; logs | WSL2 (Ubuntu) | **Pending** — WSL2 not yet installed on the test machine |
-| Lingering: the service survives logout with it, stops without it | WSL2 | **Pending** |
-| `kurukuru data remove` on a real tree, with and without a trash | WSL2 | **Pending** |
+| pipx install of the wheel; `kurukuru version` reports the loaded framework | WSL2, Ubuntu 24.04.5, pipx 1.4.3, Python 3.12.3, on ext4 under `~` | Yes |
+| State under `~/.local/share/kurukuru` only; state dir, `keys/`, private key, database and CLI token all owner-only (0700/0600); public key 0644 | WSL2, ext4 | Yes — measured on ext4, never on `/mnt/c` |
+| `service install`: unit written with an absolute `ExecStart` and `KillMode=process`, enabled, started; dashboard served from the wheel | WSL2, systemd 255 | Yes |
+| `service status`, `journalctl --user -u kurukuru.service`, `kurukuru restart` (new MainPID, waits for the backend) | WSL2 | Yes |
+| An enabled service starts by itself when the user manager starts | WSL2: distribution stopped, then booted | Yes — up 4 s after boot, health 200, untouched |
+| `KillMode=process` leaves a child of the service running across a restart; the default kills it | WSL2, with a plain `sleep` standing in for QEMU | Yes for the stand-in; systemd logged the "left-over process". **Not verified with real VMs** |
+| `doctor` live: distro QEMU command, not-in-`kvm`-group diagnosis with `usermod` and the re-login trap, XDG state, lingering; no Windows-only wording | WSL2 | Yes |
+| `data remove` refuses while the backend runs; `gio trash`, `trash-put`, and the rename aside each keep the tree byte-identical | WSL2, real trees on ext4 | Yes |
+| `service uninstall` and `pipx uninstall` leave the data untouched | WSL2 | Yes — fingerprint identical |
+| `loginctl enable-linger` needs root | WSL2 | Yes — without sudo it fails ("No such device or address") |
+| Lingering keeps the service running after the last session ends | WSL2 | **Not establishable under WSL**: WSL stops the whole distribution when the last window closes, with or without lingering. Needs a real machine |
 | **Any VM launched under KVM from this install** | needs bare metal | **Never** |
 
 ### Open questions — need a host with `/dev/kvm`

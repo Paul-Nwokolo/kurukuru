@@ -223,6 +223,24 @@ def systemd_user_available(environ=None) -> bool:
     return bool(runtime) and (Path(runtime) / "systemd" / "private").exists()
 
 
+def is_wsl(environ=None, osrelease: str = "/proc/sys/kernel/osrelease") -> bool:
+    """Whether this is Windows Subsystem for Linux.
+
+    It matters for one fact the rest of this module would otherwise get wrong:
+    WSL stops the whole distribution when its last window closes, lingering or
+    not — measured in Phase 18, with ``Linger=yes`` and the instance still
+    ``Stopped`` a minute after the last terminal closed. So under WSL a user
+    service runs only while some WSL session is open.
+    """
+    environ = os.environ if environ is None else environ
+    if environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        return "microsoft" in Path(osrelease).read_text(encoding="utf-8").lower()
+    except OSError:
+        return False
+
+
 @dataclass
 class LinuxHost:
     distro: Distro = field(default_factory=Distro)
@@ -230,6 +248,7 @@ class LinuxHost:
     kvm: KvmAccess | None = None
     linger: bool | None = None
     systemd_user: bool = False
+    wsl: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -238,6 +257,7 @@ class LinuxHost:
             "kvm": self.kvm.as_dict() if self.kvm else None,
             "linger": self.linger,
             "systemd_user": self.systemd_user,
+            "wsl": self.wsl,
         }
 
 
@@ -249,4 +269,5 @@ def describe() -> LinuxHost:
         kvm=kvm_access(),
         linger=linger_enabled(),
         systemd_user=systemd_user_available(),
+        wsl=is_wsl(),
     )

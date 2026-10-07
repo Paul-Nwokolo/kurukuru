@@ -150,3 +150,15 @@ def test_on_a_real_posix_host_describe_answers_without_raising():
     host = linux_host.describe().as_dict()
     assert set(host) == {"distro", "qemu_install", "kvm", "linger", "systemd_user"}
     assert host["kvm"]["state"] in {"ok", "absent", "not-in-group", "relogin-needed", "denied"}
+
+
+def test_wsl_is_recognised_by_its_variable_or_its_kernel(tmp_path):
+    release = tmp_path / "osrelease"
+    release.write_text("6.18.40.1-microsoft-standard-WSL2")
+    plain = tmp_path / "plain"
+    plain.write_text("6.8.0-45-generic")
+
+    assert linux_host.is_wsl({"WSL_DISTRO_NAME": "Ubuntu-24.04"}, str(plain)) is True
+    assert linux_host.is_wsl({}, str(release)) is True
+    assert linux_host.is_wsl({}, str(plain)) is False
+    assert linux_host.is_wsl({}, str(tmp_path / "missing")) is False

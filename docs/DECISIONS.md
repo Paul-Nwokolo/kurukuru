@@ -3701,12 +3701,18 @@ writes, enables and starts `~/.config/systemd/user/kurukuru.service`.
 - **`KillMode=process`.** VMs are separate QEMU processes the backend re-adopts
   through the filesystem, designed to survive a backend restart. systemd's
   default `KillMode=control-group` would kill every one of them on each stop,
-  restart or upgrade, since they live in the unit's cgroup. Whether this holds
-  with real VMs on Linux is an open question; what systemd does to a plain
-  child process under each mode is a systemd fact, answerable in WSL2.
+  restart or upgrade, since they live in the unit's cgroup. Measured in WSL2
+  (systemd 255) with a plain `sleep` standing in for QEMU: under
+  `KillMode=process` the child survived `systemctl --user restart` and systemd
+  logged it as a "left-over process"; under the default it was killed. Whether
+  real VMs then re-adopt cleanly is still open.
 - **Lingering is stated, not implied.** Without `loginctl enable-linger`,
   systemd stops the user manager — and the backend — when the last session
-  ends. `service install`, `service status` and `doctor` all report it.
+  ends. `service install`, `service status` and `doctor` all report it. **Under
+  WSL lingering cannot help**: with `Linger=yes`, closing the last WSL window
+  still stopped the whole distribution, so the service runs only while a WSL
+  session is open. Both commands detect WSL and say so rather than promise
+  otherwise.
 - **The wheel carries the dashboard** inside the package (`kurukuru/_dashboard`,
   copied in by `tools/build_wheel.py` at build time only, searched after a
   checkout's own `frontend/dist` so a stale copy can never shadow a fresh

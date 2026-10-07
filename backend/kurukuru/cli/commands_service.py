@@ -57,6 +57,13 @@ def _state_dir() -> Path:
 # service
 # --------------------------------------------------------------------------- #
 def _linger_note(out: Output) -> None:
+    if linux_host.is_wsl():
+        out.warn(
+            "This is WSL, which stops the whole distribution when its last "
+            "window closes, lingering or not: the service runs while a WSL "
+            "session is open and starts again with the distribution."
+        )
+        return
     linger = linux_host.linger_enabled()
     if linger is True:
         out.note("Lingering is on: the service keeps running after you log out.")

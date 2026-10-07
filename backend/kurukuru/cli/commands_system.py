@@ -482,12 +482,29 @@ def _linux_checks(host: dict, engine_ok: bool) -> list[Check]:
             checks.append(Check("State directory", PASS, str(store["path"])))
 
     linger = linux.get("linger")
-    if linger is False:
+    if linux.get("wsl"):
+        # Lingering cannot do its job here: WSL stops the whole distribution
+        # when its last window closes, and the service with it. Measured in
+        # Phase 18 with Linger=yes. Said instead of either linger line below,
+        # both of which would be wrong under WSL.
         checks.append(Check(
             "Lingering",
             WARN,
-            "off — a Kurukuru user service stops when your last session ends, "
-            "and its VMs with it",
+            "this is WSL, which stops the whole distribution when its last "
+            "window closes — the service runs only while a WSL session is open, "
+            "lingering or not",
+            "Keep a WSL window open while you use Kurukuru. The service starts "
+            "again by itself the next time the distribution starts.",
+        ))
+    elif linger is False:
+        checks.append(Check(
+            "Lingering",
+            WARN,
+            # Not "and its VMs with it": what logind does to running QEMU
+            # processes at logout is open question 5 in PORTABILITY, and the
+            # Phase 18 WSL run caught this line asserting the answer.
+            "off — a Kurukuru user service stops when your last session ends "
+            "(whether running VMs survive that is not yet verified on Linux)",
             "If you want it to keep running after you log out: "
             "sudo loginctl enable-linger $USER. Not needed if you only use "
             "Kurukuru while logged in.",
