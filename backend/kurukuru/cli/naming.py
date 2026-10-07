@@ -21,6 +21,7 @@ from importlib.metadata import PackageNotFoundError, version as _package_version
 # the backend can import them without depending on its own client package. They
 # are re-exported here because every CLI module already asks this module for
 # them, and the indirection is not worth a hundred-line diff.
+from kurukuru.product import default_config_dir
 from kurukuru.product import (
     API_PREFIX,
     CLI_NAME,
@@ -51,9 +52,10 @@ __all__ = [
     "env_var",
 ]
 
-#: Where a user's persistent CLI settings live. Under the same directory the
-#: backend already owns (keys, images, instances), so there is one place to look.
-CONFIG_PATH = "~/.kurukuru/cli.toml"
+#: Where a user's persistent CLI settings live. Beside the backend's own
+#: ``kurukuru.env`` — in the state directory, or on a Linux install using XDG in
+#: ``$XDG_CONFIG_HOME/kurukuru`` (DECISIONS #69) — so there is one place to look.
+CONFIG_PATH = f"{default_config_dir()}/cli.toml"
 
 #: Last resort when nothing else says where the API is. An *origin*: the
 #: API's mount point is appended by ``ApiClient``, in one place.

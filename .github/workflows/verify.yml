@@ -139,6 +139,149 @@ jobs:
         # regression reports as itself first.
         run: python tools/prove_defences.py
 
+  backend-linux:
+    # The suites on a genuinely non-Windows OS. This runner has no /dev/kvm,
+    # and no test in the suite starts a VM anyway — so this job proves the
+    # Python, the paths, the permissions and the POSIX process code on Linux,
+    # and proves nothing about the hypervisor path. The last step says so in
+    # the run itself, so the green tick cannot be read as more than it is.
+    name: backend + tools (Linux, no KVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # qemu-img only, not the emulator: the image tests probe real qcow2
+      # files, and without it they would skip — which report_skips below
+      # would then fail, since they are on the must-run list.
+      - name: Install qemu-img
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends qemu-utils
+          qemu-img --version
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "backend[dev]"
+
+      - name: Backend tests
+        run: python -m pytest backend/tests -q -rs --junitxml=junit-backend.xml
+
+      - name: What the backend run skipped, and what it must not have
+        # Every skip printed as an annotation; the POSIX-only tests and the
+        # qemu-img tests are the reason this job exists, so any of them
+        # skipping — or no longer existing — fails it.
+        if: always()
+        run: >
+          python tools/report_skips.py junit-backend.xml --must-run
+          tests/test_fs_permissions.py::test_posix_hardening_sets_0600
+          tests/test_keypairs.py::test_generated_private_keys_are_0600
+          tests/test_process.py::test_spawned_child_leads_its_own_session
+          tests/test_linux_host.py::test_on_a_real_posix_host_describe_answers_without_raising
+          tests/test_state_migration.py::test_qcow2_backing_files_are_repointed
+          tests/test_images_api.py::test_probe_reads_format_and_sizes
+
+      - name: Tools tests
+        run: python -m pytest tools -q -rs
+
+      - name: Say what this job did not cover
+        if: always()
+        run: |
+          echo "::notice title=no hypervisor::This runner has no /dev/kvm and no test starts a VM. Launch, boot, console, -cpu host, the display default and the reboot watchdog under KVM are unverified on Linux; see docs/PORTABILITY.md, Phase 18 open questions."
+
+  wheel-linux:
+    # The Linux install path, end to end short of a VM: build the wheel with
+    # the dashboard inside it, install it with pipx into a fresh environment,
+    # and run what was installed — not the checkout.
+    name: wheel installs with pipx (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build the wheel
+        run: |
+          (cd frontend && npm ci)
+          python -m pip install --upgrade pip setuptools
+          python tools/build_wheel.py --out dist
+
+      - name: Install it with pipx, and run the installed copy
+        run: |
+          set -eu
+          pipx install dist/kurukuru-*.whl
+          command -v kurukuru
+          kurukuru version
+          # No QEMU on this runner, deliberately: the backend must start and
+          # doctor must name this distribution's package for it.
+          test ! -e "$HOME/.kurukuru"
+
+      - name: Serve from the wheel and check what it serves
+        run: |
+          set -eu
+          kurukuru serve > serve.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:7842/api/health > /dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:7842/api/health
+          # The dashboard comes out of the wheel, not a checkout.
+          curl -sf http://127.0.0.1:7842/instances | grep -qi '<!doctype html>'
+          grep -q "_dashboard" serve.log
+          # State under XDG on a new Linux install, never ~/.kurukuru.
+          test -d "$HOME/.local/share/kurukuru"
+          test ! -e "$HOME/.kurukuru"
+          # And the key directory and private key are owner-only.
+          test "$(stat -c %a "$HOME/.local/share/kurukuru/keys")" = 700
+          test "$(stat -c %a "$HOME/.local/share/kurukuru/keys/id_ed25519")" = 600
+
+      - name: doctor on Linux gives Linux advice
+        run: |
+          set -u
+          py="$(pipx environment --value PIPX_LOCAL_VENVS)/kurukuru/bin/python"
+          # A throwaway owner account, created through the installed package the
+          # way `auth init` does, with a password that never reaches a command line.
+          "$py" - <<'EOF'
+          import secrets
+          from kurukuru.cli import auth_store, host_admin
+          created = host_admin.create_owner("ci", secrets.token_urlsafe(18), "ci")
+          auth_store.save(created.token, "")
+          EOF
+          kurukuru doctor > doctor.txt; echo "doctor exit: $?"
+          cat doctor.txt
+          grep -q "sudo apt install qemu-system-x86 qemu-utils" doctor.txt
+          grep -q "KVM" doctor.txt
+          if grep -qiE "windows|powershell|smart app|setx|\.exe|recycle bin" doctor.txt; then
+            echo "::error title=doctor::Windows-shaped advice on Linux"; exit 1
+          fi
+
+      - name: The user service, as far as this runner allows
+        # A CI runner usually has no systemd user manager for its account; the
+        # real install, enable, restart and logout behaviour is checked in WSL2
+        # (Phase 18). Here: the command must either work or refuse with its
+        # explanation, never fail obscurely.
+        run: |
+          set +e
+          kurukuru service install; code=$?
+          echo "service install exit: $code"
+          kurukuru service status
+          test $code -eq 0 -o $code -eq 1
+
   frontend:
     name: frontend verify
     runs-on: ubuntu-latest

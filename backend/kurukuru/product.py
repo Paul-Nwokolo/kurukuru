@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+from pathlib import Path
 
 logger = logging.getLogger("kurukuru.product")
 
@@ -80,10 +82,74 @@ STARTUP_TASK_NAME = "Kurukuru"
 #: older tree genuinely is that older version, whatever this file now says.
 VERSION = "0.1.4"
 
-#: Root of everything this tool keeps on disk, before ``~`` is expanded.
-#: :mod:`kurukuru.config` re-exports it as ``DEFAULT_STATE_DIR`` and roots every
-#: other path under it.
+#: Root of everything this tool keeps on disk, before ``~`` is expanded — on
+#: Windows and macOS, and on Linux where a tree is already there. Everything
+#: else should call :func:`default_state_dir`, which is the policy; this is one
+#: of its answers.
 STATE_DIR = "~/.kurukuru"
+
+#: The leaf under ``$XDG_DATA_HOME`` and ``$XDG_CONFIG_HOME`` on Linux.
+XDG_LEAF = "kurukuru"
+
+
+def _xdg_base(environ, variable: str, fallback: str) -> str:
+    """``$XDG_*_HOME`` if set to an absolute path, else the spec's fallback.
+
+    The XDG Base Directory spec says a relative value is invalid and must be
+    ignored — not resolved against the working directory, which would put a
+    user's VMs wherever the shell happened to be when the service started.
+    """
+    value = (environ.get(variable) or "").rstrip("/")
+    return value if value.startswith("/") else fallback
+
+
+def xdg_state_dir(environ=None) -> str:
+    """Where Linux state goes under XDG, whether or not that is in use here."""
+    environ = os.environ if environ is None else environ
+    return f"{_xdg_base(environ, 'XDG_DATA_HOME', '~/.local/share')}/{XDG_LEAF}"
+
+
+def default_state_dir(platform: str | None = None, environ=None, home=None) -> str:
+    """Where state lives when nothing has been configured. DECISIONS #69.
+
+    - **Windows and macOS:** ``~/.kurukuru``, unchanged.
+    - **Linux, new install:** ``$XDG_DATA_HOME/kurukuru``, by default
+      ``~/.local/share/kurukuru`` — where the platform's own convention puts
+      application data, and where backup and dotfile tooling expect it.
+    - **Linux, existing ``~/.kurukuru``:** that tree, where it is. Before 0.1.5
+      the default was ``~/.kurukuru`` everywhere, so anyone who ran a source
+      checkout on Linux has their VMs there. Moving them automatically is the
+      one thing this must not do — a relocation the user did not ask for is
+      indistinguishable, from where they sit, from their VMs disappearing — and
+      choosing the new path while the old tree exists would split one install
+      across two trees. So the old tree simply keeps winning until its owner
+      moves it; ``doctor`` says which one is in use and how.
+
+    ``KURUKURU_STATE_DIR`` overrides all of this, as before. Parameters exist
+    for tests; production callers pass none.
+    """
+    platform = platform or sys.platform
+    if not platform.startswith("linux"):
+        return STATE_DIR
+    environ = os.environ if environ is None else environ
+    home_dir = Path(home) if home is not None else Path.home()
+    if (home_dir / ".kurukuru").exists():
+        return STATE_DIR
+    return xdg_state_dir(environ)
+
+
+def default_config_dir(platform: str | None = None, environ=None, home=None) -> str:
+    """Where the two hand-edited files live: ``kurukuru.env`` and ``cli.toml``.
+
+    The state directory everywhere it is ``~/.kurukuru`` — one tree, as it has
+    always been. On a Linux install using XDG for data, the config half follows
+    the same spec: ``$XDG_CONFIG_HOME/kurukuru``, by default ``~/.config/kurukuru``.
+    """
+    state = default_state_dir(platform, environ, home)
+    if state == STATE_DIR:
+        return STATE_DIR
+    environ = os.environ if environ is None else environ
+    return f"{_xdg_base(environ, 'XDG_CONFIG_HOME', '~/.config')}/{XDG_LEAF}"
 
 #: The database's filename under :data:`STATE_DIR`.
 DATABASE_LEAF = "kurukuru.db"

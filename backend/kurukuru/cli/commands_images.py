@@ -21,6 +21,7 @@ from kurukuru.cli.errors import CliError, ExitCode
 from kurukuru.cli.formats import format_bytes, relative_age
 from kurukuru.cli.naming import CLI_NAME
 from kurukuru.cli.output import Output
+from kurukuru.product import default_state_dir
 from kurukuru.cli.support import (
     DEFAULT_WAIT_TIMEOUT,
     POLL_SECONDS,
@@ -206,7 +207,7 @@ def isos_ls(
         out.human("[dim]no boot media[/dim]")
         out.note(
             "Drop .iso files into the backend's ISO directory "
-            "(KURUKURU_ISO_DIR, default ~/.kurukuru/isos)."
+            f"(KURUKURU_ISO_DIR, default {default_state_dir()}/isos)."
         )
         return
 

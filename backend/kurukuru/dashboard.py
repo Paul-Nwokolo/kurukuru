@@ -61,6 +61,10 @@ def _candidates() -> tuple[Path, ...]:
     found.append(here.parent / "dashboard")
     # A source checkout: backend/kurukuru/ -> repo root -> frontend/dist.
     found.append(here.parent.parent.parent / "frontend" / "dist")
+    # A wheel install (pipx on Linux): the bundle shipped inside the package by
+    # tools/build_wheel.py. Last, so a checkout always serves its own fresh
+    # frontend/dist rather than a copy left from a wheel build.
+    found.append(here.parent / "_dashboard")
     return tuple(found)
 
 #: Files Vite fingerprints with a content hash. The hash *is* the cache key, so

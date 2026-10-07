@@ -67,6 +67,12 @@ version = { attr = "kurukuru.product.VERSION" }
 [tool.setuptools.packages.find]
 include = ["kurukuru*"]
 
+# The built dashboard, inside the package, for a wheel install (pipx on Linux)
+# where there is no checkout to find frontend/dist in. tools/build_wheel.py
+# copies it here for the build and removes it after; it is never committed.
+[tool.setuptools.package-data]
+kurukuru = ["_dashboard/*", "_dashboard/**/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Platform markers exist so a run can say what it did *not* cover. A suite that

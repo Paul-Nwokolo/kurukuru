@@ -733,6 +733,91 @@ def test_doctor_exits_three_when_the_api_is_unreachable():
     assert "kurukuru serve" in result.stdout
 
 
+#: A Linux backend with everything that can go wrong on Linux going wrong at
+#: once, so every Linux remedy is rendered in a single run.
+SICK_LINUX_DIAGNOSTICS = {
+    **HEALTHY_DIAGNOSTICS,
+    "engine": {"available": False, "error": "qemu-system-x86_64: not found",
+               "accel": "tcg", "accel_available": False},
+    "instance_store": {**HEALTHY_DIAGNOSTICS["instance_store"], "path": "/home/ada/.kurukuru/qemu/instances"},
+    "ssh_key": {"present": False, "error": "ssh-keygen not found", "private_key_path": None},
+    "qemu_overrides": {
+        "KURUKURU_QEMU_IMG_BINARY": {"in_use": "/opt/qemu/bin/qemu-img", "would_be": "qemu-img", "exists": True},
+    },
+    "smart_app_control": {"state": "unsupported", "detail": ""},
+    "host": {
+        "platform": "linux",
+        "linux": {
+            "distro": {"id": "ubuntu", "id_like": ["debian"], "pretty_name": "Ubuntu 24.04.3 LTS"},
+            "qemu_install": "sudo apt install qemu-system-x86 qemu-utils",
+            "kvm": {"state": "not-in-group", "device": "/dev/kvm", "group": "kvm",
+                    "mode": "crw-rw----", "user": "ada"},
+            "linger": False,
+            "systemd_user": True,
+        },
+        "state": {"path": "/home/ada/.kurukuru", "dotfile_tree_in_use": True,
+                  "dotfile_tree_exists": True, "xdg_path": "/home/ada/.local/share/kurukuru",
+                  "xdg_tree_exists": False},
+    },
+}
+
+#: Words that have no business in advice to a Linux user.
+_WINDOWS_WORDS = ("Windows", "PowerShell", "Smart App", "setx", ".exe", "Hypervisor Platform",
+                  "%USERPROFILE%", "Recycle Bin", "sign out")
+
+
+def test_doctor_on_linux_names_nothing_windows(cli, monkeypatch):
+    """The copy sweep, as a test: the Phase 9 audit swept the code for Windows
+    assumptions; this is the same sweep for what a Linux user reads."""
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: SICK_LINUX_DIAGNOSTICS)
+    result = cli("doctor")
+    leaked = [word for word in _WINDOWS_WORDS if word.lower() in result.stdout.lower()]
+    assert not leaked, f"Windows-shaped advice on a Linux host: {leaked}\n{result.stdout}"
+
+
+def test_doctor_on_linux_prescribes_linux_commands(cli, monkeypatch):
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: SICK_LINUX_DIAGNOSTICS)
+    out = cli("doctor").stdout
+    flat = " ".join(out.split())
+
+    assert "sudo apt install qemu-system-x86 qemu-utils" in flat
+    assert "sudo usermod -aG kvm $USER" in flat
+    # The trap, said plainly: group changes need a new login, and a lingering
+    # user manager has to be restarted too.
+    assert "log out completely and back in" in flat
+    assert "sudo systemctl restart user@$(id -u).service" in flat
+    assert "sudo loginctl enable-linger $USER" in flat
+    assert "openssh-client" in flat
+    # An existing ~/.kurukuru is reported, and the move is the user's to make.
+    assert "Nothing moves it for you" in flat
+    # A chosen QEMU on Linux is a fact, not a leftover to remove.
+    assert "PASS QEMU binary" in flat
+
+
+def test_doctor_on_linux_tells_a_relogin_from_a_missing_group(cli, monkeypatch):
+    """Running usermod a second time is the wrong fix for the second case."""
+    relogin = {**SICK_LINUX_DIAGNOSTICS, "host": {
+        **SICK_LINUX_DIAGNOSTICS["host"],
+        "linux": {**SICK_LINUX_DIAGNOSTICS["host"]["linux"],
+                  "kvm": {"state": "relogin-needed", "group": "kvm", "user": "ada"}},
+    }}
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: relogin)
+    flat = " ".join(cli("doctor").stdout.split())
+
+    assert "started before that" in flat
+    assert "usermod" not in flat
+
+
+def test_doctor_without_a_host_block_keeps_naming_both_platforms(cli, monkeypatch):
+    """A backend older than 0.1.5 sends no host block; the remedies then stay
+    the two-platform ones rather than guessing."""
+    slow = {**HEALTHY_DIAGNOSTICS,
+            "engine": {**HEALTHY_DIAGNOSTICS["engine"], "accel_available": False, "accel": "tcg"}}
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: slow)
+    flat = " ".join(cli("doctor").stdout.split())
+    assert "Windows Hypervisor Platform" in flat and "/dev/kvm" in flat
+
+
 def test_doctor_json_is_a_list_of_checks(cli, monkeypatch):
     monkeypatch.setattr(ApiClient, "diagnostics", lambda self: HEALTHY_DIAGNOSTICS)
     checks = json.loads(cli("doctor", "--json").stdout)

@@ -26,29 +26,26 @@ from kurukuru.product import (
     VERSION,
     ENV_PREFIX,
     PRODUCT_NAME,
-    STATE_DIR,
     apply_legacy_env,
+    default_config_dir,
+    default_state_dir,
 )
 
 logger = logging.getLogger("kurukuru.config")
 
-#: Root of everything this tool keeps on disk. One dotfile directory in $HOME,
-#: which is the convention on Windows and macOS and *a* convention on Linux —
-#: where the XDG Base Directory spec would instead put state under
-#: ``$XDG_DATA_HOME`` (``~/.local/share/kurukuru``) and configuration under
-#: ``$XDG_CONFIG_HOME``. Changing the default would move every existing
-#: install's VMs and keys out from under it, so the default stays and
-#: ``KURUKURU_STATE_DIR`` is the supported way to relocate the lot:
-#:
-#:     KURUKURU_STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kurukuru"
-#:
-#: Whether Linux should *default* to that is a policy question for the Linux
-#: validation phase; the mechanism is here either way.
+#: Root of everything this tool keeps on disk. ``~/.kurukuru`` on Windows and
+#: macOS; on Linux, ``$XDG_DATA_HOME/kurukuru`` for a new install and an existing
+#: ``~/.kurukuru`` wherever there already is one — never moved for anyone. The
+#: policy and its reasoning live in :func:`kurukuru.product.default_state_dir`
+#: (DECISIONS #69). ``KURUKURU_STATE_DIR`` still overrides it outright.
 #:
 #: This moved from ``~/.local-iaas`` in Phase 16. It is the one default whose
 #: change *cannot* be made invisible, so it is not made invisible: an existing
 #: tree is detected and moved once, loudly, by :mod:`kurukuru.state_migration`.
-DEFAULT_STATE_DIR = STATE_DIR
+#: Computed once per process. On Linux the answer depends on whether
+#: ``~/.kurukuru`` already exists (DECISIONS #69), and every default below is
+#: built from this one value so they cannot disagree with each other.
+DEFAULT_STATE_DIR = default_state_dir()
 
 
 class FlavorSpec(BaseModel):
@@ -127,7 +124,9 @@ def _default_qemu_img() -> str:
 #: ``state_dir`` is itself a setting, so reading the file that might change it
 #: from the directory it names is circular. ``KURUKURU_STATE_DIR`` therefore
 #: has to be an environment variable, which is what the docs have always said.
-CONFIG_FILE = Path(DEFAULT_STATE_DIR).expanduser() / "kurukuru.env"
+#: On Linux with XDG this is ``$XDG_CONFIG_HOME/kurukuru/kurukuru.env``; everywhere
+#: the state directory is ``~/.kurukuru``, it is beside the database as before.
+CONFIG_FILE = Path(default_config_dir()).expanduser() / "kurukuru.env"
 
 
 class Settings(BaseSettings):

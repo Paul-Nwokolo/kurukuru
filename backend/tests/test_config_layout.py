@@ -13,13 +13,16 @@ deliberately.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from kurukuru.config import DEFAULT_STATE_DIR, Settings
 from kurukuru.product import DATABASE_LEAF
 
 
-def test_defaults_are_unchanged_by_the_new_root():
+def test_every_default_follows_the_one_root():
     """An existing install must not notice this setting exists.
 
     Every one of these paths holds real state — VM disks, the orchestrator's
@@ -27,14 +30,23 @@ def test_defaults_are_unchanged_by_the_new_root():
     all of it and present as "all my instances disappeared".
     """
     settings = Settings()
+    root = DEFAULT_STATE_DIR
 
-    assert settings.state_dir == DEFAULT_STATE_DIR
-    assert settings.qemu_dir == "~/.kurukuru/qemu"
-    assert settings.ssh_key_dir == "~/.kurukuru/keys"
-    assert settings.cloud_init_dir == "~/.kurukuru/cloud-init"
-    assert settings.iso_dir == "~/.kurukuru/isos"
-    assert settings.db_backup_dir == "~/.kurukuru/backups"
-    assert settings.database_url == "sqlite:///~/.kurukuru/kurukuru.db"
+    assert settings.state_dir == root
+    assert settings.qemu_dir == f"{root}/qemu"
+    assert settings.ssh_key_dir == f"{root}/keys"
+    assert settings.cloud_init_dir == f"{root}/cloud-init"
+    assert settings.iso_dir == f"{root}/isos"
+    assert settings.db_backup_dir == f"{root}/backups"
+    assert settings.database_url == f"sqlite:///{root}/kurukuru.db"
+
+
+@pytest.mark.skipif(sys.platform.startswith("linux"), reason="Linux defaults to XDG; see test_state_dir_policy")
+def test_the_windows_and_macos_default_is_byte_for_byte_what_it_was():
+    """Where the policy says ``~/.kurukuru``, it is exactly that string — the
+    one every install before 0.1.5 has its VMs under."""
+    assert DEFAULT_STATE_DIR == "~/.kurukuru"
+    assert Settings().database_url == "sqlite:///~/.kurukuru/kurukuru.db"
 
 
 def test_state_dir_moves_every_directory_that_follows_it():

@@ -5,7 +5,8 @@ Resolution order, highest first:
 
 1. ``--api-url``
 2. ``KURUKURU_API_URL``
-3. ``~/.kurukuru/cli.toml``
+3. ``cli.toml`` in the config directory (``~/.kurukuru``, or on Linux
+   ``$XDG_CONFIG_HOME/kurukuru`` — see :func:`kurukuru.product.default_config_dir`)
 4. ``http://127.0.0.1:8000``
 
 The order is the usual one for a reason: the flag is this invocation, the

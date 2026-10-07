@@ -25,12 +25,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kurukuru.fs_permissions import describe_protection, harden_file
+from kurukuru.product import default_state_dir
 
 #: Kept in step with ``Settings.auth_token_file`` by
-#: ``test_the_cli_and_the_backend_agree_on_the_token_path``. Duplicated rather
-#: than imported because the CLI must not import the backend's settings — see
-#: ``test_the_cli_never_reaches_past_the_api`` for why that boundary exists.
-DEFAULT_STATE_DIR = "~/.kurukuru"
+#: ``test_the_cli_and_the_backend_agree_on_the_token_path``. Taken from
+#: :mod:`kurukuru.product`, not from the backend's settings — the CLI must not
+#: import those (see ``test_the_cli_never_reaches_past_the_api``), and the
+#: product module sits below both halves for exactly this kind of shared fact.
+#: It used to be a second ``"~/.kurukuru"`` literal, which on Linux would have
+#: put the CLI's token in a different tree from the backend's (DECISIONS #69).
+DEFAULT_STATE_DIR = default_state_dir()
 TOKEN_LEAF = "cli-token"
 
 logger = logging.getLogger("kurukuru.cli.auth")

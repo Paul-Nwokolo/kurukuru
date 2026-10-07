@@ -95,3 +95,6 @@ desktop.ini
 # twice before it was ignored.
 signpath_terms.html
 *.download.html
+
+# The dashboard copied into the package for a wheel build (tools/build_wheel.py)
+backend/kurukuru/_dashboard/

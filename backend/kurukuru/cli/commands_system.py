@@ -383,6 +383,121 @@ def _override_checks(data: dict) -> list[Check]:
     return checks
 
 
+#: Same package, three spellings: what ssh-keygen ships in per family.
+_OPENSSH_PACKAGES = (
+    "openssh-client (Debian, Ubuntu), openssh-clients (Fedora), openssh (Arch, "
+    "openSUSE)"
+)
+
+_RELOGIN = (
+    "Group membership is fixed when a login session starts, so this takes "
+    "effect only after you log out completely and back in (or reboot). If the "
+    "backend runs as a systemd user service with lingering on, your user "
+    "manager outlives the logout and keeps the old groups — restart it too: "
+    "sudo systemctl restart user@$(id -u).service"
+)
+
+
+def _linux_checks(host: dict, engine_ok: bool) -> list[Check]:
+    """What only a Linux host can be asked: KVM access, the state tree, linger.
+
+    Built from the backend's own report of its host (kurukuru.linux_host), so
+    the advice is for the machine the backend runs on, which is where a fix
+    has to be made. Every remedy here names a Linux command; nothing in this
+    function may mention Windows, and ``test_doctor_on_linux_names_nothing_windows``
+    holds it to that.
+    """
+    linux = host.get("linux") or {}
+    checks: list[Check] = []
+
+    kvm = linux.get("kvm") or {}
+    state = kvm.get("state")
+    group = kvm.get("group") or "kvm"
+    if state == "absent":
+        checks.append(Check(
+            "KVM",
+            WARN,
+            "no /dev/kvm on this host",
+            "VMs still run, under software emulation, roughly 30x slower. "
+            "Either virtualization is off in the firmware (enable VT-x or "
+            "AMD-V), the kvm module is not loaded (sudo modprobe kvm_intel, or "
+            "kvm_amd), or this machine is itself a VM without nested "
+            "virtualization — WSL2 usually is.",
+        ))
+    elif state == "not-in-group":
+        checks.append(Check(
+            "KVM",
+            WARN,
+            f"/dev/kvm belongs to the '{group}' group, and {kvm.get('user') or 'this user'} "
+            f"is not in it — QEMU gets 'Permission denied' and VMs fall back to "
+            f"slow software emulation",
+            f"sudo usermod -aG {group} $USER\n     {_RELOGIN}",
+        ))
+    elif state == "relogin-needed":
+        checks.append(Check(
+            "KVM",
+            WARN,
+            f"{kvm.get('user') or 'this user'} is in the '{group}' group, but the "
+            f"backend was started before that and does not have it",
+            f"Nothing more to add. {_RELOGIN}",
+        ))
+    elif state == "denied":
+        checks.append(Check(
+            "KVM",
+            WARN,
+            f"/dev/kvm ({kvm.get('mode')}, group {group}) cannot be opened, and "
+            f"group membership does not explain why",
+            "Something else is refusing access — an ACL, a container's device "
+            "policy, or a security module. Check `getfacl /dev/kvm` and the "
+            "system log.",
+        ))
+    elif state == "ok":
+        checks.append(Check("KVM", PASS, f"/dev/kvm usable (group {group})"))
+
+    store = host.get("state") or {}
+    if store.get("path"):
+        if store.get("dotfile_tree_in_use") and store.get("xdg_tree_exists"):
+            checks.append(Check(
+                "State directory",
+                WARN,
+                f"{store['path']} is in use, and a second tree exists at "
+                f"{store.get('xdg_path')} — that one is ignored",
+                "Kurukuru uses ~/.kurukuru whenever it exists, so your VMs are "
+                "never split across two places. If the other tree holds "
+                "anything you need, stop the backend and merge it by hand; "
+                "nothing does that for you.",
+            ))
+        elif store.get("dotfile_tree_in_use"):
+            checks.append(Check(
+                "State directory",
+                PASS,
+                f"{store['path']} (the pre-0.1.5 location, kept because it exists)",
+                f"New Linux installs use {store.get('xdg_path')}. Yours stays "
+                f"where it is unless you move it: stop the backend, then "
+                f"mv ~/.kurukuru {store.get('xdg_path')} — and move kurukuru.env "
+                f"and cli.toml, if you have them, to ~/.config/kurukuru/. "
+                f"Nothing moves it for you.",
+            ))
+        else:
+            checks.append(Check("State directory", PASS, str(store["path"])))
+
+    linger = linux.get("linger")
+    if linger is False:
+        checks.append(Check(
+            "Lingering",
+            WARN,
+            "off — a Kurukuru user service stops when your last session ends, "
+            "and its VMs with it",
+            "If you want it to keep running after you log out: "
+            "sudo loginctl enable-linger $USER. Not needed if you only use "
+            "Kurukuru while logged in.",
+        ))
+    elif linger is True:
+        checks.append(Check("Lingering", PASS, "on — the user service survives logout"))
+
+    return checks
+
+
 def _backend_checks(client: ApiClient) -> list[Check]:
     """Everything only the backend's host can answer."""
     try:
@@ -410,6 +525,11 @@ def _backend_checks(client: ApiClient) -> list[Check]:
     checks: list[Check] = []
     engine = data.get("engine") or {}
     engine_ok = bool(engine.get("available") and engine.get("version"))
+    # The backend's host, which is where any fix has to be made. Absent from a
+    # backend older than 0.1.5; the remedies then keep naming both platforms.
+    host = data.get("host") or {}
+    on_linux = str(host.get("platform") or "").startswith("linux")
+    qemu_install = (host.get("linux") or {}).get("qemu_install")
 
     # Before QEMU, because it explains QEMU. An enforcing Smart App Control is
     # the reason the engine is unavailable, not a separate finding, and a
@@ -425,11 +545,16 @@ def _backend_checks(client: ApiClient) -> list[Check]:
                 "QEMU",
                 FAIL,
                 str(engine.get("error") or "qemu-system-x86_64 could not be run"),
-                # The installed build bundles QEMU and finds it for itself, so
-                # "install QEMU" is advice for a checkout, not for the audience
-                # most likely to be reading this. Both are named, in the order
-                # that matches who hits it.
-                "On an installed build QEMU ships with Kurukuru and is found "
+                # Linux does not bundle QEMU (DECISIONS #70), so the answer is
+                # the distribution's package — named for this distribution.
+                f"Kurukuru uses your distribution's QEMU on Linux. Install it:\n"
+                f"       {qemu_install}"
+                if on_linux and qemu_install
+                # The installed Windows build bundles QEMU and finds it for
+                # itself, so "install QEMU" is advice for a checkout, not for
+                # the audience most likely to be reading this. Both are named,
+                # in the order that matches who hits it.
+                else "On an installed build QEMU ships with Kurukuru and is found "
                 "automatically — if this fails there, the check above is the "
                 "usual reason, and reinstalling is the fix for a damaged "
                 "bundle. Running from a checkout, install QEMU and put "
@@ -437,7 +562,22 @@ def _backend_checks(client: ApiClient) -> list[Check]:
             )
         )
 
-    checks.extend(_override_checks(data))
+    if on_linux:
+        # Nothing is bundled on Linux, so pointing at a particular QEMU is a
+        # choice, not a leftover from the 0.1.0 workaround — reported as the
+        # fact it is, and failed only if the file is not there.
+        for env, info in (data.get("qemu_overrides") or {}).items():
+            if isinstance(info, dict):
+                exists = bool(info.get("exists"))
+                checks.append(Check(
+                    "QEMU binary",
+                    PASS if exists else FAIL,
+                    f"{env} = {info.get('in_use')}" + ("" if exists else " — no such file"),
+                    None if exists else f"Point {env} at a real binary, or unset it "
+                    f"to use the one on PATH.",
+                ))
+    else:
+        checks.extend(_override_checks(data))
 
     if engine.get("accel_available"):
         checks.append(Check("Accelerator", PASS, str(engine.get("accel"))))
@@ -447,11 +587,16 @@ def _backend_checks(client: ApiClient) -> list[Check]:
                 "Accelerator",
                 WARN,
                 f"hardware acceleration unavailable (using {engine.get('accel') or 'tcg'})",
-                "VMs still run, roughly 30x slower. On Windows, enable 'Windows "
-                "Hypervisor Platform' in Windows Features and reboot; on Linux, "
-                "make sure /dev/kvm exists and you can read it.",
+                "VMs still run, roughly 30x slower. See the KVM line for why."
+                if on_linux
+                else "VMs still run, roughly 30x slower. On Windows, enable "
+                "'Windows Hypervisor Platform' in Windows Features and reboot; on "
+                "Linux, make sure /dev/kvm exists and you can read it.",
             )
         )
+
+    if on_linux:
+        checks.extend(_linux_checks(host, engine_ok))
 
     if engine.get("base_image_present"):
         checks.append(Check("Base image", PASS, str(engine.get("base_image"))))
@@ -506,9 +651,13 @@ def _backend_checks(client: ApiClient) -> list[Check]:
                 "SSH keypair",
                 FAIL,
                 str(key.get("error") or "the orchestrator has no keypair"),
-                "The backend generates one with ssh-keygen, which must be on its "
-                "PATH. On Windows, install the 'OpenSSH Client' optional feature. "
-                "Without a key, new instances cannot be logged into.",
+                f"The backend generates one with ssh-keygen, which must be on its "
+                f"PATH: install {_OPENSSH_PACKAGES}. Without a key, new instances "
+                f"cannot be logged into."
+                if on_linux
+                else "The backend generates one with ssh-keygen, which must be on "
+                "its PATH. On Windows, install the 'OpenSSH Client' optional "
+                "feature. Without a key, new instances cannot be logged into.",
             )
         )
 

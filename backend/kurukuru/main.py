@@ -482,6 +482,31 @@ def diagnostics(
             }
     payload["qemu_overrides"] = overrides
 
+    # Which host this is, so `doctor` gives advice for it — the backend's host,
+    # not the CLI's, since the remedy is for wherever the backend runs. On
+    # Linux, the facts that decide whether VMs can start there at all
+    # (kurukuru.linux_host) and which state tree is in use, because on Linux
+    # that is a policy with two answers (DECISIONS #69).
+    import sys
+
+    host: dict[str, object] = {"platform": sys.platform}
+    if sys.platform.startswith("linux"):
+        from kurukuru import linux_host
+        from kurukuru.product import STATE_DIR, xdg_state_dir
+
+        host["linux"] = linux_host.describe().as_dict()
+        in_use = Path(request_settings.state_dir).expanduser()
+        dotfile = Path(STATE_DIR).expanduser()
+        xdg = Path(xdg_state_dir()).expanduser()
+        host["state"] = {
+            "path": str(in_use),
+            "dotfile_tree_in_use": in_use == dotfile,
+            "dotfile_tree_exists": dotfile.exists(),
+            "xdg_path": str(xdg),
+            "xdg_tree_exists": xdg.exists(),
+        }
+    payload["host"] = host
+
     return payload
 
 

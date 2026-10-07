@@ -25,6 +25,7 @@ from kurukuru.cli import (
     commands_images,
     commands_networks,
     commands_projects,
+    commands_service,
     commands_instances,
     commands_snapshots,
     commands_volumes,
@@ -96,6 +97,8 @@ app.add_typer(commands_snapshots.snapshots_app, name="snapshot")
 app.add_typer(commands_projects.projects_app, name="projects")
 app.add_typer(commands_volumes.volumes_app, name="volumes")
 app.add_typer(commands_networks.net_app, name="net")
+app.add_typer(commands_service.service_app, name="service")
+app.add_typer(commands_service.data_app, name="data")
 
 
 @app.callback()
