@@ -29,7 +29,7 @@ from tests.conftest import api_ws
 from tests.test_dashboard import built, served  # noqa: F401
 from tests.test_instances_api import anon_client, client, iso_dir  # noqa: F401
 
-#: A page on another local port — the shape DECISIONS #45 and #51 measured.
+#: A page on another local port — the shape every run in DECISIONS #45 measured.
 #: Same *site* as the backend, which is why CORS and the CSRF token, not
 #: SameSite, are what stand between it and the API.
 OTHER_LOCAL_PORT = "http://127.0.0.1:8099"
@@ -87,7 +87,7 @@ def test_a_rebound_host_cannot_open_the_console(client):  # noqa: F811
 # CORS ships empty
 # --------------------------------------------------------------------------- #
 def test_a_preflight_from_another_local_port_is_refused(anon_client):  # noqa: F811
-    """DECISIONS #51 measured exactly this in Chrome: preflight → 400, so a
+    """DECISIONS #45 records this measured in Chrome: preflight → 400, so a
     credentialed `fetch()` from another port is blocked before it is sent."""
     response = anon_client.options(
         "/projects",

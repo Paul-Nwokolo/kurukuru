@@ -68,9 +68,13 @@ def test_every_break_does_one_thing():
 
 
 def test_no_break_is_left_applied():
-    """A killed run can leave a break in the source — it happened while this
-    tool was being written. This makes such a tree fail the suite, so it
-    cannot pass on its way into a commit."""
+    """No break's text is present in the real source.
+
+    The tool now edits a throwaway copy, so it cannot leave a break behind —
+    but an early version edited the tree in place and, killed mid-run, did
+    exactly that to ``console.py``. Cheap to keep: if anything ever puts a
+    break's text back into the real tree, by hand or by a regression in the
+    tool, the suite says so before it can be committed."""
     applied = []
     for brk in prove_defences.BREAKS:
         if brk.file is None:
@@ -78,8 +82,4 @@ def test_no_break_is_left_applied():
         raw = (prove_defences.BACKEND / brk.file).read_bytes().decode("utf-8")
         if brk.new in raw.replace("\r\n", "\n"):
             applied.append(f"{brk.key} in {brk.file}")
-    leftovers = list(prove_defences.BACKEND.rglob(f"*{prove_defences.BACKUP_SUFFIX}"))
-    assert not applied and not leftovers, (
-        f"Deliberate breaks are still applied: {applied}; backups present: "
-        f"{leftovers}. Running tools/prove_defences.py restores from the backups."
-    )
+    assert not applied, f"Deliberate breaks are present in the real source: {applied}"

@@ -1904,17 +1904,25 @@ page on any other local port — a stale dev server, a docs preview, a package's
 build tool. For a tool that binds to loopback, `SameSite` therefore defends
 against nothing that matters, and no amount of same-origin packaging changes it.
 
-**Measured, because the argument is easy to get backwards.** Chrome, an isolated
-backend on 8100, two pages:
+**Measured, because the argument is easy to get backwards — and re-measured
+each time something that could change it moved.** This entry is the record of
+the property; every measurement of it lives here rather than in the decision
+that prompted the re-run.
 
-| Step | Result |
-|---|---|
-| login from `http://localhost:8101` | 200, cookie set, `document.cookie` empty (httpOnly holds) |
-| plain form POST from `http://localhost:8102` | **403**, not 401 |
+| | Phase 15 (this decision) | Part B, packaged build (decision 51) | Phase 17, Starlette 0.49.3 (decision 65) |
+|---|---|---|---|
+| Backend / other page | `localhost:8100` / `localhost:8101`, `:8102` | `127.0.0.1:7842` / `127.0.0.1:8099` | `127.0.0.1:7851` (scratch instance) / `127.0.0.1:8099` |
+| Credentialed `fetch()` from the other port | not tried | preflight `OPTIONS` **400**; blocked before it was sent | preflight `OPTIONS` **400**; the POST never reached the server |
+| Plain form POST from the other port (CORS does not gate it) | **403** | **403**; no project created | **403**; no project created |
+| `document.cookie` on the backend's origin | `""` | `""` | `""` |
+| Controls: no credential / cookie without header / cookie with header | 401 / 403 / 200 | 401 / 403 / 201 | 401 / 403 / 201 |
 
 401 would have meant the cookie was never sent. **403 means it was sent** and
-the CSRF token refused it. Controls, so the discriminator is not assumed: no
-credential → 401; cookie without the CSRF header → 403; cookie with it → 200.
+the CSRF token refused it. The controls are what make that reading safe rather
+than assumed: they show, on the same run, that this server answers 401 for a
+missing credential and 403 for a missing token. (Phase 15's control used an
+endpoint answering 200; the later two created a project, hence 201.) Three
+runs, two spellings of loopback, two Starlette versions, one answer.
 
 So the CSRF token is not defence in depth. It is the only thing standing there.
 It is required on every state-changing request authenticated by cookie, stored
@@ -2247,24 +2255,16 @@ retire.
 **It does not, and this was re-measured rather than reasoned about.** Decision
 45 turns on `SameSite` being computed from scheme and registrable domain, with
 port excluded — so a page on *any other local port* is same-site and the cookie
-travels. Same-origin packaging changes nothing about a different port. Measured
-in Chrome against the packaged build, signed in on `127.0.0.1:7842`, with a page
-served from `127.0.0.1:8099`:
-
-| From the other port | Result |
-|---|---|
-| `fetch()` with `credentials: include` | preflight `OPTIONS` → **400**; blocked by CORS before it was sent |
-| plain form POST (no preflight; CORS does not gate it) | **403** |
-| `document.cookie` on the backend's own origin | `""` — httpOnly holds |
-
-**403, not 401** — the cookie *was* sent and the CSRF token is what refused it.
-No project was created. Controls on the same run: no credential → 401, cookie
-without the header → 403, cookie with it → 201. The token is not defence in
-depth here; it is still the only thing standing there.
+travels, and same-origin packaging changes nothing about a different port.
+Measured in Chrome against the packaged build: a plain form POST from another
+local port was still answered **403** — cookie sent, CSRF token refusing it.
+The full measurement, with its controls, is recorded alongside the original
+and the Phase 17 re-run in decision 45,
+so the property has one home.
 
 **CORS ships empty.** Same-origin means there is no cross-origin request to
-permit, so the correct list is the empty one — and the measurement above shows
-it doing real work, refusing the preflight outright. Development is the
+permit, so the correct list is the empty one — and the measurement in decision
+45 shows it doing real work, refusing the credentialed preflight outright. Development is the
 exception and is stated explicitly rather than left as a default production
 inherits: the Vite dev server needs `KURUKURU_CORS_ORIGINS` set, which
 `backend/.env.example` carries commented for exactly that.
@@ -3376,10 +3376,13 @@ applied.
 
 That second check exists because of something that happened while writing the
 tool. A run stopped mid-break left `console.py` dropping the RFB greeting's
-first byte — a `finally` does not run when the process is killed. The tool now
-backs a file up before editing it and restores any backup it finds when it
-starts, and the suite fails while any break's text is present in the source, so
-a tree left broken cannot pass on its way into a commit. The first version also
+first byte in the checkout — the first version edited the tree in place and
+restored it in a `finally`, which a killed process never reaches. It now
+applies every break to a fresh copy of the backend in a temporary directory and
+never edits the repository, so an interrupted run leaves nothing behind; before
+judging a break it checks that pytest in the copy imports the copy's
+`kurukuru` rather than the editable install, and refuses to report otherwise.
+The suite still fails if a break's text is ever present in the real source. The first version also
 hung: running a break's whole module under the shadowed Starlette 0.46.2 stalled
 on an unrelated WebSocket test. Breaks now run only the tests they name, under a
 timeout that reports a hang as *unproven* rather than waiting on it.
@@ -3391,6 +3394,33 @@ now requests the path the application registered. `test_dashboard`'s
 everything-under-the-prefix test had been catching the full set all along,
 which is why the gap never mattered — but a guard should catch what it claims
 to.
+
+**The test suite was writing into the real state directory, and is not any
+more.** Noticed by accident: `~/.kurukuru/keys` had a modification time from
+the middle of a test run, though both key files in it were untouched. A
+per-test watcher on the directory's mtime — which moves on any create, delete
+or rename inside it, where the isolation guard's content fingerprint sees
+nothing if a file comes and goes — pinned it on exactly two tests, the
+harness's own self-tests in `tests/test_isolation.py`. To prove the guard turns
+a leak red, they created `leaked-by-test.tmp` and `marked-opt-in.tmp` in the
+real `keys` directory from a subprocess and deleted them afterwards; on a
+machine with no install, their helper also created `~/.kurukuru` and
+`~/.kurukuru/keys` and removed them again. Both were marked `real_state` and
+said so in their docstrings. That was the problem: a test that asserts the
+real state directory is not used was reaching into the one directory this
+project has already lost once, and the marker made it look sanctioned.
+
+Fixed before 0.1.4 rather than after. The subprocess now runs with
+`USERPROFILE` and `HOME` pointing at a fake home under `tmp_path`;
+`tests/conftest.py` expands `~/.kurukuru` when imported, so the tree it treats
+as real in that process *is* the temporary one, and the guard code under test
+is unchanged. A new test asserts what the subprocess's conftest resolves —
+without it, a broken redirect would send the leak tests back into the real
+tree while they went on passing. All three were watched to fail: the leak test
+with the guard disabled, the redirect check with the fake home removed. The
+watcher, re-run across the module, reports no change to the real tree.
+Nothing uses `real_state` now, and CONTRIBUTING says no test writes, creates or
+deletes anything there; the guard only stats it.
 
 **Decision: the IPv6 Host gap is recorded and deliberately not fixed in
 0.1.4.** TrustedHostMiddleware splits the Host header on its *first* colon, so

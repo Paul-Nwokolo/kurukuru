@@ -101,13 +101,16 @@ suite fails while any break's text is still in the source.
 Judged by name, not by exit code. A break caught by an unrelated test while the
 defence test it was meant to prove stays green is reported as unproven.
 
-A break is restored in a `finally`, and that is not enough on its own: a
-`finally` does not run when the process is killed, and the first version, killed
-mid-run, left `console.py` broken. So each edit is backed up first and the next
-run restores any backup it finds. The one break that cannot be an edit — the
-vulnerable Starlette — is installed into a temporary directory on `PYTHONPATH`;
-the venv is never touched. Each break has a timeout, because a hang proves
-nothing either. See DECISIONS #65.
+Breaks are applied to a fresh copy of `backend/kurukuru` and `backend/tests`
+in a temporary directory, never to the repository. The first version edited the
+tree in place and restored it in a `finally`, which a killed process never
+reaches — interrupted, it left `console.py` broken in the checkout. Before
+judging a break the tool checks that pytest in the copy imports the copy's
+`kurukuru` rather than the editable install, and refuses to report anything if
+not. The one break that cannot be an edit — the vulnerable Starlette — is
+installed into the temporary directory on `PYTHONPATH`; the venv is never
+touched. Each break has a timeout, because a hang proves nothing either. See
+DECISIONS #65.
 
 ## `find_vacuous_tests.py` — which tests would a failure also satisfy?
 

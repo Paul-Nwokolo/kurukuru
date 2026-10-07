@@ -21,9 +21,13 @@ which is the shape this project distrusts. What makes it safe is
 must appear in some break's ``must_fail``, so a defence test added without a
 proven break turns the suite red rather than going unproven.
 
-**What a break may touch.** Source files only, restored byte-for-byte in a
-``finally``, even when pytest crashes. The one break that cannot be a source
-edit — the vulnerable Starlette itself — installs 0.46.2 into a temporary
+**What a break may touch.** A throwaway copy of ``backend/kurukuru`` and
+``backend/tests``, made fresh for each break in a temporary directory. The
+repository is never edited, so an interrupted run — killed, timed out, power
+cut — leaves nothing to restore. Before judging a break, the tool confirms that
+pytest in the copy imports the copy's ``kurukuru`` and not the editable install,
+and refuses to report anything if it does not. The one break that cannot be an
+edit — the vulnerable Starlette itself — installs 0.46.2 into the temporary
 directory and puts it first on ``PYTHONPATH`` for that run. The venv is never
 modified.
 
@@ -37,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -187,28 +192,70 @@ def _outcomes(junit: Path) -> dict[str, list[bool]]:
     return results
 
 
-#: Written beside a file before a break edits it, removed after the restore.
-#: A ``finally`` does not run when the process is killed outright — the first
-#: version of this tool, stopped mid-run, left ``console.py`` dropping the RFB
-#: greeting's first byte — so the backup is what makes a killed run recoverable.
-BACKUP_SUFFIX = ".prove-defences-orig"
+#: What a break's working copy needs: the package and its tests. Copied fresh for
+#: every break, so one break can never leak into the next.
+_COPIED = ("kurukuru", "tests", "pyproject.toml")
 
 
-def recover_interrupted_runs() -> list[Path]:
-    """Put back any file a previous, killed run left broken."""
-    restored = []
-    for backup in BACKEND.rglob(f"*{BACKUP_SUFFIX}"):
-        target = backup.with_name(backup.name[: -len(BACKUP_SUFFIX)])
-        target.write_bytes(backup.read_bytes())
-        backup.unlink()
-        restored.append(target)
-    return restored
+def _working_copy(root: Path) -> Path:
+    """A copy of the backend for one break to edit, under ``root``.
+
+    The first version edited the real tree and restored it in a ``finally``,
+    which a killed process never reaches: stopped mid-run, it left
+    ``console.py`` dropping the RFB greeting's first byte in the developer's
+    checkout. Editing a copy makes an interrupted run cost nothing but a temp
+    directory.
+    """
+    work = root / "backend"
+    work.mkdir()
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")
+    for name in _COPIED:
+        source = BACKEND / name
+        if source.is_dir():
+            shutil.copytree(source, work / name, ignore=ignore)
+        else:
+            shutil.copy2(source, work / name)
+    return work
 
 
-def _apply(brk: Break) -> tuple[Path, bytes] | None:
-    path = BACKEND / brk.file
-    original = path.read_bytes()
-    text = original.decode("utf-8")
+def _check_copy_is_what_runs(work: Path, env: dict[str, str]) -> None:
+    """Refuse to judge anything unless pytest in the copy imports the copy.
+
+    The backend is editable-installed, and an editable finder that won against
+    ``sys.path`` would run every break's tests against the *unbroken* real tree
+    while the copy sat edited — every break reported unproven, or worse, a
+    regression in the real tree blamed on a break. pytest puts the copy's root
+    first on ``sys.path`` and today that wins; this checks it on every run
+    rather than trusting that it always will.
+    """
+    probe = work / "tests" / "test_zz_prove_defences_probe.py"
+    probe.write_text(
+        "import kurukuru\n\ndef test_where():\n"
+        "    print('KURUKURU_FROM=' + kurukuru.__file__)\n",
+        encoding="utf-8",
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-s", "-p", "no:cacheprovider",
+             str(probe.relative_to(work))],
+            cwd=work, env=env, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=BREAK_TIMEOUT_SECONDS,
+        )
+    finally:
+        probe.unlink()
+    line = next((l for l in proc.stdout.splitlines() if "KURUKURU_FROM=" in l), "")
+    imported = Path(line.split("KURUKURU_FROM=", 1)[-1]) if line else None
+    if imported is None or not imported.is_relative_to(work):
+        raise SystemExit(
+            f"pytest in the working copy imported kurukuru from {imported}, not from "
+            f"{work}. Breaks applied to the copy would be judged against another "
+            f"tree; refusing to report anything."
+        )
+
+
+def _apply(brk: Break, work: Path) -> None:
+    path = work / brk.file
+    text = path.read_bytes().decode("utf-8")
     old, new = brk.old, brk.new
     if "\r\n" in text:
         old, new = old.replace(NL, "\r\n"), new.replace(NL, "\r\n")
@@ -218,13 +265,11 @@ def _apply(brk: Break) -> tuple[Path, bytes] | None:
             f"{brk.key}: anchor found {count} times in {brk.file}. The code it "
             f"breaks has moved; update the anchor rather than deleting the break."
         )
-    path.with_name(path.name + BACKUP_SUFFIX).write_bytes(original)
     path.write_bytes(text.replace(old, new).encode("utf-8"))
-    return path, original
 
 
 def run(brk: Break) -> list[str]:
-    """Apply one break, run its tests, restore. Returns problems; empty means proven."""
+    """Apply one break to a fresh copy, run its tests there. Empty means proven."""
     any_case = "--any-case" in brk.extra_args
     # The named tests only, not their whole modules: a break should be judged
     # on what it claims to break. Running a module's other tests under, say, a
@@ -232,34 +277,30 @@ def run(brk: Break) -> list[str]:
     # WebSocket test that break had nothing to do with.
     targets = list(brk.must_fail)
     env = dict(os.environ)
-    restore = None
     with tempfile.TemporaryDirectory() as tmp:
-        junit = Path(tmp) / "junit.xml"
+        root = Path(tmp)
+        junit = root / "junit.xml"
+        work = _working_copy(root)
         if brk.shadow_package:
-            shadow = Path(tmp) / "shadow"
+            shadow = root / "shadow"
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-q", "--no-deps",
                  "--target", str(shadow), brk.shadow_package],
                 check=True,
             )
             env["PYTHONPATH"] = os.pathsep.join([str(shadow), env.get("PYTHONPATH", "")])
+        _check_copy_is_what_runs(work, env)
+        if brk.file:
+            _apply(brk, work)
         try:
-            if brk.file:
-                restore = _apply(brk)
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                     f"--junitxml={junit}", *targets],
-                    cwd=BACKEND, env=env, capture_output=True, text=True,
-                    encoding="utf-8", errors="replace", timeout=BREAK_TIMEOUT_SECONDS,
-                )
-            except subprocess.TimeoutExpired:
-                return [f"timed out after {BREAK_TIMEOUT_SECONDS}s - a hang is not a failure"]
-        finally:
-            if restore is not None:
-                path, original = restore
-                path.write_bytes(original)
-                path.with_name(path.name + BACKUP_SUFFIX).unlink()
+            subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                 f"--junitxml={junit}", *targets],
+                cwd=work, env=env, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=BREAK_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            return [f"timed out after {BREAK_TIMEOUT_SECONDS}s - a hang is not a failure"]
         outcomes = _outcomes(junit) if junit.exists() else {}
 
     problems = []
@@ -279,10 +320,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only", nargs="*", default=[], help="break keys (substring match)")
     parser.add_argument("--list", action="store_true", help="list the breaks and exit")
     args = parser.parse_args(argv)
-
-    for target in recover_interrupted_runs():
-        print(f"RESTORED  {target.relative_to(REPO)} - a previous run was killed "
-              f"with a break applied", flush=True)
 
     selected = [b for b in BREAKS if not args.only or any(o in b.key for o in args.only)]
     if args.list:

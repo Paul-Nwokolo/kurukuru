@@ -22,10 +22,10 @@ asserted here:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import textwrap
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -205,12 +205,21 @@ def test_an_engine_built_against_the_real_url_cannot_connect(tmp_path):
 # --------------------------------------------------------------------------- #
 # The guard fails the run
 # --------------------------------------------------------------------------- #
-def _run_pytest(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
+def _run_pytest(
+    tmp_path: Path,
+    body: str,
+    *,
+    home: Path,
+    extra_args: list[str] | None = None,
+) -> subprocess.CompletedProcess:
     """Run one generated test under this suite's conftest, in a subprocess.
 
     A subprocess because the thing being tested is a fixture that fails the
     test it wraps — it cannot be exercised in-process without failing this one.
     """
+    # ``home`` is required, not optional: a generated test that forgot it would
+    # resolve the developer's real state tree. See _fake_home.
+    env = {**os.environ, "USERPROFILE": str(home), "HOME": str(home)}
     (tmp_path / "conftest.py").write_text(
         textwrap.dedent(
             f"""
@@ -240,89 +249,96 @@ def _run_pytest(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
             # somewhere this test never meant to point it.
             "--rootdir",
             str(tmp_path),
+            *(extra_args or []),
             str(tmp_path),
         ],
         capture_output=True,
         text=True,
         cwd=BACKEND,
+        env=env,
         timeout=300,
     )
 
 
-@contextmanager
-def _borrowed_keys_dir():
-    """Make ``REAL_STATE_DIR / "keys"`` exist, and leave the tree as found.
+def _fake_home(tmp_path: Path) -> Path:
+    """A home directory for the subprocess, with a state tree inside it.
 
-    Two tests below have to write into the real state tree to prove the guard
-    notices — and on a machine that has never run Kurukuru, neither that
-    directory *nor its parent* exists. ``mkdir(parents=True)`` quietly creates
-    both, and the cleanup here used to remove only the leaf.
+    The two tests below prove the guard by letting a generated test write into
+    "the real state directory" and watching the run go red. They used to do
+    that against the developer's actual ``~/.kurukuru/keys`` — creating a file
+    there, deleting it after, and on a machine with no install creating and
+    removing the directory itself. Harmless every time it worked, and the one
+    directory in this project that has already been lost once (see
+    ``docs/DECISIONS.md`` on the state directory). Phase 17 found it by
+    watching that directory's mtime move on every full run.
 
-    The parent left behind is not harmless, and it produced a failure that
-    looked like anything but this one: the state root is part of the
-    fingerprint :func:`conftest.no_real_state_writes` compares, so a run that
-    created it once drifted that fingerprint exactly once, and blamed whatever
-    unrelated test happened to straddle the change. Scattered teardown errors
-    in the CLI and event suites, reproducible only in a full run, and only on
-    a machine with no real install — a developer's own machine always had the
-    directory already, which is why this survived.
-
-    So every directory this creates is recorded and removed in reverse, and
-    only the ones that were not there to begin with.
+    So the subprocess is given its own home. ``tests/conftest.py`` computes
+    ``REAL_STATE_DIR`` as ``~/.kurukuru`` expanded *when it is imported*, and
+    ``expanduser`` reads ``USERPROFILE`` on Windows and ``HOME`` elsewhere — so
+    in a subprocess started with both pointing here, "the real state" the guard
+    watches *is* this tree. The guard code under test is unchanged; only what
+    it is aimed at moved.
     """
-    created: list[Path] = []
-    directory = REAL_STATE_DIR / "keys"
-    for candidate in (REAL_STATE_DIR, directory):
-        if not candidate.exists():
-            created.append(candidate)
-    directory.mkdir(parents=True, exist_ok=True)
-    try:
-        yield directory
-    finally:
-        for candidate in reversed(created):
-            try:
-                candidate.rmdir()
-            except OSError:
-                # Something else put a file in it, which is worth leaving
-                # alone and is not this fixture's business to resolve.
-                pass
+    home = tmp_path / "home"
+    (home / ".kurukuru" / "keys").mkdir(parents=True)
+    return home
 
 
-@pytest.mark.real_state
+def _fake_keys(home: Path) -> Path:
+    return home / ".kurukuru" / "keys"
+
+
+def test_the_fake_home_is_what_the_subprocess_calls_real(tmp_path):
+    """Guards the two tests below: if the redirect stopped working, they would
+    go back to writing into the developer's real state tree while still
+    passing. This asserts where the subprocess's conftest actually looks."""
+    home = _fake_home(tmp_path)
+    result = _run_pytest(
+        tmp_path,
+        """
+        from tests.conftest import REAL_STATE_DIR
+
+        def test_where():
+            print("REAL_STATE_DIR=" + str(REAL_STATE_DIR))
+        """,
+        home=home,
+        extra_args=["-s"],
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert f"REAL_STATE_DIR={home / '.kurukuru'}" in result.stdout
+    assert str(REAL_STATE_DIR) not in result.stdout
+
+
 def test_a_test_that_writes_to_the_real_state_fails_the_run(tmp_path):
     """The whole point, end to end.
 
     Without this, the guard is a claim. With it, the guard has been observed
-    turning a leak into a red test naming the file that caused it.
-
-    Marked ``real_state`` because this outer test has to guarantee
-    ``REAL_STATE_DIR / "keys"`` exists before the generated subprocess test
-    can write a stray file *into* it — it used to rely on that directory
-    already being there from ordinary use of a developer's own install, which
-    silently stopped being true the moment DECISIONS #59's leaks were fixed.
-    The generated subprocess test itself is not marked: it is what the guard
-    has to catch, running under its own, separate, non-exempt pytest process.
+    turning a leak into a red test naming the file that caused it — against a
+    state tree that is "real" to the subprocess and nobody's actual install.
+    The generated test is not marked: it is what the guard has to catch,
+    running under its own, separate, non-exempt pytest process.
     """
-    with _borrowed_keys_dir() as keys_dir:
-        result = _run_pytest(
-            tmp_path,
-            f"""
-            from pathlib import Path
+    home = _fake_home(tmp_path)
+    result = _run_pytest(
+        tmp_path,
+        """
+        from tests.conftest import REAL_STATE_DIR
 
-            def test_leaks():
-                stray = Path({str(REAL_STATE_DIR / "keys")!r}) / "leaked-by-test.tmp"
-                stray.write_text("this should fail the run")
-                # Deliberately not cleaned up: the guard is what must notice.
-            """,
-        )
+        def test_leaks():
+            stray = REAL_STATE_DIR / "keys" / "leaked-by-test.tmp"
+            stray.write_text("this should fail the run")
+            # Deliberately not cleaned up: the guard is what must notice.
+        """,
+        home=home,
+    )
 
-        stray = keys_dir / "leaked-by-test.tmp"
-        try:
-            assert result.returncode != 0, result.stdout
-            assert "wrote to the real install" in result.stdout
-            assert "test_leaks" in result.stdout
-        finally:
-            stray.unlink(missing_ok=True)
+    assert result.returncode != 0, result.stdout
+    assert "wrote to the real install" in result.stdout
+    assert "test_leaks" in result.stdout
+    # And it landed where the redirect said, which is the evidence that the
+    # developer's own tree was never the target.
+    assert (_fake_keys(home) / "leaked-by-test.tmp").exists()
 
 
 def test_an_ordinary_test_passes_under_the_same_harness(tmp_path):
@@ -333,34 +349,29 @@ def test_an_ordinary_test_passes_under_the_same_harness(tmp_path):
         def test_writes_nowhere_real(tmp_path):
             (tmp_path / "fine.txt").write_text("ok")
         """,
+        home=_fake_home(tmp_path),
     )
 
     assert result.returncode == 0, result.stdout
 
 
-@pytest.mark.real_state
 def test_the_real_state_marker_opts_out(tmp_path):
     """The escape hatch exists and works, so a future need is not a reason to
-    weaken the default for everyone.
+    weaken the default for everyone."""
+    home = _fake_home(tmp_path)
+    result = _run_pytest(
+        tmp_path,
+        """
+        import pytest
+        from tests.conftest import REAL_STATE_DIR
 
-    Marked ``real_state`` for the same reason as the test above: the
-    generated subprocess test's own opt-out only covers the guard, not the
-    filesystem, so this outer test has to guarantee the directory it writes
-    into actually exists first.
-    """
-    with _borrowed_keys_dir():
-        result = _run_pytest(
-            tmp_path,
-            f"""
-            import pytest
-            from pathlib import Path
+        @pytest.mark.real_state
+        def test_allowed_to_touch_it():
+            stray = REAL_STATE_DIR / "keys" / "marked-opt-in.tmp"
+            stray.write_text("permitted")
+            stray.unlink()
+        """,
+        home=home,
+    )
 
-            @pytest.mark.real_state
-            def test_allowed_to_touch_it():
-                stray = Path({str(REAL_STATE_DIR / "keys")!r}) / "marked-opt-in.tmp"
-                stray.write_text("permitted")
-                stray.unlink()
-            """,
-        )
-
-        assert result.returncode == 0, result.stdout
+    assert result.returncode == 0, result.stdout

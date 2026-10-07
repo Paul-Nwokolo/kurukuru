@@ -120,12 +120,23 @@ probably running while you run the tests, and its reconciler writes every 30
 seconds, so a timestamp check blamed whichever test straddled a reconcile pass.
 A guard that cries wolf gets deleted.
 
-If a test genuinely needs the real paths, mark it `@pytest.mark.real_state` and
-say why in the same commit. Two tests do, both in `tests/test_isolation.py`
-and both on purpose: they are the harness's own self-tests, which write a stray
-file into the real `keys` directory from a subprocess to prove the guard fires,
-and remove it. You will see the directory's timestamp move on every full run;
-that is them, and nothing else (measured per test in Phase 17).
+**No test writes, creates or deletes anything under the real state
+directory** — not to prove the guard, not briefly. The guard itself *stats*
+it (sizes, mtimes, directory listings), because that is how it detects;
+nothing opens a file there or changes it. The harness's own self-tests in
+`tests/test_isolation.py` used to: to show the guard turns a leak red, they
+wrote a stray file into the real `~/.kurukuru/keys` from a subprocess and
+deleted it afterwards, and created the directory itself on a machine without
+one. Harmless every time it worked, in the one directory this project has
+already lost once. Phase 17 found it by watching that directory's mtime per
+test, and moved them onto a fake home: the subprocess runs with `USERPROFILE`
+and `HOME` pointing into `tmp_path`, so the tree its conftest calls "real" is a
+temporary one, and a check asserts the redirect took.
+
+`@pytest.mark.real_state` still exists, and the guard honours it, because
+the escape hatch is what stops a future need from weakening the default for
+everyone. Nothing uses it. Anything that ever does should have to argue for
+it in review, in the same commit.
 
 `tests/test_isolation.py` tests the harness itself, including running a
 deliberately leaking test in a subprocess and asserting the run fails — a guard
@@ -306,7 +317,8 @@ fail, by name — and CI runs it. If you add a test to
 `backend/tests/test_browser_defences.py`, add the break that proves it in the
 same commit; `tools/test_prove_defences.py` fails the suite until you do. If
 you change middleware and a break's anchor no longer matches, update the
-anchor. Deleting the break deletes the proof.
+anchor. Deleting the break deletes the proof. The tool edits a throwaway copy
+of the backend, never your checkout, so stopping it partway costs nothing.
 
 ```bash
 python tools/prove_defences.py              # every break, ~2 minutes

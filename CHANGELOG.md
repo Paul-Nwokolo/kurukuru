@@ -42,6 +42,12 @@ Design decisions behind these changes are recorded in
 
 ### Fixed
 
+- **The test suite no longer writes into your real `~/.kurukuru`.** Two of
+  the harness's self-tests proved the isolation guard by creating and
+  deleting a file in the real `keys` directory (and, on a machine with no
+  install, the directory itself). They now run against a fake home under
+  the test's temporary directory, and a check asserts the redirect took.
+
 - **The route-coverage test checked the wrong route for anything registered
   outside `/api`.** It requested the prefixed copy, so FastAPI's own `/docs`
   and `/openapi.json` read as closed when re-enabled. It now requests the path
