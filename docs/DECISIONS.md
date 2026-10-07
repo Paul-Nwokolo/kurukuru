@@ -3466,6 +3466,23 @@ for. It is listed under known limitations, and
 `test_the_loopback_names_are_accepted_with_or_without_a_port` says in its
 docstring why no IPv6 case is there.
 
+**Live verification.** A passing suite was necessary and not sufficient, so all
+five checks the brief named were run against real things. Checks 1–4 used a
+scratch instance — the new code on its own port, its own state directory and a
+test owner whose generated password never appeared on a command line — so a
+password change could not lock anyone out of a real install.
+
+| Check | Result |
+|---|---|
+| 1. Browser console on a running VM | Ubuntu guest on `--display virtio` (the cloud image stays in VGA text mode, which renders black on standard graphics under WHPX). Live framebuffer — `con login:` — and typed input echoed and advanced the guest to `Password:`. WebSocket accepted on its single-use ticket, bridged to VNC 5901, closed cleanly; no browser console errors |
+| 2. Sign in, change password, invalidation | Signed in through the dashboard; the change bounced the tab to the login screen saying every session and token was invalidated. The CLI token then got "Not authenticated" (exit 8); old password 401, new 200 |
+| 3. Cross-port CSRF in a real browser | Re-measured from scratch, not re-read: identical to every earlier run in every row — see decision 45, which now holds all three measurements |
+| 4. `launch web --wait && ssh web whoami` | Exit 0 in 27 s, then exit 0 printing `kurukuru`. Run with `--memory 512`, the product's minimum, because the host had about 1 GB available |
+| 5. Install the built artefact, reach the dashboard | The CI-built installer over the machine's 0.1.2 (never 0.1.3 — no installer, log or file of it on the machine). Surfaced the leftover-file defect above; the rebuilt installer, run over that, left nothing behind but Inno's own uninstall log. Installed backend reports 0.1.4; index `no-store`, hashed assets `immutable`, deep link answered with the app, unknown `/api` path a JSON 404, ordinary `Range` 206, rebound Host 400 — and the hostile Range headers **400 in ~3 ms** through the real packaged server, which is the end-to-end proof the frozen build carries 0.49.3 (PyInstaller's archive hides the version on disk). Dashboard mounted at `/instances` in Chrome with no console errors |
+
+No schema migration ran on the real database — 0.1.2 to 0.1.4 changes none —
+and, per decision 41, no backup was taken, which is the correct behaviour.
+
 **Remaining advisories, and why they stay.** The five Starlette advisories fixed
 only in 1.x, and pytest's, each unreachable for the reason in the table. They
 are the 1.x upgrade's business if it is ever wanted for its own sake; nothing
