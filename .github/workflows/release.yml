@@ -226,6 +226,66 @@ jobs:
           # assertions should state its own verdict rather than inherit one.
           exit 0
 
+      - name: Upgrade over the previous release, and prove this build is what loads
+        # The path a real user takes is an upgrade, not a clean install, and
+        # until 0.1.4 that path was undefined: the installer copied over the
+        # top and removed nothing, so 0.1.2 -> 0.1.4 left FastAPI 0.115.12's
+        # metadata beside 0.120.4's. A security release whose fix depends on
+        # which copy of a dependency loads cannot claim its version without
+        # this (DECISIONS #66).
+        #
+        # Previous published release first, then the negative control: the
+        # check must *fail* against it, or it is a check that passes anything.
+        # Then this build over it, and the check must pass — every installed
+        # file byte-identical to this build's stage with nothing extra, and
+        # the installed exe reporting the pinned FastAPI and Starlette as the
+        # modules it actually imported.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          function Note([string] $text) { Write-Host "::notice title=upgrade::$text" }
+          function Fail([string] $text) { Write-Host "::error title=upgrade::$text"; exit 1 }
+
+          $setup = '${{ steps.artefact.outputs.path }}'
+          $dir   = 'C:\kk-upgrade'
+          $stage = 'C:\kk-build\stage'
+
+          $prev = gh release list --exclude-drafts --exclude-pre-releases --limit 20 `
+                    --json tagName --jq '.[].tagName' |
+                  Where-Object { $_ -ne '${{ github.ref_name }}' } | Select-Object -First 1
+          if (-not $prev) { Fail 'no previous published release to upgrade from' }
+          gh release download $prev --pattern 'Kurukuru-*-Setup.exe*' --dir C:\kk-prev --clobber
+          if ($LASTEXITCODE -ne 0) { Fail "could not download $prev" }
+          $old = Get-ChildItem 'C:\kk-prev\Kurukuru-*-Setup.exe' | Select-Object -First 1
+          $want = ((Get-Content "$($old.FullName).sha256") -split '\s+')[0].ToLower()
+          $got  = (Get-FileHash $old.FullName -Algorithm SHA256).Hash.ToLower()
+          if ($want -ne $got) { Fail "$prev's installer does not match its published checksum" }
+          Note "previous release $prev, checksum verified ($got)"
+
+          $p = Start-Process -FilePath $old.FullName -Wait -PassThru -ArgumentList `
+                 '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$dir",'/TASKS='
+          if ($p.ExitCode -ne 0) { Fail "$prev's installer exited $($p.ExitCode)" }
+
+          python tools/verify_upgrade.py --install-dir $dir --stage $stage --expect-fail
+          if ($LASTEXITCODE -ne 0) { Fail "the upgrade check PASSED against $prev - it cannot tell builds apart" }
+          Note "negative control: $prev fails the check, as it must"
+
+          $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList `
+                 '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$dir",'/TASKS=',"/LOG=C:\kk-upgrade.log"
+          if ($p.ExitCode -ne 0) { Fail "this build's installer exited $($p.ExitCode) over $prev" }
+
+          python tools/verify_upgrade.py --install-dir $dir --stage $stage
+          if ($LASTEXITCODE -ne 0) { Fail "after upgrading from $prev, the installed tree is not this build" }
+          Note "upgraded over ${prev}: installed tree is this build byte for byte, and loads the pinned framework"
+
+          $u = Start-Process -FilePath (Join-Path $dir 'unins000.exe') -Wait -PassThru `
+                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'
+          if ($u.ExitCode -ne 0) { Fail "the uninstaller exited $($u.ExitCode)" }
+          exit 0
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artefact.outputs.name }}

@@ -664,6 +664,10 @@ def freeze_backend(out: Path, work: Path) -> Path:
             # blank ProductName, blank ProductVersion. See
             # write_version_resource.
             "--version-file", str(write_version_resource(out)),
+            # The product icon. Absent until 0.1.4, so every earlier
+            # kurukuru.exe wore PyInstaller's default; verify_icon below is
+            # what stops that coming back.
+            "--icon", str(PRODUCT_ICON),
             # onedir, never onefile. Onefile unpacks itself to a temp directory
             # on every launch, which is behaviourally what a dropper does and is
             # the mode with the antivirus reputation — for a startup saving of
@@ -687,7 +691,112 @@ def freeze_backend(out: Path, work: Path) -> Path:
     frozen = out / "dist" / "kurukuru"
     if not frozen.is_dir():
         raise BuildError(f"PyInstaller produced nothing at {frozen}.")
+    verify_icon(frozen / "kurukuru.exe")
     return frozen
+
+
+# --------------------------------------------------------------------------- #
+# The icon a binary actually carries
+# --------------------------------------------------------------------------- #
+#: The product icon both shipped executables must carry.
+PRODUCT_ICON = REPO / "packaging" / "windows" / "kurukuru.ico"
+
+_RT_ICON, _RT_GROUP_ICON = 3, 14
+_LOAD_AS_DATAFILE = 0x00000002 | 0x00000020  # LOAD_LIBRARY_AS_DATAFILE | AS_IMAGE_RESOURCE
+
+
+def ico_frames(path: Path) -> set[str]:
+    """SHA-256 of every image in an ``.ico``.
+
+    An ``.ico`` stores each frame's bytes exactly as Windows embeds them as an
+    ``RT_ICON`` resource, so comparing hashes compares the icon itself rather
+    than a rendering of it. A rendered comparison was tried first and is
+    useless here: which frame Windows picks, and how it premultiplies alpha,
+    differ between sources even for the same icon.
+    """
+    import struct
+
+    data = path.read_bytes()
+    _, _, count = struct.unpack_from("<HHH", data, 0)
+    frames = set()
+    for i in range(count):
+        size, offset = struct.unpack_from("<II", data, 6 + 16 * i + 8)
+        frames.add(hashlib.sha256(data[offset:offset + size]).hexdigest())
+    return frames
+
+
+def pe_icon_frames(exe: Path) -> list[set[str]]:
+    """SHA-256 of every ``RT_ICON`` frame, one set per ``RT_GROUP_ICON``."""
+    import ctypes
+    import struct
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.LoadLibraryExW.restype = wintypes.HMODULE
+    k32.LoadLibraryExW.argtypes = [wintypes.LPCWSTR, wintypes.HANDLE, wintypes.DWORD]
+    k32.FindResourceW.restype = wintypes.HRSRC
+    k32.FindResourceW.argtypes = [wintypes.HMODULE, wintypes.LPVOID, wintypes.LPVOID]
+    k32.LoadResource.restype = wintypes.HGLOBAL
+    k32.LoadResource.argtypes = [wintypes.HMODULE, wintypes.HRSRC]
+    k32.LockResource.restype = ctypes.c_void_p
+    k32.LockResource.argtypes = [wintypes.HGLOBAL]
+    k32.SizeofResource.restype = wintypes.DWORD
+    k32.SizeofResource.argtypes = [wintypes.HMODULE, wintypes.HRSRC]
+    enum_proc = ctypes.WINFUNCTYPE(
+        wintypes.BOOL, wintypes.HMODULE, wintypes.LPVOID, wintypes.LPVOID, ctypes.c_void_p
+    )
+    k32.EnumResourceNamesW.argtypes = [wintypes.HMODULE, wintypes.LPVOID, enum_proc, ctypes.c_void_p]
+    k32.FreeLibrary.argtypes = [wintypes.HMODULE]
+
+    module = k32.LoadLibraryExW(str(exe), None, _LOAD_AS_DATAFILE)
+    if not module:
+        raise BuildError(f"Could not open {exe} to read its icon (error {ctypes.get_last_error()}).")
+
+    def resource(kind: int, name: int) -> bytes:
+        found = k32.FindResourceW(module, ctypes.c_void_p(name), ctypes.c_void_p(kind))
+        size = k32.SizeofResource(module, found)
+        return ctypes.string_at(k32.LockResource(k32.LoadResource(module, found)), size)
+
+    names: list[int] = []
+
+    @enum_proc
+    def collect(_module, _kind, name, _param):  # noqa: ANN001
+        names.append(name)
+        return True
+
+    try:
+        k32.EnumResourceNamesW(module, ctypes.c_void_p(_RT_GROUP_ICON), collect, None)
+        groups = []
+        for name in names:
+            group = resource(_RT_GROUP_ICON, name)
+            _, _, count = struct.unpack_from("<HHH", group, 0)
+            ids = [struct.unpack_from("<H", group, 6 + 14 * i + 12)[0] for i in range(count)]
+            groups.append({hashlib.sha256(resource(_RT_ICON, i)).hexdigest() for i in ids})
+        return groups
+    finally:
+        k32.FreeLibrary(module)
+
+
+def verify_icon(exe: Path, icon: Path = PRODUCT_ICON) -> None:
+    """Refuse a binary that does not carry ``icon``, frame for frame.
+
+    Exists because every release up to 0.1.4's first build shipped
+    ``kurukuru.exe`` wearing PyInstaller's default icon — matched byte for byte
+    against PyInstaller's ``icon-console.ico`` — since nothing ever passed
+    ``--icon``. The installer carried the right one, so nobody looked at the
+    binary that actually runs. On a product Windows already declines to trust,
+    the stock Python-packager icon is the one visual signal that says "nobody
+    finished this" (DECISIONS #66).
+    """
+    expected = ico_frames(icon)
+    groups = pe_icon_frames(exe)
+    if not any(group == expected for group in groups):
+        best = max((len(g & expected) for g in groups), default=0)
+        raise BuildError(
+            f"{exe.name} does not carry {icon.name}: {len(groups)} icon group(s), the "
+            f"closest sharing {best} of {len(expected)} frames. A build that dropped "
+            f"--icon ships PyInstaller's default."
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -914,6 +1023,7 @@ def build_installer(out: Path, qemu_version: str) -> Path:
         raise BuildError(
             f"ISCC reported success but {produced} is not there."
         )
+    verify_icon(produced)
     return produced
 
 

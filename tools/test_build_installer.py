@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -363,3 +364,85 @@ def test_install_delete_never_reaches_beyond_the_product_directories():
         name = re.search(r'Name:\s*"([^"]+)"', entry).group(1)
         assert name.startswith("{app}\\") and name.count("\\") == 1, entry
         assert name.split("\\", 1)[1] in {"_internal", "dashboard", "qemu"}, entry
+
+
+# --------------------------------------------------------------------------- #
+# The icon the binaries carry
+# --------------------------------------------------------------------------- #
+def _embed_icon(exe: Path, icon: Path) -> None:
+    """Embed ``icon`` into ``exe`` the way PyInstaller and Inno do: one RT_ICON
+    per frame, plus the RT_GROUP_ICON directory that indexes them."""
+    import ctypes
+    import struct
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.BeginUpdateResourceW.restype = wintypes.HANDLE
+    k32.BeginUpdateResourceW.argtypes = [wintypes.LPCWSTR, wintypes.BOOL]
+    k32.UpdateResourceW.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.LPVOID,
+                                    wintypes.WORD, ctypes.c_void_p, wintypes.DWORD]
+    k32.EndUpdateResourceW.argtypes = [wintypes.HANDLE, wintypes.BOOL]
+
+    data = icon.read_bytes()
+    _, _, count = struct.unpack_from("<HHH", data, 0)
+    handle = k32.BeginUpdateResourceW(str(exe), True)  # True: drop existing resources
+    assert handle, ctypes.get_last_error()
+    group = struct.pack("<HHH", 0, 1, count)
+    for i in range(count):
+        w, h, colours, reserved, planes, bpp, size, offset = struct.unpack_from(
+            "<BBBBHHII", data, 6 + 16 * i
+        )
+        frame = data[offset:offset + size]
+        buf = ctypes.create_string_buffer(frame, len(frame))
+        assert k32.UpdateResourceW(handle, ctypes.c_void_p(3), ctypes.c_void_p(i + 1), 0, buf, len(frame))
+        group += struct.pack("<BBBBHHIH", w, h, colours, reserved, planes, bpp, size, i + 1)
+    gbuf = ctypes.create_string_buffer(group, len(group))
+    assert k32.UpdateResourceW(handle, ctypes.c_void_p(14), ctypes.c_void_p(1), 0, gbuf, len(group))
+    assert k32.EndUpdateResourceW(handle, False), ctypes.get_last_error()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="reads PE resources through kernel32")
+def test_a_binary_carrying_the_product_icon_is_accepted(tmp_path: Path):
+    """A real PE with kurukuru.ico embedded, built the way the release builds
+    embed it — so the check is exercised against resources, not a mock."""
+    exe = tmp_path / "carries-icon.exe"
+    shutil.copy2(sys.executable, exe)
+    _embed_icon(exe, build_installer.PRODUCT_ICON)
+
+    build_installer.verify_icon(exe)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="reads PE resources through kernel32")
+def test_a_binary_with_some_other_icon_is_refused(tmp_path: Path):
+    """The deliberate break: python.exe carries Python's icon, which is exactly
+    the shape of a build that dropped --icon and shipped its packager's own.
+    (Also checked against the real thing: the 0.1.4 build made before --icon
+    was added is refused, 0 of 7 frames shared — DECISIONS #66.)"""
+    exe = tmp_path / "other-icon.exe"
+    shutil.copy2(sys.executable, exe)
+
+    with pytest.raises(build_installer.BuildError, match="does not carry kurukuru.ico"):
+        build_installer.verify_icon(exe)
+
+
+def test_the_frozen_backend_is_built_with_the_product_icon(tmp_path: Path, monkeypatch):
+    """--icon on the PyInstaller command line, pointing at the product icon,
+    and the frozen executable then checked — both, because either alone was
+    missing for every release before 0.1.4."""
+    commands: list[list[str]] = []
+    checked: list[Path] = []
+
+    def fake_run(command, *, cwd):  # noqa: ANN001
+        commands.append(command)
+        (tmp_path / "stage" / "dist" / "kurukuru").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(build_installer, "run", fake_run)
+    monkeypatch.setattr(build_installer, "verify_icon", lambda exe, icon=None: checked.append(exe))
+    monkeypatch.setattr(build_installer, "write_version_resource", lambda out: out / "v.txt")
+    (tmp_path / "stage").mkdir()
+
+    frozen = build_installer.freeze_backend(tmp_path / "stage", tmp_path / "work")
+
+    pyinstaller = commands[0]
+    assert pyinstaller[pyinstaller.index("--icon") + 1] == str(build_installer.PRODUCT_ICON)
+    assert checked == [frozen / "kurukuru.exe"]

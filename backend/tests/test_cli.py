@@ -295,9 +295,28 @@ def test_console_prints_a_dashboard_deep_link(cli):
 def test_version_reports_all_three(cli):
     result = cli("version", "--json")
     payload = json.loads(result.stdout)
-    assert set(payload) == {"cli", "api", "qemu"}
+    assert set(payload) == {"cli", "api", "qemu", "framework"}
     assert payload["cli"]
     assert payload["api"]
+
+
+def test_version_reports_the_framework_that_is_loaded_and_pinned(cli):
+    """What the release workflow's upgrade check reads from the installed exe.
+
+    Compared against the pins in pyproject.toml, so a drift between what is
+    pinned and what imports is caught here as well as in the installed build.
+    """
+    import re
+    from pathlib import Path
+
+    pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    pinned = dict(re.findall(r'"(fastapi|starlette)==([^"]+)"', pyproject))
+
+    payload = json.loads(cli("version", "--json").stdout)
+
+    assert payload["framework"] == pinned
 
 
 def test_completion_prints_a_script_for_a_known_shell(cli):

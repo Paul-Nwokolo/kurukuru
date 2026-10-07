@@ -542,14 +542,19 @@ def version(
     ctx: typer.Context,
     json_out: Annotated[bool, typer.Option("--json", help="Emit JSON only.")] = False,
 ) -> None:
-    """Print the CLI, API and QEMU versions.
+    """Print the CLI, API, QEMU and web-framework versions.
 
     The one command that does not fail when the API is unreachable: "what
     version is this?" is a question people ask precisely when things are broken,
     and the API's absence is reported as a null rather than an exit code.
     """
     out = Output(json_mode=json_out)
-    payload: dict[str, object] = {"cli": cli_version(), "api": None, "qemu": None}
+    payload: dict[str, object] = {
+        "cli": cli_version(),
+        "api": None,
+        "qemu": None,
+        "framework": loaded_framework_versions(),
+    }
 
     try:
         data = client_of(ctx).diagnostics()
@@ -564,6 +569,29 @@ def version(
     out.human(f"{CLI_NAME}  {payload['cli']}")
     out.human(f"api   {payload['api'] or 'unreachable'}")
     out.human(f"qemu  {payload['qemu'] or 'unknown'}")
+    framework = payload["framework"]
+    out.human(f"web   fastapi {framework['fastapi']}, starlette {framework['starlette']}")
+
+
+def loaded_framework_versions() -> dict[str, str]:
+    """The FastAPI and Starlette this process actually imported.
+
+    Read from the imported modules' ``__version__``, deliberately not from
+    package metadata. Metadata answers "which ``.dist-info`` did the finder
+    pick", and an upgrade that left the previous version's ``dist-info`` beside
+    the new one — which every installer before 0.1.4 did — can answer that
+    either way. The module attribute is the code that is running. The release
+    workflow's upgrade check reads this from the *installed* executable, so a
+    security release's version claim is checked against what loads, not what
+    was meant to (DECISIONS #66).
+
+    The CLI and the server are the same frozen executable over the same
+    ``_internal``, so what the CLI imports is what ``serve`` imports.
+    """
+    import fastapi
+    import starlette
+
+    return {"fastapi": fastapi.__version__, "starlette": starlette.__version__}
 
 
 # --------------------------------------------------------------------------- #

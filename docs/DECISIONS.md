@@ -3422,32 +3422,11 @@ watcher, re-run across the module, reports no change to the real tree.
 Nothing uses `real_state` now, and CONTRIBUTING says no test writes, creates or
 deletes anything there; the guard only stats it.
 
-**Every upgrade was carrying the last version forward.** Live check 5 installed
-the CI-built 0.1.4 over the 0.1.2 on the development machine, and
-`fastapi-0.115.12.dist-info` was sitting in `_internal` beside
-`fastapi-0.120.4.dist-info`. Diffing the files on disk against the installer's
-own log — every file it wrote is listed there, which makes the measurement
-exact rather than a guess from timestamps (Inno keeps the build machine's) —
-gave 51 files 0.1.4 never wrote: old dist-info for six packages, five
-superseded dashboard bundles, four QEMU DLLs this build no longer ships, and
-`fastapi\_compat.py`, the module FastAPI 0.119 turned into a `_compat\`
-package.
-
-The application was almost certainly unaffected: `--collect-all fastapi` ships
-the source beside the compiled archive, and PyInstaller's archive importer
-runs before the filesystem, so the new package wins. But a security release
-whose subject is a framework upgrade should not leave the old framework's
-metadata in place for anything that asks the install what it carries, and the
-mechanism — `[Files]` copies over the top and removes nothing — would have done
-the same on every future upgrade. `[InstallDelete]` now clears `_internal`,
-`dashboard` and `qemu` before copying: the three directories the product owns
-outright and rebuilds in full each release. Nothing a user creates lives under
-the install directory, and `PrepareToInstall`, which Inno runs first, has
-already stopped Kurukuru and refused to continue if its files are locked. Two
-tests guard it from both sides: every directory `[Files]` fills recursively
-must be cleared (derived from `[Files]`, not listed), and nothing outside those
-three may be — a wipe of the install directory itself fails. Both watched to
-fail.
+**Live check 5 found the most important thing in this phase, and it was not in
+the dependency set.** The installer had never removed a previous version's
+files, so an upgrade's dependency versions were undefined. It is recorded as
+decision 66 in its own right, because it decides whether *any* release's
+version claim means anything, not just this one's.
 
 **Decision: the IPv6 Host gap is recorded and deliberately not fixed in
 0.1.4.** TrustedHostMiddleware splits the Host header on its *first* colon, so
@@ -3477,7 +3456,7 @@ password change could not lock anyone out of a real install.
 | 1. Browser console on a running VM | Ubuntu guest on `--display virtio` (the cloud image stays in VGA text mode, which renders black on standard graphics under WHPX). Live framebuffer — `con login:` — and typed input echoed and advanced the guest to `Password:`. WebSocket accepted on its single-use ticket, bridged to VNC 5901, closed cleanly; no browser console errors |
 | 2. Sign in, change password, invalidation | Signed in through the dashboard; the change bounced the tab to the login screen saying every session and token was invalidated. The CLI token then got "Not authenticated" (exit 8); old password 401, new 200 |
 | 3. Cross-port CSRF in a real browser | Re-measured from scratch, not re-read: identical to every earlier run in every row — see decision 45, which now holds all three measurements |
-| 4. `launch web --wait && ssh web whoami` | Exit 0 in 27 s, then exit 0 printing `kurukuru`. Run with `--memory 512`, the product's minimum, because the host had about 1 GB available |
+| 4. `launch web --wait && ssh web whoami` | Exit 0 in 27 s, then exit 0 printing `kurukuru` — **with a caveat**: run with `--memory 512`, the product's minimum, because the host had about 1 GB available. A real pass of the end-to-end path, but not the default-flavour path a user takes (`small`, 1 GB). Owed: a re-run at the default flavour once the machine has room. Not a release blocker; recorded so this row does not read stronger than it is |
 | 5. Install the built artefact, reach the dashboard | The CI-built installer over the machine's 0.1.2 (never 0.1.3 — no installer, log or file of it on the machine). Surfaced the leftover-file defect above; the rebuilt installer, run over that, left nothing behind but Inno's own uninstall log. Installed backend reports 0.1.4; index `no-store`, hashed assets `immutable`, deep link answered with the app, unknown `/api` path a JSON 404, ordinary `Range` 206, rebound Host 400 — and the hostile Range headers **400 in ~3 ms** through the real packaged server, which is the end-to-end proof the frozen build carries 0.49.3 (PyInstaller's archive hides the version on disk). Dashboard mounted at `/instances` in Chrome with no console errors |
 
 No schema migration ran on the real database — 0.1.2 to 0.1.4 changes none —
@@ -3487,6 +3466,113 @@ and, per decision 41, no backup was taken, which is the correct behaviour.
 only in 1.x, and pytest's, each unreachable for the reason in the table. They
 are the 1.x upgrade's business if it is ever wanted for its own sake; nothing
 in this application needs it today.
+
+## 66. An upgrade must replace the previous version, or a version claim means nothing
+
+**Context.** Phase 17's live check 5 installed the CI-built 0.1.4 over the
+development machine's 0.1.2 and found `fastapi-0.115.12.dist-info` in
+`_internal` beside `fastapi-0.120.4.dist-info`. Diffing the files on disk
+against the installer's own log — Inno lists every file it writes, which makes
+the measurement exact, where timestamps are not (Inno keeps the build machine's)
+— gave 51 files 0.1.4 never wrote: old `.dist-info` for six packages, five
+superseded dashboard bundles, four QEMU DLLs the new build no longer ships, and
+`fastapi\_compat.py`, the module FastAPI 0.119 replaced with a `_compat\`
+package.
+
+**The mechanism.** Inno's `[Files]` copies over the top and never removes a
+file the new version stopped shipping. So an upgrade install layered the new
+build over the old one, without clearing `_internal`, and **which version of a
+dependency actually loaded was undefined** — decided by whatever order the
+frozen importer and the filesystem happened to resolve names in, not by
+anything the build specified. Every upgrade 0.1.1, 0.1.2 and 0.1.3 performed
+shipped this way. Nothing failed, which is why nobody saw it.
+
+**Why it is the most important finding of Phase 17**, ahead of the pins and the
+defence tests. 0.1.4 is a security release whose entire content is "a different
+Starlette now runs". On the upgraded machine the hostile `Range` header did get
+a 400 in ~3 ms, so the fix took effect — but it took effect because PyInstaller's
+archive importer runs before the filesystem and the new package won, not
+because anything guaranteed it. One dependency-layout change — a package that
+moves from the archive to loose files, a module renamed into a package or back
+— and an upgraded install could have kept loading the vulnerable code while
+reporting the new version. **Clearing the previous version is what makes a
+security release's version claim meaningful at all.**
+
+**Decision.** Three parts, each necessary:
+
+1. **`[InstallDelete]` clears `{app}\_internal`, `\dashboard` and `\qemu`**
+   before copying — the three directories the product owns outright and
+   rebuilds in full every release. Nothing a user creates lives under the
+   install directory (state is in `~/.kurukuru`), and `PrepareToInstall`, which
+   Inno runs first, has already stopped Kurukuru and refused to continue if its
+   files are locked. Two tests guard the script from both sides: every
+   directory `[Files]` fills recursively must be cleared (derived from
+   `[Files]`, not listed), and nothing outside those three may be — a wipe of
+   the install directory itself fails. Both watched to fail. Re-installing over
+   the leftover-laden 0.1.4 left nothing behind but Inno's own uninstall log.
+
+2. **The installed executable reports what it loaded.** `kurukuru version`
+   carries `framework`: FastAPI and Starlette read from the imported modules'
+   `__version__`, deliberately not from package metadata — the stale
+   `dist-info` above is exactly what makes metadata answer "whichever the
+   finder picked". The CLI and the server are the same frozen executable over
+   the same `_internal`, so what one imports, the other does.
+
+3. **CI proves the upgrade path on every release build**, because a file count
+   would not: one stale file plus one missing file keeps the count right and
+   the install wrong, and a future layout change could pass a count while
+   reintroducing the ambiguity. `tools/verify_upgrade.py` asserts that every
+   file the installer script places is present and **byte-identical to the
+   build's stage**, that nothing else is there bar `unins000.*`, and that the
+   installed executable reports the **pinned** FastAPI and Starlette. The
+   release workflow installs the previous published release (checksum
+   verified), runs the check as a **negative control** — it must fail, or it is
+   a check that passes anything — then installs this build over it and
+   requires the check to pass. The expected tree is read from `kurukuru.iss`
+   itself, so it cannot drift from what the installer installs. Unit-tested
+   against the 0.1.2 → 0.1.4 shape exactly: stale metadata, the replaced
+   module, same-name-old-bytes, and a stale-plus-missing pair that a count
+   would miss.
+
+**Consequence for users, said in the 0.1.4 release notes rather than left to
+be inferred:** upgrading is what applies the fix, and the 0.1.4 installer is
+the first that replaces the previous version rather than layering over it.
+
+## 67. `kurukuru.exe` carries the product icon, because trust is the bottleneck
+
+**Context.** Cutting 0.1.4, the icon check — RT_ICON frames compared byte for
+byte against `packaging/windows/kurukuru.ico` — passed the setup `.exe` and
+failed `kurukuru.exe`. It matched PyInstaller's `icon-console.ico` instead,
+frame for frame: nothing had ever passed `--icon`, so every release had shipped
+the stock packager icon on the binary that actually runs. The installer, the
+shortcuts and Add/Remove Programs all showed the right one, which is why nobody
+looked.
+
+**Decision: fix it before publishing, and hold the security release to do so.**
+Not for cosmetics. PyInstaller's default icon is the exact visual signature of
+an untrustworthy Python build, and it was sitting on binaries Windows already
+declines to trust — 135 of 185 PE files unsigned, Smart App Control blocking
+outright rather than warning (decision 62). This project's real bottleneck is
+that nobody trusts it enough to run it (decision 64: the signing application
+was declined for lack of an audience), and a free trust signal is not something
+it can afford to throw away. Against that, the advisory being fixed is a
+loopback-bound slow parse on an asset route: an attacker must already be able
+to reach the port, so holding the release half an hour cost nothing. The
+`v0.1.4` tag was moved to the fixed commit before publication; nobody but the
+release check had downloaded the draft's asset.
+
+**How it is kept fixed.** `--icon` is on the PyInstaller command, and
+`build_installer.verify_icon` checks the frozen `kurukuru.exe` and the compiled
+setup `.exe` the same way — every RT_ICON frame of some icon group equal to the
+`.ico`'s frames — failing the build otherwise. A rendered comparison was tried
+first and discarded: which frame Windows picks and how it premultiplies alpha
+differ between sources even for the same icon. Proven against the real
+deliberate break (the 0.1.4 build made without `--icon` is refused, 0 of 7
+frames shared) and in the tools suite against real PE files built the way
+PyInstaller and Inno build them — `python.exe` with the icon embedded through
+`UpdateResource` is accepted, `python.exe` as it is (Python's own icon) is
+refused — plus a test that `--icon` is on the command and the frozen exe is
+checked. Each watched to fail.
 
 ## Known limitations
 

@@ -33,6 +33,11 @@ Design decisions behind these changes are recorded in
 
 ### Added
 
+- **`kurukuru version` reports the web framework that is actually loaded** —
+  FastAPI and Starlette, read from the running code rather than from package
+  metadata — so "which Starlette is this?" has an answer you can check on any
+  install.
+
 - **Tests that the browser defences refuse things.** With TrustedHost removed,
   CORS opened to every origin, or the security headers gone, the previous suite
   still passed in full, because every test reached the app as a legitimate
@@ -42,13 +47,27 @@ Design decisions behind these changes are recorded in
 
 ### Fixed
 
-- **Upgrading no longer carries the previous version's files forward.** The
-  installer copied over the top and never removed anything the new version had
-  stopped shipping: installing this release over 0.1.2 left 51 of 0.1.2's
-  files behind, among them FastAPI 0.115.12's package metadata beside 0.120.4's
-  and a module FastAPI has since replaced. It now clears the three directories
-  it owns outright (`_internal`, `dashboard`, `qemu`) before copying. Your data
-  is in `~/.kurukuru` and is not touched.
+- **Upgrading now replaces the previous version instead of layering over it —
+  and upgrading is what applies the security fix.** Every installer before this
+  one copied over the top and removed nothing, so an upgrade left the previous
+  version's files in place beside the new ones and which version of a
+  dependency actually loaded was not defined by anything. Installing 0.1.4 over
+  0.1.2 left 51 of 0.1.2's files behind, among them FastAPI 0.115.12's package
+  metadata beside 0.120.4's. The fix above did take effect on that upgrade, but
+  because of how the frozen application happens to resolve its files, not
+  because anything guaranteed it. The installer now clears the folders it owns
+  (`_internal`, `dashboard`, `qemu`) before copying; your data is in
+  `~/.kurukuru` and is not touched. Every release build now upgrades over the
+  previous published release in CI and checks that the installed files are this
+  build's, byte for byte, and that it loads the pinned framework. See
+  [DECISIONS.md](docs/DECISIONS.md) #66.
+
+- **`kurukuru.exe` now carries Kurukuru's icon.** Every earlier release shipped
+  it with PyInstaller's default icon — the installer, shortcuts and Add/Remove
+  Programs had the right one, so the binary that actually runs went unchecked.
+  The build now refuses a binary whose embedded icon frames are not
+  `packaging/windows/kurukuru.ico`'s. DECISIONS #67 says why this held a
+  security release.
 
 - **The test suite no longer writes into your real `~/.kurukuru`.** Two of
   the harness's self-tests proved the isolation guard by creating and
