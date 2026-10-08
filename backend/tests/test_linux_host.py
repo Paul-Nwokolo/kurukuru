@@ -148,7 +148,8 @@ def test_on_a_real_posix_host_describe_answers_without_raising():
     answers are — CI has no /dev/kvm, a laptop does — only that every probe
     copes with what it finds."""
     host = linux_host.describe().as_dict()
-    assert set(host) == {"distro", "qemu_install", "kvm", "linger", "systemd_user"}
+    assert set(host) == {"distro", "qemu_install", "kvm", "linger", "systemd_user", "wsl"}
+    assert isinstance(host["wsl"], bool)
     assert host["kvm"]["state"] in {"ok", "absent", "not-in-group", "relogin-needed", "denied"}
 
 
