@@ -82,14 +82,27 @@ def test_the_cli_and_the_backend_resolve_the_same_tree():
     On Linux that would have put the CLI's token in ~/.kurukuru and the
     backend's in ~/.local/share/kurukuru — two installs, one each."""
     from kurukuru.cli import auth_store
-    from kurukuru.cli.naming import CONFIG_PATH
+    from kurukuru.cli.naming import config_path
     from kurukuru.config import CONFIG_FILE, DEFAULT_STATE_DIR
     from kurukuru.product import default_config_dir
 
     assert auth_store.DEFAULT_STATE_DIR == DEFAULT_STATE_DIR
-    # Compared as the policy's answers, not as two expansions of "~" made at
-    # different moments: CONFIG_FILE was expanded at import, before the home
-    # directory was sandboxed, and CONFIG_PATH is expanded only when used.
-    assert CONFIG_PATH == f"{default_config_dir()}/cli.toml"
+    # Compared as the policy's answers, at call time: the CLI's config path is
+    # resolved when the file is opened (naming.config_path), so it follows the
+    # sandboxed home; CONFIG_FILE was expanded at import, before the sandbox.
+    assert config_path() == f"{default_config_dir()}/cli.toml"
     assert CONFIG_FILE.name == "kurukuru.env"
     assert CONFIG_FILE.parent.name == Path(default_config_dir()).name
+
+
+def test_the_cli_reads_its_config_from_where_the_policy_says_now(monkeypatch, tmp_path):
+    """The Linux CI finding: with XDG_CONFIG_HOME set when the module was
+    imported, an import-time copy of cli.toml's path pointed at the real
+    ~/.config. The loader must ask the policy at the moment it opens the file."""
+    from kurukuru.cli import config as cli_config
+    from kurukuru.product import default_config_dir
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "elsewhere"))
+    expected = Path(f"{default_config_dir()}/cli.toml").expanduser()
+
+    assert cli_config.config_file_path() == expected

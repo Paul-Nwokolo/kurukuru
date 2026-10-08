@@ -43,6 +43,7 @@ __all__ = [
     "STARTUP_TASK_NAME",
     "apply_legacy_env",
     "CONFIG_PATH",
+    "config_path",
     "DEFAULT_API_URL",
     "DEFAULT_DASHBOARD_URL",
     "DISTRIBUTION_NAME",
@@ -56,6 +57,19 @@ __all__ = [
 #: ``kurukuru.env`` — in the state directory, or on a Linux install using XDG in
 #: ``$XDG_CONFIG_HOME/kurukuru`` (DECISIONS #69) — so there is one place to look.
 CONFIG_PATH = f"{default_config_dir()}/cli.toml"
+
+
+def config_path() -> str:
+    """``cli.toml``'s location, asked of the policy *now*.
+
+    ``CONFIG_PATH`` above is the same answer captured at import, kept only for
+    help text. Anything that opens the file calls this instead: on Linux the
+    answer depends on ``XDG_CONFIG_HOME``, and an import-time copy is the
+    CONTRIBUTING rule-5 trap — found by the Phase 18 Linux CI job, where the
+    runner sets ``XDG_CONFIG_HOME`` and the captured path pointed at the real
+    ``~/.config`` while every test ran in a sandboxed home.
+    """
+    return f"{default_config_dir()}/cli.toml"
 
 #: Last resort when nothing else says where the API is. An *origin*: the
 #: API's mount point is appended by ``ApiClient``, in one place.

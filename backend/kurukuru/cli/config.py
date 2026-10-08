@@ -27,6 +27,7 @@ from pathlib import Path
 from kurukuru.cli.errors import CliError, ExitCode
 from kurukuru.cli.naming import (
     CONFIG_PATH,
+    config_path,
     DEFAULT_API_URL,
     DEFAULT_DASHBOARD_URL,
     env_var,
@@ -54,7 +55,8 @@ class CliConfig:
 
 
 def config_file_path() -> Path:
-    return Path(CONFIG_PATH).expanduser()
+    # Resolved when the file is opened, not at import — see naming.config_path.
+    return Path(config_path()).expanduser()
 
 
 def _load_file() -> dict[str, object]:
