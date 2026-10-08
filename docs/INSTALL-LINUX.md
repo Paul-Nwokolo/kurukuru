@@ -43,8 +43,10 @@ runs on.
 **No wheel is published yet, and Kurukuru is not on PyPI.** Do not run
 `pipx install kurukuru`: the name is unregistered there, so today that command
 fails — and if anyone ever registers it, it would install their package, not
-this one. Build a wheel from a checkout instead (needs Node.js for the
-dashboard) and install it by path:
+this one. The first upload is planned with 0.1.5, and this warning stays
+until the release check that `pipx install kurukuru` installs *this* package
+has passed ([RELEASING.md](RELEASING.md#pypi)). Until then, build a wheel
+from a checkout (needs Node.js for the dashboard) and install it by path:
 
 ```bash
 git clone https://github.com/Paul-Nwokolo/kurukuru.git && cd kurukuru

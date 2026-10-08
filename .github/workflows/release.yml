@@ -347,3 +347,108 @@ jobs:
         working-directory: artefact/dist
         run: |
           gh release upload "${{ github.ref_name }}" ./*-Setup.exe ./*-Setup.exe.sha256 --clobber
+
+  pypi:
+    # The first PyPI publish is planned for 0.1.5, by trusted publishing: no
+    # token is stored anywhere, PyPI trusts this workflow's OIDC identity.
+    #
+    # GATED, and off until the maintainer turns it on. It runs only for a
+    # pushed v* tag *and* when the repository variable PYPI_PUBLISHING is
+    # "enabled" — which is set only after the PyPI account and the pending
+    # publisher exist (docs/RELEASING.md, "PyPI"). Until then it is skipped.
+    # tools/test_release_publishing.py fails if this gate is ever removed.
+    #
+    # Needs the Windows build and the checksum check to have passed first, so
+    # a release that is broken elsewhere never reaches PyPI. Publishing there
+    # cannot be undone — a version number, once uploaded, is spent forever.
+    name: publish to PyPI (gated)
+    needs: [installer, checksum]
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push' && vars.PYPI_PUBLISHING == 'enabled'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kurukuru/
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      sha256: ${{ steps.wheel.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build the wheel, dashboard inside, contents checked
+        run: |
+          (cd frontend && npm ci)
+          python -m pip install --upgrade pip setuptools
+          python tools/build_wheel.py --out dist
+
+      - name: The wheel is exactly this tag's version, and nothing else is uploaded
+        id: wheel
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          wheel="dist/kurukuru-${version}-py3-none-any.whl"
+          test -f "$wheel" || { echo "::error title=pypi::no $wheel for tag $GITHUB_REF_NAME"; exit 1; }
+          test "$(ls dist | wc -l)" -eq 1 || { echo "::error title=pypi::dist/ holds more than the one wheel"; ls dist; exit 1; }
+          echo "sha256=$(sha256sum "$wheel" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish (trusted publishing; no stored token)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  pypi-verify:
+    # The release checklist's PyPI step, automated: what `pipx install
+    # kurukuru` gives a stranger must be *our* package — the name, this
+    # version, our repository — and its bytes must be the wheel just built.
+    # Same standard as the anonymous download-and-hash of the installer.
+    # INSTALL-LINUX may recommend `pipx install kurukuru` only after this has
+    # passed for a release (docs/RELEASING.md).
+    name: pipx install from PyPI is ours
+    needs: pypi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install from PyPI into a clean pipx home, and check it
+        env:
+          BUILT_SHA256: ${{ needs.pypi.outputs.sha256 }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          export PIPX_HOME="$RUNNER_TEMP/pipx-home" PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
+          # The index can lag the upload by a minute or two.
+          for i in $(seq 1 30); do
+            pip download --no-deps --no-cache-dir -q -d "$RUNNER_TEMP/dl" "kurukuru==$version" 2>/dev/null && break
+            sleep 10
+          done
+          served="$(sha256sum "$RUNNER_TEMP/dl/kurukuru-${version}-py3-none-any.whl" | cut -d' ' -f1)"
+          echo "built:  $BUILT_SHA256"
+          echo "served: $served"
+          test "$served" = "$BUILT_SHA256" || { echo "::error title=pypi::PyPI serves different bytes from the wheel this run built"; exit 1; }
+
+          pipx install "kurukuru==$version"
+          "$PIPX_HOME/venvs/kurukuru/bin/python" - "$version" <<'EOF'
+          import importlib.metadata as md, sys
+          meta = md.metadata("kurukuru")
+          urls = meta.get_all("Project-URL") or []
+          print("Name:", meta["Name"], "| Version:", meta["Version"])
+          print("Project-URL:", urls)
+          assert meta["Name"] == "kurukuru", meta["Name"]
+          assert meta["Version"] == sys.argv[1], (meta["Version"], sys.argv[1])
+          assert any(u.endswith("https://github.com/Paul-Nwokolo/kurukuru") for u in urls), urls
+          EOF
+          "$PIPX_BIN_DIR/kurukuru" version | grep -F "kurukuru  $version"
+          echo "::notice title=pypi::pipx install kurukuru==$version is ours: name, version, repository and bytes all match"

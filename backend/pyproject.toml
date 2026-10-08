@@ -47,6 +47,15 @@ dependencies = [
     "rich>=13.0",
 ]
 
+# Read by the release workflow's PyPI verification: after the first upload it
+# checks that `pipx install kurukuru` installed a package pointing *here*, not a
+# same-named stranger's (DECISIONS #74, docs/RELEASING.md).
+[project.urls]
+Homepage = "https://github.com/Paul-Nwokolo/kurukuru"
+Repository = "https://github.com/Paul-Nwokolo/kurukuru"
+Issues = "https://github.com/Paul-Nwokolo/kurukuru/issues"
+Changelog = "https://github.com/Paul-Nwokolo/kurukuru/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 dev = ["pytest==8.3.5"]
 # What `tools/build_installer.py` needs and the application does not. Pinned

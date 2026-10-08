@@ -3828,6 +3828,54 @@ removed it, moving the directory's mtime (2026-10-08 08:31:17). The keys
 themselves were untouched and nothing was left behind. It is recorded because
 it is the clearest demonstration of why parts 3 and 4 were needed: the
 sandboxed home, on its own, did not stop it.
+
+## 74. PyPI: no placeholder, first upload with 0.1.5, by trusted publishing
+
+**Context.** `kurukuru` is unregistered on PyPI, and so are `kuru-kuru` and
+`local-iaas` (all 404 on 2026-10-08). INSTALL-LINUX builds the wheel from a
+checkout and warns against `pipx install kurukuru`, because a stranger could
+claim the name and that command would then install their package (decision 71).
+
+**Decision.**
+
+- **No placeholder upload, and no defensive registration of the other names.**
+  An empty project is reclaimable under PEP 541 as an unused name, so it
+  protects less than it appears to, and it would be the project's first public
+  PyPI presence: a page with nothing on it.
+- **The first upload is 0.1.5's real wheel**, from the release workflow, by
+  **trusted publishing**: a pending publisher on PyPI (project `kurukuru`,
+  owner `Paul-Nwokolo`, repository `kurukuru`, workflow `release.yml`,
+  environment `pypi`) and `pypa/gh-action-pypi-publish` with `id-token: write`.
+  No token is stored anywhere, so none can leak.
+- **Gated off until the maintainer turns it on.** The `pypi` job runs only for
+  a pushed `v*` tag, after `installer` and `checksum` pass, and only when the
+  repository variable `PYPI_PUBLISHING` is `enabled`, set after the account and
+  pending publisher exist. The `pypi` environment's required reviewer is the
+  human gate on each upload: the tag is pushed while the GitHub release is still
+  a draft, and a PyPI version can never be uploaded twice.
+  `tools/test_release_publishing.py` fails if the gate, the ordering, or the
+  tokenless authentication is edited away.
+- **`pypi-verify` holds the upload to the anonymous download-and-hash
+  standard**: a fresh runner and empty pipx home install `kurukuru==X.Y.Z`, and
+  it fails unless PyPI serves the bytes just built, the name and version match,
+  and a Project-URL is this repository. The URLs were added to
+  `pyproject.toml` for this check; the wheel had none. INSTALL-LINUX may
+  recommend `pipx install kurukuru` only after that has passed for a published
+  release (docs/RELEASING.md).
+
+**The risk accepted.** A pending publisher does not reserve the name, so
+someone could register `kurukuru` before 0.1.5. If they do, the upload fails
+cleanly, and INSTALL-LINUX's warning is already right.
+
+**Measured.** The guard test was watched to fail against three breaks: the
+`vars.PYPI_PUBLISHING` gate removed, a `password: ${{ secrets.… }}` input added,
+and the assertion on our repository URL deleted from `pypi-verify`. The third
+**passed the first version of the test**, which looked for the string
+`Project-URL`. That string appears in the job three times, so deleting the one
+assertion that mattered left it present. The test now requires the repository
+URL itself. The jobs themselves have not run: they cannot, until the switch is
+on.
+
 ## Known limitations
 
 - **Nothing is code-signed, and there is no date for it.** SmartScreen warns on

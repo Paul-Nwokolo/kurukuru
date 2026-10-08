@@ -34,6 +34,12 @@ Design decisions behind these changes are recorded in
 - **A Linux CI job** runs the backend and tools suites on Ubuntu, lists every
   skipped test, and fails if the POSIX-only or qemu-img tests skipped — plus a
   job that installs the wheel with pipx and runs the installed copy.
+- **PyPI publishing is wired up and switched off.** The release workflow can
+  publish the wheel by trusted publishing (no stored token) and then checks
+  that `pipx install kurukuru` installs this package, with the right name,
+  version, repository and bytes. It stays off until the PyPI account and
+  pending publisher exist; nothing is on PyPI yet. See
+  [RELEASING.md](docs/RELEASING.md) and DECISIONS #74.
 
 ### Fixed
 
