@@ -37,6 +37,10 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+#: The repository a published wheel must name. Checked here, before an upload
+#: that cannot be undone, as well as by the release workflow's pypi-verify
+#: after it (DECISIONS #74).
+REPOSITORY_URL = "https://github.com/Paul-Nwokolo/kurukuru"
 BACKEND = REPO / "backend"
 FRONTEND_DIST = REPO / "frontend" / "dist"
 PACKAGED = BACKEND / "kurukuru" / "_dashboard"
@@ -68,6 +72,8 @@ def check_wheel(wheel: Path, version: str) -> list[str]:
     """Problems with the built wheel; empty means it is the artefact it should be."""
     with zipfile.ZipFile(wheel) as zf:
         names = zf.namelist()
+        metadata = next((zf.read(n).decode("utf-8", "replace") for n in names
+                         if n.endswith(".dist-info/METADATA")), "")
     problems = []
     if f"kurukuru-{version}-" not in wheel.name:
         problems.append(f"{wheel.name} is not version {version}")
@@ -80,6 +86,11 @@ def check_wheel(wheel: Path, version: str) -> list[str]:
             problems.append(f"should not ship: {n}")
     if not any(n.endswith(".dist-info/entry_points.txt") for n in names):
         problems.append("no entry_points.txt: `kurukuru` would not be on PATH after install")
+    urls = [line.split(":", 1)[1].strip() for line in metadata.splitlines()
+            if line.startswith("Project-URL:")]
+    if not any(u.endswith(REPOSITORY_URL) for u in urls):
+        problems.append(f"no Project-URL naming {REPOSITORY_URL}: nothing ties an installed "
+                        f"copy to this repository")
     return problems
 
 

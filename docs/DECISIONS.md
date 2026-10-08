@@ -3876,6 +3876,12 @@ assertion that mattered left it present. The test now requires the repository
 URL itself. The jobs themselves have not run: they cannot, until the switch is
 on.
 
+**Checked before the upload too.** `pypi-verify` only runs after the upload,
+and an upload cannot be undone. So `build_wheel.check_wheel`, which the `pypi`
+job runs before publishing, also refuses a wheel with no Project-URL naming
+this repository. Watched to fail with the check disabled. A real wheel built
+from this commit carries all four URLs and passes.
+
 ## Known limitations
 
 - **Nothing is code-signed, and there is no date for it.** SmartScreen warns on

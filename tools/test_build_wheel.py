@@ -24,11 +24,18 @@ GOOD = [
 ]
 
 
-def _wheel(tmp_path: Path, names: list[str], version: str = "0.1.4") -> Path:
+METADATA = (
+    "Metadata-Version: 2.4\nName: kurukuru\nVersion: 0.1.4\n"
+    "Project-URL: Homepage, https://github.com/Paul-Nwokolo/kurukuru\n"
+)
+
+
+def _wheel(tmp_path: Path, names: list[str], version: str = "0.1.4",
+           metadata: str = METADATA) -> Path:
     path = tmp_path / f"kurukuru-{version}-py3-none-any.whl"
     with zipfile.ZipFile(path, "w") as zf:
         for name in names:
-            zf.writestr(name, "x")
+            zf.writestr(name, metadata if name.endswith("/METADATA") else "x")
     return path
 
 
@@ -58,3 +65,14 @@ def test_no_entry_point_means_no_command(tmp_path):
     names = [n for n in GOOD if not n.endswith("entry_points.txt")]
     problems = build_wheel.check_wheel(_wheel(tmp_path, names), "0.1.4")
     assert any("entry_points.txt" in p for p in problems)
+
+
+def test_a_wheel_that_does_not_name_this_repository_is_refused(tmp_path):
+    # Refused before the upload, not only by pypi-verify after it (DECISIONS #74).
+    for metadata in (
+        "Name: kurukuru\nVersion: 0.1.4\n",
+        "Name: kurukuru\nProject-URL: Homepage, https://github.com/someone-else/kurukuru\n",
+        "Name: kurukuru\nProject-URL: Issues, https://github.com/Paul-Nwokolo/kurukuru/issues\n",
+    ):
+        problems = build_wheel.check_wheel(_wheel(tmp_path, GOOD, metadata=metadata), "0.1.4")
+        assert any("no Project-URL naming" in p for p in problems), metadata

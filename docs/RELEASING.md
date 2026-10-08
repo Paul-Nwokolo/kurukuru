@@ -84,7 +84,9 @@ tokenless publishing is ever edited away.
   identity: this repository, `release.yml`, environment `pypi`. A mismatch in
   any field makes PyPI refuse the upload; nothing is half-published.
 - `tools/build_wheel.py` produces exactly one file,
-  `kurukuru-X.Y.Z-py3-none-any.whl`, its version equal to the tag's.
+  `kurukuru-X.Y.Z-py3-none-any.whl`, its version equal to the tag's, with the
+  dashboard inside and a Project-URL naming this repository — refused
+  before upload otherwise.
 
 ### After every upload — and before INSTALL-LINUX may recommend it
 
