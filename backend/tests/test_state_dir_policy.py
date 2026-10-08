@@ -84,6 +84,12 @@ def test_the_cli_and_the_backend_resolve_the_same_tree():
     from kurukuru.cli import auth_store
     from kurukuru.cli.naming import CONFIG_PATH
     from kurukuru.config import CONFIG_FILE, DEFAULT_STATE_DIR
+    from kurukuru.product import default_config_dir
 
     assert auth_store.DEFAULT_STATE_DIR == DEFAULT_STATE_DIR
-    assert Path(CONFIG_PATH).expanduser().parent == CONFIG_FILE.parent
+    # Compared as the policy's answers, not as two expansions of "~" made at
+    # different moments: CONFIG_FILE was expanded at import, before the home
+    # directory was sandboxed, and CONFIG_PATH is expanded only when used.
+    assert CONFIG_PATH == f"{default_config_dir()}/cli.toml"
+    assert CONFIG_FILE.name == "kurukuru.env"
+    assert CONFIG_FILE.parent.name == Path(default_config_dir()).name

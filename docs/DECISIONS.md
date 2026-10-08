@@ -3734,6 +3734,19 @@ INSTALL-LINUX installs from a locally built wheel by path. Registering the name
 is a publishing decision for the maintainer, and is the precondition for ever
 writing that command.
 
+*Correction, 2026-10-08.* That `pip wheel backend` did not merely fetch a
+package. PyPI's `backend` 0.2.4.1 (2014, "Backend Utility Tools", a Django
+helper by an unrelated author) ships only a source `.zip`, so pip **built** it
+— which runs the package's `setup.py` in the project's virtualenv. The archive
+was later downloaded into an empty directory and read without being executed:
+its `setup.py` is a plain metadata `setup()` call, and nothing named `backend`
+was installed. No harm came of it, and the account above first said it had
+probably been a ready-made wheel, which was wrong. The point stands and is
+sharper for it: an unclaimed or mistyped name is code execution, not just a
+wrong download. Every name this project depends on resolves to its well-known
+project; the exposed names are our own unregistered ones — `kurukuru`,
+`kuru-kuru` and the legacy distribution name `local-iaas`, all 404 on PyPI.
+
 **The kvm group.** `doctor` tells apart: no `/dev/kvm`; not in its group (gives
 `sudo usermod -aG kvm $USER`); in the group but this process started before
 that (running `usermod` again is the wrong fix); and denied for some other
@@ -3762,6 +3775,59 @@ the module's source and fails on any `rmtree`, `unlink`, `os.remove` or
 `os.rmdir` — the property is that the code path cannot delete, not that it
 usually doesn't.
 
+## 73. Tests run in a sandboxed home, and cannot opt out of the guards
+
+**Context.** Twice in Phase 18 a test wrote into the developer's real home:
+the harness's own self-tests into `~/.kurukuru/keys`, then a service test into
+`~/.config/systemd/user`. Both were found by accident and fixed one at a time.
+Two of the same thing is a pattern, and a pattern needs a structural fix rather
+than another path added to a watch list.
+
+**Decision.** Four parts, because each alone has a gap:
+
+1. **A session-scoped sandboxed home.** `conftest.sandboxed_home` points `HOME`,
+   `USERPROFILE`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
+   `XDG_CACHE_HOME`, `APPDATA` and `LOCALAPPDATA` at a temporary directory for
+   the whole run, and subprocesses inherit it. Before every test,
+   `home_is_the_sandbox` fails the test outright if `Path.home()` or `~` still
+   resolves to the real home.
+2. **The sandbox must stay empty.** Prevention alone turns an escaping test
+   harmless and silent — the bug is still there, writing somewhere nobody
+   looks. So a test that leaves anything in the sandbox home fails with what it
+   created. One exemption, with its reason: `AppData/Local/Microsoft/Windows`,
+   where PowerShell and the Windows shell keep caches when the code
+   legitimately runs them (`fs_permissions` runs PowerShell to set ACLs).
+3. **Absolute real paths are watched by mtime too.** No redirection can stop
+   code that already holds a real path computed at import — which is exactly
+   how the first escape worked: the self-test built its leak path from
+   `REAL_STATE_DIR`. The directories nothing should touch during a run (`keys`,
+   `cloud-init`, the legacy tree, and the watched `~/.config` and
+   `~/.local/share` paths) are now fingerprinted by their own mtime as well as
+   their listing, which catches a file created and removed within one test. Not
+   the state root: a developer's running backend rewrites its database there.
+4. **No opt-out.** The `real_state` marker switched every guard off for a test,
+   and it is what let the old self-tests write the real keys directory with
+   nothing objecting. Removed rather than documented; under `--strict-markers` a
+   test asking for it fails at collection. The isolation self-tests that need a
+   "real" path now point the guard at a stub — the database guard is exercised
+   against a stand-in under `tmp_path` instead of the developer's live
+   `kurukuru.db`, which a broken guard would previously have opened.
+
+**Proved by restoring the bugs.** The service-test bug (the `startswith("/")`
+check with the module's own home fence removed) was caught by the sandbox
+check: `added: .config/systemd/user`, real `~/.config` untouched. Breaking the
+sandbox itself (not redirecting `HOME`/`USERPROFILE`) stopped every test before
+it ran. The self-test bug, restored against a **decoy** home so the proof could
+not touch anything real, failed at collection as written; with its marker
+stripped, the mtime guard named the keys directory.
+
+**What the first attempt at that proof cost.** Before part 3 existed, the
+self-test bug was restored in the ordinary way, and it did what it always did:
+created `leaked-by-test.tmp` in the developer's real `~/.kurukuru/keys` and
+removed it, moving the directory's mtime (2026-10-08 08:31:17). The keys
+themselves were untouched and nothing was left behind. It is recorded because
+it is the clearest demonstration of why parts 3 and 4 were needed: the
+sandboxed home, on its own, did not stop it.
 ## Known limitations
 
 - **Nothing is code-signed, and there is no date for it.** SmartScreen warns on

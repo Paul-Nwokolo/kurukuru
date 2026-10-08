@@ -120,23 +120,10 @@ probably running while you run the tests, and its reconciler writes every 30
 seconds, so a timestamp check blamed whichever test straddled a reconcile pass.
 A guard that cries wolf gets deleted.
 
-**No test writes, creates or deletes anything under the real state
-directory** — not to prove the guard, not briefly. The guard itself *stats*
-it (sizes, mtimes, directory listings), because that is how it detects;
-nothing opens a file there or changes it. The harness's own self-tests in
-`tests/test_isolation.py` used to: to show the guard turns a leak red, they
-wrote a stray file into the real `~/.kurukuru/keys` from a subprocess and
-deleted it afterwards, and created the directory itself on a machine without
-one. Harmless every time it worked, in the one directory this project has
-already lost once. Phase 17 found it by watching that directory's mtime per
-test, and moved them onto a fake home: the subprocess runs with `USERPROFILE`
-and `HOME` pointing into `tmp_path`, so the tree its conftest calls "real" is a
-temporary one, and a check asserts the redirect took.
-
-`@pytest.mark.real_state` still exists, and the guard honours it, because
-the escape hatch is what stops a future need from weakening the default for
-everyone. Nothing uses it. Anything that ever does should have to argue for
-it in review, in the same commit.
+**No test writes, creates or deletes anything in your home directory, and
+there is no way to opt out.** The guard only *stats* the real tree (directory
+listings and the mtimes of directories nothing should touch) to detect;
+nothing opens a file there or changes it. How that is enforced is rule 7 below.
 
 `tests/test_isolation.py` tests the harness itself, including running a
 deliberately leaking test in a subprocess and asserting the run fails — a guard
@@ -324,6 +311,37 @@ of the backend, never your checkout, so stopping it partway costs nothing.
 python tools/prove_defences.py              # every break, ~2 minutes
 python tools/prove_defences.py --only cors  # one
 ```
+
+**7. Tests never see your home directory.** Twice in one phase a test wrote
+into the developer's real home — the harness's own self-tests into
+`~/.kurukuru/keys`, then a service test into `~/.config/systemd/user` — and both
+were found by accident and fixed one at a time. Two of the same thing is a
+pattern, so the rule is structural, not a list of paths to remember:
+
+- **Every test runs in a sandboxed home.** A session fixture
+  (`conftest.sandboxed_home`) points `HOME`, `USERPROFILE`, the XDG directories
+  and `APPDATA`/`LOCALAPPDATA` at a temporary directory for the whole run;
+  subprocesses inherit it. Before each test, `home_is_the_sandbox` fails the
+  test outright if `Path.home()` or `~` resolves to your real home.
+- **The sandbox must stay empty.** Prevention alone would make a bug harmless
+  but silent, so a test that writes anything into the sandbox home fails, with
+  the paths it created. Windows' own caches under `AppData/Local/Microsoft/Windows`
+  — written by PowerShell and the shell when the code legitimately runs them —
+  are the single exemption.
+- **Absolute real paths are watched.** No redirection can stop code holding a
+  path computed before it, which is how the first escape happened. So the real
+  directories nothing should touch during a run (`keys`, `cloud-init`, the
+  watched `~/.config` and `~/.local/share` paths) are fingerprinted by listing
+  *and* by their own mtime, which moves even when a file is created and removed
+  within one test.
+- **There is no opt-out.** The `real_state` marker that used to switch the
+  guards off was removed, and `--strict-markers` makes asking for it a
+  collection error. A test that needs a "real" path uses a stubbed one — see how
+  `test_isolation.py` points the database guard at a stand-in.
+
+Each part was watched to fail: both original bugs restored (one against a decoy
+home, so the proof itself touched nothing real), and the sandbox deliberately
+broken, which stopped every test before it ran.
 
 The general shape: **prefer a check that can distinguish "working" from
 "not running at all".** Most false greens in this project were not wrong

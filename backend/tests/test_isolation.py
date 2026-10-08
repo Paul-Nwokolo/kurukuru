@@ -26,6 +26,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -152,6 +153,23 @@ def test_the_fingerprint_notices_a_new_entry_in_a_watched_directory(tmp_path):
     assert _fingerprint([], [keys]) != before
 
 
+def test_a_file_created_and_removed_within_a_test_is_still_noticed(tmp_path):
+    """The shape the listing alone missed: a stray file that is gone again by
+    the time the guard looks. The directory's mtime remembers it."""
+    from tests.conftest import _quiescent_mtimes
+
+    keys = tmp_path / "keys"
+    keys.mkdir()
+    before = _quiescent_mtimes([keys])
+    time.sleep(0.05)  # a filesystem timestamp needs a tick to move
+
+    stray = keys / "leaked-by-test.tmp"
+    stray.write_text("x")
+    stray.unlink()
+
+    assert _quiescent_mtimes([keys]) != before
+
+
 def test_the_fingerprint_is_stable_when_nothing_changes(tmp_path):
     """The control: a guard that fires on every test is noise, not a guard."""
     keys = tmp_path / "keys"
@@ -164,11 +182,15 @@ def test_the_fingerprint_is_stable_when_nothing_changes(tmp_path):
 
 
 def test_the_guard_watches_the_key_directory_that_actually_leaked(tmp_path):
-    """Wiring, asserted without touching anything."""
-    watched = set(_real_state_fingerprint())
+    """Wiring, asserted without touching anything: the watch list is a pure
+    function, so this reads no real directory at all."""
+    from tests.conftest import REAL_HOME, _real_state_watch_list
 
-    assert str(REAL_STATE_DIR / "keys") in watched
-    assert str(REAL_STATE_DIR) in watched
+    watched = set(_real_state_watch_list())
+
+    assert REAL_STATE_DIR / "keys" in watched
+    assert REAL_STATE_DIR in watched
+    assert REAL_HOME / ".config" / "systemd" / "user" in watched
 
 
 def test_opening_the_real_database_raises_immediately(tmp_path):
@@ -181,8 +203,21 @@ def test_opening_the_real_database_raises_immediately(tmp_path):
     """
     import sqlite3
 
-    with pytest.raises(RuntimeError, match="real database"):
-        sqlite3.connect(str(REAL_DB_FILES[0]))
+    import tests.conftest as harness
+
+    # Against a stand-in for the real database, not the real one: if the guard
+    # were ever broken, the old form of this test would itself have opened the
+    # developer's live kurukuru.db. The guard reads its protected path at call
+    # time, so pointing it here exercises exactly the same code.
+    stand_in = (tmp_path / "kurukuru.db").resolve()
+    original = harness._REAL_DB
+    harness._REAL_DB = stand_in
+    try:
+        with pytest.raises(RuntimeError, match="real database"):
+            sqlite3.connect(str(stand_in))
+    finally:
+        harness._REAL_DB = original
+    assert not stand_in.exists(), "the guard let the connection through"
 
 
 def test_an_engine_built_against_the_real_url_cannot_connect(tmp_path):
@@ -190,16 +225,30 @@ def test_an_engine_built_against_the_real_url_cannot_connect(tmp_path):
     that builds its own engine and forgets to point it somewhere safe."""
     from sqlmodel import Session, create_engine
 
+    import tests.conftest as harness
     from kurukuru.config import Settings
 
     # `resolved_database_url`, which is what kurukuru.database itself opens: the
     # configured URL still holds an unexpanded "~", and SQLAlchemy would take
-    # that literally and miss the real file entirely.
-    engine = create_engine(Settings().resolved_database_url)
-
-    with pytest.raises(RuntimeError, match="real database"):
-        with Session(engine) as session:
-            session.exec(__import__("sqlmodel").text("select 1"))
+    # that literally and miss the real file entirely. Built against a stand-in
+    # state directory under tmp_path, with the guard pointed at its database —
+    # a stubbed "real database" — so a broken guard could only ever open a
+    # throwaway file, never the developer's live one.
+    settings = Settings(state_dir=str(tmp_path / "state"))
+    protected = settings.database_path.resolve()
+    protected.parent.mkdir(parents=True)
+    engine = create_engine(settings.resolved_database_url)
+    original = harness._REAL_DB
+    harness._REAL_DB = protected
+    try:
+        with pytest.raises(RuntimeError, match="real database"):
+            with Session(engine) as session:
+                session.exec(__import__("sqlmodel").text("select 1"))
+    finally:
+        harness._REAL_DB = original
+        engine.dispose()
+    assert protected.is_relative_to(tmp_path.resolve())
+    assert not protected.exists(), "the guard let the engine connect"
 
 
 # --------------------------------------------------------------------------- #
@@ -381,9 +430,15 @@ def test_an_ordinary_test_passes_under_the_same_harness(tmp_path):
     assert result.returncode == 0, result.stdout
 
 
-def test_the_real_state_marker_opts_out(tmp_path):
-    """The escape hatch exists and works, so a future need is not a reason to
-    weaken the default for everyone."""
+def test_there_is_no_way_to_opt_out_of_the_guard(tmp_path):
+    """The ``real_state`` marker used to switch every guard off for a test, and
+    it is what let the old self-tests write into the developer's real keys
+    directory unnoticed. It was removed rather than documented; with
+    ``--strict-markers`` a test that asks for it fails before it runs.
+
+    Run with ``--strict-markers`` passed explicitly: the generated test's
+    rootdir is tmp_path, so the backend's pyproject (where the option is set
+    for the real suite) is not read here."""
     home = _fake_home(tmp_path)
     result = _run_pytest(
         tmp_path,
@@ -392,12 +447,14 @@ def test_the_real_state_marker_opts_out(tmp_path):
         from tests.conftest import REAL_STATE_DIR
 
         @pytest.mark.real_state
-        def test_allowed_to_touch_it():
+        def test_asks_to_touch_it():
             stray = REAL_STATE_DIR / "keys" / "marked-opt-in.tmp"
-            stray.write_text("permitted")
-            stray.unlink()
+            stray.write_text("not permitted")
         """,
         home=home,
+        extra_args=["--strict-markers"],
     )
 
-    assert result.returncode == 0, result.stdout
+    assert result.returncode != 0, result.stdout
+    assert "real_state" in result.stdout and "not found in `markers`" in result.stdout
+    assert not (home / ".kurukuru" / "keys" / "marked-opt-in.tmp").exists()

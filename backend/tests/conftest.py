@@ -30,9 +30,12 @@ The database gets the stronger mechanism because it needed one: mtime cannot
 distinguish "this test wrote" from "the developer's own backend wrote", and
 that backend's reconciler writes every 30 seconds.
 
-A test that genuinely needs the real paths marks itself ``@pytest.mark.
-real_state``. Nothing does today, and anything that ever does should have to
-explain why in the same commit.
+There is no way to opt out. Until Phase 18 a ``real_state`` marker switched
+every guard off for a test, and it is exactly what let the harness's own
+self-tests write into the developer's real ``~/.kurukuru/keys`` unnoticed. It
+was removed rather than documented: with ``--strict-markers`` a test that asks
+for it now fails at collection. A test that needs a "real" path uses a stubbed
+one (see ``test_isolation.py``). CONTRIBUTING, "Tests never see your home".
 """
 
 from __future__ import annotations
@@ -155,16 +158,58 @@ def _real_state_fingerprint() -> dict[str, object]:
     is protected by :func:`_forbid_real_database_connections` instead, which
     catches the offender in the act rather than inferring it from a timestamp.
     """
-    return _fingerprint(
-        (),
-        (
-            REAL_STATE_DIR,
-            REAL_STATE_DIR / "keys",
-            REAL_STATE_DIR / "cloud-init",
-            LEGACY_REAL_STATE_DIR,
-            *REAL_HOME_WATCHED,
-        ),
-        ignore=_DB_SIDECAR_NAMES,
+    fingerprint = _fingerprint((), _real_state_watch_list(), ignore=_DB_SIDECAR_NAMES)
+    fingerprint.update(_quiescent_mtimes(_real_quiescent_dirs()))
+    return fingerprint
+
+
+def _quiescent_mtimes(directories: Sequence[Path]) -> dict[str, object]:
+    """Each directory's own mtime, which moves on any create, delete or rename
+    inside it — including a file created and removed again within one test.
+
+    Added in Phase 18, after restoring an old self-test showed the listing
+    alone cannot see that: the test built its leak path from REAL_STATE_DIR, an
+    absolute real path computed at import, so no HOME redirection could stop
+    it, and it removed its stray file before the listing was taken again. It
+    moved ~/.kurukuru/keys' mtime, and nothing else noticed.
+    """
+    stamps: dict[str, object] = {}
+    for directory in directories:
+        try:
+            stamps[f"mtime:{directory}"] = directory.stat().st_mtime_ns
+        except OSError:
+            stamps[f"mtime:{directory}"] = None
+    return stamps
+
+
+def _real_quiescent_dirs() -> tuple[Path, ...]:
+    """Real directories nothing should touch while the suite runs.
+
+    Not the state root: a developer's own backend rewrites its database there
+    every 30 seconds, and a guard that blames an innocent test gets deleted.
+    These only change when a keypair is generated, a VM is launched, or the
+    product is installed — none of which a test run should cause.
+    """
+    return (
+        REAL_STATE_DIR / "keys",
+        REAL_STATE_DIR / "cloud-init",
+        LEGACY_REAL_STATE_DIR,
+        *REAL_HOME_WATCHED,
+    )
+
+
+def _real_state_watch_list() -> tuple[Path, ...]:
+    """Which real directories the guard watches — a pure answer, no I/O.
+
+    Separate so the wiring can be tested without listing the developer's real
+    state tree at all (test_the_guard_watches_the_key_directory_that_actually_leaked).
+    """
+    return (
+        REAL_STATE_DIR,
+        REAL_STATE_DIR / "keys",
+        REAL_STATE_DIR / "cloud-init",
+        LEGACY_REAL_STATE_DIR,
+        *REAL_HOME_WATCHED,
     )
 
 
@@ -196,8 +241,7 @@ def _forbid_real_database_connections(monkeypatch: pytest.MonkeyPatch) -> None:
                     f"A test tried to open the real database at {_REAL_DB}.\n"
                     "Tests are isolated to tmp_path by conftest.isolated_state; "
                     "something built its own engine or session against the real "
-                    "URL. Use the engine the fixture provides, or mark the test "
-                    "@pytest.mark.real_state and say why."
+                    "URL. Use the engine the fixture provides."
                 )
             return real_connect(database, *args, **kwargs)
 
@@ -216,12 +260,6 @@ def _describe_drift(before: dict, after: dict) -> str:
     return "\n".join(lines)
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers",
-        "real_state: test may read or write the real ~/.kurukuru state and "
-        "database. Opts out of the isolation every other test gets by default.",
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -265,6 +303,130 @@ def redirect_db_engines(monkeypatch: pytest.MonkeyPatch, engine) -> None:
         monkeypatch.setattr(module, "db_engine", engine, raising=False)
 
 
+# --------------------------------------------------------------------------- #
+# The home directory, sandboxed for the whole run
+# --------------------------------------------------------------------------- #
+#: Every variable through which code finds "the user's home", on either OS.
+#: POSIX code reads HOME and the XDG set; Windows code reads USERPROFILE (which
+#: is what Path.home() and expanduser use there) and the two AppData roots.
+HOME_VARIABLES = (
+    "HOME", "USERPROFILE",
+    "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
+    "APPDATA", "LOCALAPPDATA",
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def sandboxed_home(tmp_path_factory: pytest.TempPathFactory):
+    """Point the home directory at a temporary one, for every test in the run.
+
+    Twice in Phase 18 a test wrote into the developer's real home — the
+    isolation self-tests into ``~/.kurukuru/keys``, then a service test into
+    ``~/.config/systemd/user`` — and both were found by accident and fixed one at
+    a time. That is a pattern, so the fix is structural: no test can resolve the
+    real home at all. Set once for the session (subprocesses inherit it), and
+    checked before every test by :func:`home_is_the_sandbox`. CONTRIBUTING,
+    "Tests never see your home directory".
+
+    ``REAL_HOME`` and the ``REAL_*`` paths above were resolved at import, before
+    this runs, so the guards can still say which real paths to protect.
+    """
+    home = tmp_path_factory.mktemp("home")
+    values = {
+        "HOME": home,
+        "USERPROFILE": home,
+        "XDG_DATA_HOME": home / ".local" / "share",
+        "XDG_CONFIG_HOME": home / ".config",
+        "XDG_STATE_HOME": home / ".local" / "state",
+        "XDG_CACHE_HOME": home / ".cache",
+        "APPDATA": home / "AppData" / "Roaming",
+        "LOCALAPPDATA": home / "AppData" / "Local",
+    }
+    with pytest.MonkeyPatch.context() as mp:
+        for name in HOME_VARIABLES:
+            mp.setenv(name, str(values[name]))
+        yield home
+
+
+#: Caches that *Windows itself* keeps under the home directory, written by the
+#: OS tools the code under test legitimately runs — PowerShell's startup-profile
+#: cache (fs_permissions runs PowerShell to set ACLs) and the shell's
+#: ``Caches``. Windows' own per-user housekeeping, never a write by Kurukuru.
+#: One entry, and it must stay that short: anything else in the home directory
+#: — above all .kurukuru, .config or .local — still fails the test.
+TOOL_CACHE_DIRS = ("AppData/Local/Microsoft/Windows",)
+
+
+def _home_listing(home: Path) -> list[str]:
+    def owned_by_a_tool(rel: str) -> bool:
+        for cache in TOOL_CACHE_DIRS:
+            # Inside the tool's cache, or an empty parent created on the way to it.
+            if rel == cache or rel.startswith(cache + "/") or (cache + "/").startswith(rel + "/"):
+                return True
+        return False
+
+    listing = []
+    for p in home.rglob("*"):
+        rel = p.relative_to(home).as_posix()
+        if owned_by_a_tool(rel):
+            continue
+        # An empty AppData/Roaming is created alongside the PowerShell cache.
+        if rel in ("AppData", "AppData/Roaming") and p.is_dir() and not any(
+            q for q in p.rglob("*") if not owned_by_a_tool(q.relative_to(home).as_posix())
+        ):
+            continue
+        listing.append(rel)
+    return sorted(listing)
+
+
+@pytest.fixture(autouse=True)
+def home_is_the_sandbox(request: pytest.FixtureRequest, sandboxed_home: Path):
+    """Fail outright if a test can see the real home, or writes to the fake one.
+
+    Two checks, because prevention alone would make an escaping test harmless
+    but silent: the bug would still be there, writing into a temporary
+    directory nobody looks at. So the sandbox must also be *untouched* — a test
+    that needs a home-shaped tree makes its own under ``tmp_path``.
+
+    There is no opt-out from either check.
+    """
+    seen = {"Path.home()": Path.home(), "expanduser('~')": Path(os.path.expanduser("~"))}
+    for how, where in seen.items():
+        if where.resolve() == REAL_HOME.resolve():
+            pytest.fail(
+                f"{how} is the real home directory ({REAL_HOME}). The session "
+                f"fixture sandboxed_home should have redirected it; something "
+                f"has undone that, and every test after this point could write "
+                f"into the developer's own home. Refusing to run.",
+                pytrace=False,
+            )
+    before = _home_listing(sandboxed_home)
+    yield
+    after = _home_listing(sandboxed_home)
+    if after != before:
+        added = sorted(set(after) - set(before))
+        removed = sorted(set(before) - set(after))
+        # Clean up so the next test starts from an empty home — this is a
+        # temporary directory created for the run, never a real one.
+        for name in reversed(added):
+            target = sandboxed_home / name
+            if target.is_file():
+                target.unlink()
+            elif target.is_dir():
+                try:
+                    target.rmdir()
+                except OSError:
+                    pass
+        pytest.fail(
+            "This test wrote into the home directory. In a normal run that is "
+            "the developer's real home; here it was a sandbox, so nothing was "
+            "harmed — but the code path that did it is real. Use tmp_path, or "
+            "pass the directory in.\n"
+            f"  added:   {added}\n  removed: {removed}",
+            pytrace=False,
+        )
+
+
 @pytest.fixture(autouse=True)
 def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
     """Point settings and the database at this test's own tmp_path.
@@ -274,10 +436,6 @@ def isolated_state(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch):
     is the floor, so a path nobody thought about lands in tmp rather than in
     the developer's home directory.
     """
-    if request.node.get_closest_marker("real_state"):
-        yield
-        return
-
     state = tmp_path / "state"
     database = tmp_path / "kurukuru.db"
 
@@ -421,10 +579,6 @@ def no_real_state_writes(request: pytest.FixtureRequest, monkeypatch):
     Re-baselined every test, so one offending test produces one failure rather
     than turning every subsequent test red.
     """
-    if request.node.get_closest_marker("real_state"):
-        yield
-        return
-
     _forbid_real_database_connections(monkeypatch)
 
     before = _real_state_fingerprint()
@@ -438,8 +592,8 @@ def no_real_state_writes(request: pytest.FixtureRequest, monkeypatch):
             "an absolute path, a subprocess, or a module imported after the "
             "fixture ran.\n\n"
             f"{_describe_drift(before, after)}\n\n"
-            "If the access is genuinely intended, mark the test "
-            "@pytest.mark.real_state and say why.",
+            "There is no opt-out: no test may touch the real install. Point the "
+            "code at tmp_path, or stub the path it treats as real.",
             pytrace=False,
         )
 
