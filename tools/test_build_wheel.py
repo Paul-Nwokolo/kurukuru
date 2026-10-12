@@ -73,6 +73,7 @@ def test_a_wheel_that_does_not_name_this_repository_is_refused(tmp_path):
         "Name: kurukuru\nVersion: 0.1.4\n",
         "Name: kurukuru\nProject-URL: Homepage, https://github.com/someone-else/kurukuru\n",
         "Name: kurukuru\nProject-URL: Issues, https://github.com/Paul-Nwokolo/kurukuru/issues\n",
+        "Name: kurukuru\nProject-URL: Home, https://evil.example/https://github.com/Paul-Nwokolo/kurukuru\n",
     ):
         problems = build_wheel.check_wheel(_wheel(tmp_path, GOOD, metadata=metadata), "0.1.4")
         assert any("no Project-URL naming" in p for p in problems), metadata

@@ -54,9 +54,18 @@ def test_the_installed_package_is_checked_after_every_publish():
     # The step scripts as written — not re-serialised YAML, which escapes the
     # quotes in meta["Version"] and made this check fail on a correct file.
     script = "\n".join(str(step.get("run", "")) for step in verify["steps"])
-    # The repository URL itself, not just "Project-URL": the job reads the
+    env = {k: v for step in verify["steps"] for k, v in (step.get("env") or {}).items()}
+    # The repository check itself, not just "Project-URL": the job reads the
     # Project-URLs in more than one place, and deleting only the assertion on
     # our repository left "Project-URL" in the script and this test passing.
-    for must in ("pipx install", "https://github.com/Paul-Nwokolo/kurukuru",
-                 "BUILT_SHA256", 'meta["Version"]'):
+    assert env.get("OUR_REPOSITORY") == "https://github.com/Paul-Nwokolo/kurukuru"
+    for must in ("pipx install", "NOT OUR PACKAGE", "BUILT_SHA256", 'meta["Version"]'):
         assert must in script, f"pypi-verify no longer checks {must}"
+
+
+def test_propagation_is_retried_bounded_and_named():
+    # PyPI's CDN lags an upload; a release must not look broken for that, and
+    # must not wait forever either (docs/RELEASING.md, "Propagation").
+    script = "\n".join(str(s.get("run", "")) for s in _jobs()["pypi-verify"]["steps"])
+    assert "for i in $(seq 1 30)" in script, "the index wait must be bounded"
+    assert "title=pypi propagation" in script, "running out must be reported as propagation"

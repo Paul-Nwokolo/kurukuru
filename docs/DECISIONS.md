@@ -3867,20 +3867,42 @@ claim the name and that command would then install their package (decision 71).
 someone could register `kurukuru` before 0.1.5. If they do, the upload fails
 cleanly, and INSTALL-LINUX's warning is already right.
 
-**Measured.** The guard test was watched to fail against three breaks: the
-`vars.PYPI_PUBLISHING` gate removed, a `password: ${{ secrets.… }}` input added,
-and the assertion on our repository URL deleted from `pypi-verify`. The third
-**passed the first version of the test**, which looked for the string
-`Project-URL`. That string appears in the job three times, so deleting the one
-assertion that mattered left it present. The test now requires the repository
-URL itself. The jobs themselves have not run: they cannot, until the switch is
-on.
+**Propagation is not failure.** PyPI's CDN is eventually consistent, so
+`pypi-verify` retries "not on the index yet", and only that: 30 tries, 10 s
+apart. Running out is reported as `pypi propagation`, with the instruction to
+re-run, and not as a bad upload. The first version of the job did not do this:
+when its loop ran out, it went on to hash a file that was not there and failed
+with "No such file", so propagation would have looked like a broken release.
+Everything after the wheel is found runs once: mismatched bytes, name, version
+or repository are real failures that waiting cannot fix. PyPI never accepts the
+same filename twice, so a stale edge cannot serve different bytes under this
+name. docs/RELEASING.md tabulates which failure messages are real and which are
+propagation.
 
-**Checked before the upload too.** `pypi-verify` only runs after the upload,
-and an upload cannot be undone. So `build_wheel.check_wheel`, which the `pypi`
-job runs before publishing, also refuses a wheel with no Project-URL naming
-this repository. Watched to fail with the check disabled. A real wheel built
-from this commit carries all four URLs and passes.
+**The repository check is explicit, and exact.** `pypi-verify` compares each
+Project-URL's address to `https://github.com/Paul-Nwokolo/kurukuru` for
+equality and fails with `NOT OUR PACKAGE`; a bare `assert` was not loud enough
+for the one property this job exists for. `build_wheel.check_wheel` makes the
+same exact comparison before the upload, so a wheel that does not name this
+repository is refused before an upload that cannot be undone. Both had used
+`endswith`, which accepted an address such as
+`https://evil.example/https://github.com/Paul-Nwokolo/kurukuru`.
+
+**Measured.** The guard test was watched to fail against four breaks, each
+failing exactly the test written for it: the `vars.PYPI_PUBLISHING` gate
+removed; a `password: ${{ secrets.… }}` input added; the repository assertion
+deleted from `pypi-verify`; the propagation report relabelled as an ordinary
+error. The third **passed the first version of the test**, which looked for the
+string `Project-URL`. That string appears in the job three times, so deleting
+the one assertion that mattered left it present. The test now requires the
+check itself. `pypi-verify`'s metadata check was run against a real wheel built
+from this branch: it passed with our repository, and failed loudly with another
+repository and with another version. Its propagation path was run against PyPI
+for the unpublished `kurukuru==0.1.5`, with the loop shortened to two tries, and
+reported propagation. `build_wheel`'s check was watched to fail with the check
+disabled, and passes the real wheel. The jobs themselves have not run on GitHub
+and cannot until the switch is on; a dry `release` run on the branch showed
+both as skipped.
 
 ## Known limitations
 

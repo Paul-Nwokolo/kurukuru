@@ -45,7 +45,8 @@ runs on.
 fails — and if anyone ever registers it, it would install their package, not
 this one. The first upload is planned with 0.1.5, and this warning stays
 until the release check that `pipx install kurukuru` installs *this* package
-has passed ([RELEASING.md](RELEASING.md#pypi)). Until then, build a wheel
+has passed against a real upload ([RELEASING.md](RELEASING.md#pypi)). A name
+claimed on PyPI is not that check. Until then, build a wheel
 from a checkout (needs Node.js for the dashboard) and install it by path:
 
 ```bash

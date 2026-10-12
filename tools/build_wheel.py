@@ -86,9 +86,10 @@ def check_wheel(wheel: Path, version: str) -> list[str]:
             problems.append(f"should not ship: {n}")
     if not any(n.endswith(".dist-info/entry_points.txt") for n in names):
         problems.append("no entry_points.txt: `kurukuru` would not be on PATH after install")
-    urls = [line.split(":", 1)[1].strip() for line in metadata.splitlines()
+    # "Project-URL: Label, URL" -> URL, compared exactly (as pypi-verify does).
+    urls = [line.split(":", 1)[1].split(",", 1)[-1].strip() for line in metadata.splitlines()
             if line.startswith("Project-URL:")]
-    if not any(u.endswith(REPOSITORY_URL) for u in urls):
+    if REPOSITORY_URL not in urls:
         problems.append(f"no Project-URL naming {REPOSITORY_URL}: nothing ties an installed "
                         f"copy to this repository")
     return problems

@@ -425,30 +425,64 @@ jobs:
       - name: Install from PyPI into a clean pipx home, and check it
         env:
           BUILT_SHA256: ${{ needs.pypi.outputs.sha256 }}
+          OUR_REPOSITORY: https://github.com/Paul-Nwokolo/kurukuru
         run: |
           set -eu
           version="${GITHUB_REF_NAME#v}"
           export PIPX_HOME="$RUNNER_TEMP/pipx-home" PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
-          # The index can lag the upload by a minute or two.
+
+          # PROPAGATION, retried and bounded. PyPI's CDN is eventually
+          # consistent: for a few minutes after the upload, some edges still
+          # serve an index without the new version. That is "no matching
+          # distribution", and only that is retried: 30 tries, 10 s apart.
+          # Running out is reported as propagation, not as a bad upload.
+          wheel="$RUNNER_TEMP/dl/kurukuru-${version}-py3-none-any.whl"
           for i in $(seq 1 30); do
             pip download --no-deps --no-cache-dir -q -d "$RUNNER_TEMP/dl" "kurukuru==$version" 2>/dev/null && break
+            echo "kurukuru==$version not on the index yet (try $i/30)"
             sleep 10
           done
-          served="$(sha256sum "$RUNNER_TEMP/dl/kurukuru-${version}-py3-none-any.whl" | cut -d' ' -f1)"
+          if [ ! -f "$wheel" ]; then
+            echo "::error title=pypi propagation::kurukuru==$version still not served after 5 minutes. PROPAGATION, not a verified failure: check https://pypi.org/project/kurukuru/$version/ and re-run this job. Nothing here says the upload is wrong."
+            exit 1
+          fi
+
+          # Everything from here is REAL and never retried. PyPI never lets a
+          # filename be uploaded twice, so a stale edge cannot serve different
+          # bytes under this name: a mismatch means this is not our wheel.
+          served="$(sha256sum "$wheel" | cut -d' ' -f1)"
           echo "built:  $BUILT_SHA256"
           echo "served: $served"
           test "$served" = "$BUILT_SHA256" || { echo "::error title=pypi::PyPI serves different bytes from the wheel this run built"; exit 1; }
 
-          pipx install "kurukuru==$version"
-          "$PIPX_HOME/venvs/kurukuru/bin/python" - "$version" <<'EOF'
+          # pip download has just found it, so pipx should too; a short retry
+          # only for a second edge that lags the first.
+          for i in 1 2 3 4 5 6; do
+            pipx install --pip-args=--no-cache-dir "kurukuru==$version" && break
+            [ "$i" = 6 ] && { echo "::error title=pypi::pipx install kurukuru==$version failed although the wheel is served. REAL: read the pipx output above."; exit 1; }
+            sleep 20
+          done
+
+          "$PIPX_HOME/venvs/kurukuru/bin/python" - "$version" "$OUR_REPOSITORY" <<'EOF'
           import importlib.metadata as md, sys
+          version, ours = sys.argv[1], sys.argv[2]
           meta = md.metadata("kurukuru")
           urls = meta.get_all("Project-URL") or []
           print("Name:", meta["Name"], "| Version:", meta["Version"])
           print("Project-URL:", urls)
-          assert meta["Name"] == "kurukuru", meta["Name"]
-          assert meta["Version"] == sys.argv[1], (meta["Version"], sys.argv[1])
-          assert any(u.endswith("https://github.com/Paul-Nwokolo/kurukuru") for u in urls), urls
+          problems = []
+          if meta["Name"] != "kurukuru":
+              problems.append(f"installed distribution is {meta['Name']!r}, not 'kurukuru'")
+          if meta["Version"] != version:
+              problems.append(f"installed version is {meta['Version']!r}, not {version!r}")
+          # The point of the whole job: `kurukuru` is a name someone else could
+          # own. A package that does not name our repository is not ours,
+          # whatever its name and version say.
+          if not any(u.split(",", 1)[-1].strip() == ours for u in urls):
+              problems.append(f"NOT OUR PACKAGE: no Project-URL is {ours} (it names {urls or 'no URLs at all'})")
+          for p in problems:
+              print(f"::error title=pypi::{p}")
+          sys.exit(1 if problems else 0)
           EOF
           "$PIPX_BIN_DIR/kurukuru" version | grep -F "kurukuru  $version"
           echo "::notice title=pypi::pipx install kurukuru==$version is ours: name, version, repository and bytes all match"
