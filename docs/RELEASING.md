@@ -206,6 +206,32 @@ for a bounded time:
 Only "not on the index" is retried. Everything after the wheel is found runs
 once, because waiting longer cannot fix it.
 
+### If the upload succeeded and `pypi-verify` failed
+
+Decide this before tagging, not after. **The state:** `kurukuru X.Y.Z` is on
+PyPI permanently, the name is claimed by us, and that version number and
+filename can never be uploaded again, even after deletion. The GitHub release
+is still a draft, with the Windows installer and checksum attached and already
+verified. INSTALL-LINUX still says not to use `pipx install kurukuru`, so no
+documentation points anyone at the PyPI package.
+
+- **Propagation** (`pypi propagation`): wait, then **Re-run failed jobs** on
+  the run. That re-runs `pypi-verify` alone. GitHub reuses the successful
+  `pypi` job's outputs, including the built wheel's hash, and passes the
+  environment approval that already passed. Do **not** use "Re-run all
+  jobs": it rebuilds everything and asks for approval again, and the upload
+  then fails as a duplicate filename. Nothing is damaged, but the run reads
+  as a failure. (The publish step does not set `skip-existing`, deliberately:
+  a second upload of the same version should fail loudly, not pass.)
+- **A real failure:** **yank** `X.Y.Z` on PyPI (*Manage project → Releases →
+  Options → Yank*). pip then ignores it unless someone pins it exactly, it
+  stays visible as yanked, and a yank can be undone. Prefer yanking to
+  deleting, which frees nothing and loses the record. Fix the cause and cut the
+  next patch version (`X.Y.Z+1`) through this same checklist. The Windows
+  installer is unaffected: publishing the GitHub release for `X.Y.Z` is a
+  separate decision, and its notes say the PyPI upload of that version was
+  yanked and why. INSTALL-LINUX does not change.
+
 ### The gate on INSTALL-LINUX
 
 **`docs/INSTALL-LINUX.md` may recommend `pipx install kurukuru` only after
