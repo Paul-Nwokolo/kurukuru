@@ -13,6 +13,8 @@ Design decisions behind these changes are recorded in
 
 ## [Unreleased]
 
+## [0.1.5] — date set when tagged
+
 ### Added
 
 - **A Linux install path — packaging only; Linux is not claimed as supported.**
@@ -34,12 +36,29 @@ Design decisions behind these changes are recorded in
 - **A Linux CI job** runs the backend and tools suites on Ubuntu, lists every
   skipped test, and fails if the POSIX-only or qemu-img tests skipped — plus a
   job that installs the wheel with pipx and runs the installed copy.
-- **PyPI publishing is wired up and switched off.** The release workflow can
-  publish the wheel by trusted publishing (no stored token) and then checks
-  that `pipx install kurukuru` installs this package, with the right name,
-  version, repository and bytes. It stays off until the PyPI account and
-  pending publisher exist; nothing is on PyPI yet. See
-  [RELEASING.md](docs/RELEASING.md) and DECISIONS #74.
+- **The first release for PyPI.** The release workflow uploads this version
+  to PyPI as `kurukuru`, by trusted publishing (no stored token), after the
+  Windows build and checksum checks pass and after the maintainer approves.
+  It then checks, from a clean machine, that `pipx install kurukuru` installs
+  this package: name, version, repository and bytes. INSTALL-LINUX recommends
+  that command only once that check has passed. Before the tag, the same jobs
+  are rehearsed against TestPyPI. See [RELEASING.md](docs/RELEASING.md) and
+  DECISIONS #74.
+- **An honest PyPI project page.** It says what Kurukuru is, that Windows users
+  want the installer, and that the Linux packaging is complete but unverified
+  on real KVM hardware. Windows remains the only OS classifier.
+- **The pip/pipx install is tested on Windows too**, since PyPI serves the
+  wheel there whether or not anyone intends it. A CI job installs it with pipx,
+  serves from it and checks what `doctor` says.
+
+### Changed
+
+- **`doctor` knows how Kurukuru was installed.** On a pip or pipx install on
+  Windows, which bundles no QEMU, it no longer says QEMU "ships with Kurukuru"
+  or that reinstalling fixes it. It names the installer as the supported route,
+  or how to supply QEMU yourself. A QEMU override on such an install is
+  reported as a choice rather than a leftover to delete. A Windows host no
+  longer gets Linux advice on the accelerator line.
 
 ### Fixed
 
@@ -498,6 +517,7 @@ model is in [docs/SECURITY.md](docs/SECURITY.md).
 - **The installer is unsigned.** Windows SmartScreen will warn on first run.
   See the README for what the warning says and how to proceed.
 
+[0.1.5]: https://github.com/Paul-Nwokolo/kurukuru/releases/tag/v0.1.5
 [0.1.4]: https://github.com/Paul-Nwokolo/kurukuru/releases/tag/v0.1.4
 [0.1.3]: https://github.com/Paul-Nwokolo/kurukuru/releases/tag/v0.1.3
 [0.1.2]: https://github.com/Paul-Nwokolo/kurukuru/releases/tag/v0.1.2

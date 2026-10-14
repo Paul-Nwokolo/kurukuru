@@ -1715,3 +1715,15 @@ def test_launch_is_quiet_on_an_accelerated_host_end_to_end(cli, monkeypatch):
 
     assert result.exit_code == 0
     assert "No hardware acceleration" not in (result.output or "")
+
+
+def test_doctor_on_a_windows_host_gives_no_linux_advice(cli, monkeypatch):
+    """The reverse of the Linux guard. Found by the Windows pipx CI job, whose
+    doctor told a Windows host to check /dev/kvm."""
+    data = {**_no_qemu_on("package"),
+            "engine": {"available": False, "accel_available": False, "accel": "tcg"}}
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: data)
+    out = " ".join(cli("doctor").stdout.split())
+    assert "Windows Hypervisor Platform" in out
+    for linux in ("/dev/kvm", "apt install", "systemd", "On Linux", "on Linux"):
+        assert linux not in out, linux

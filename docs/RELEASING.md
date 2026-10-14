@@ -15,17 +15,53 @@ bytes, downloaded with no credentials, installed on a machine that has never
 seen the project. An automated step is still listed with what to read in its
 output, because "the workflow went green" has been wrong before.
 
+**Nothing published is ever removed.** Every GitHub release stays: releases
+are the record. A superseded one says so in its notes and points at its
+replacement, as 0.1.3's does; its assets are left alone. The same on PyPI:
+**yank, never delete.** A yank can be undone and keeps the history; a deletion
+frees nothing, because a version number is spent forever either way.
+
 ## Before the tag
 
-1. **Version** in `backend/kurukuru/product.py` (`VERSION`). The one place it
-   lives; the wheel and the installer both read it, so they cannot disagree.
-2. **CHANGELOG**: move `[Unreleased]` under the new version and date.
+1. **Version** in `backend/kurukuru/product.py` (`VERSION`). The wheel and
+   the installer both read it, so they cannot disagree. Two copies are edited by
+   hand with it: the placeholder in `.github/ISSUE_TEMPLATE/bug_report.yml` and
+   `KURUKURU_APP_VERSION` in `backend/.env.example`.
+2. **CHANGELOG**: move `[Unreleased]` under the new version, and add its link
+   reference at the bottom. The date goes in when the tag is pushed.
 3. **Draft the GitHub release** for the tag. The workflow uploads to an existing
    release and never creates or publishes one: publishing stays a human act.
 
+### 4. `verify` green on the commit being tagged, both pipx jobs included
+
+**Proves:** the suites pass on Windows (real QEMU) and Linux, and the wheel
+installs with pipx **on Linux and on Windows**, serves its dashboard, and gets
+`doctor` advice that fits a wheel.
+
+**Caught:** PyPI serves the wheel to Windows users whether or not that is
+intended, and Windows is where most users are. Before 0.1.5, `doctor` told a
+Windows pipx user that QEMU "ships with Kurukuru" and that reinstalling fixes
+it. A wheel bundles no QEMU, so both were wrong, and reinstalling would have
+sent them round in a circle. The first run of the Windows pipx job also found
+`doctor` telling a Windows host to check `/dev/kvm`.
+
+### 5. The TestPyPI rehearsal passed on the commit being tagged
+
+**A release requirement, not a nicety.** Run the release workflow by hand on
+`main` at the commit you will tag: *Actions → release → Run workflow*, with
+**Rehearse the PyPI publish on TestPyPI** ticked. It runs the real chain:
+`installer`, `checksum`, then `pypi` and `pypi-verify` against TestPyPI, with
+your approval on the `testpypi` environment. It must end green. Put the run's
+link in the release notes.
+
+**Why:** the first real upload cannot be repeated and claims the name. Two jobs
+that have never run end to end, guarding a step that cannot be undone, is the
+shape of problem this project keeps rediscovering. See
+[What the rehearsal proves](#what-the-rehearsal-proves-and-what-it-cannot).
+
 ## The release workflow (`v*` tag push)
 
-### 4. Installed and run on a clean Windows runner — `installer`
+### 6. Installed and run on a clean Windows runner — `installer`
 
 **Proves:** the installer, installed, works on a machine with nothing else on
 it. Not the staged tree: the actual setup `.exe`, then `kurukuru` driven
@@ -40,7 +76,7 @@ non-working install**, found by the first real external install (CHANGELOG
 build, an uninstall leaving a PATH entry behind — were invisible the same way
 until something ran what ships.
 
-### 5. The icon check — `installer`, `build_installer.verify_icon`
+### 7. The icon check — `installer`, `build_installer.verify_icon`
 
 **Proves:** `kurukuru.exe` *and* the setup `.exe` carry the product icon:
 every RT_ICON frame of an icon group byte-equal to `kurukuru.ico`'s frames.
@@ -54,7 +90,7 @@ the stock packager icon is the visual signature of an untrustworthy build
 frame Windows picks and how it premultiplies alpha differ even for the same
 icon.
 
-### 6. Upgrade over the previous release — `installer`, `tools/verify_upgrade.py`
+### 8. Upgrade over the previous release — `installer`, `tools/verify_upgrade.py`
 
 **Proves:** after installing this build *over the previous published release*
 — the path a real user takes — the installed tree is this build byte for byte,
@@ -73,7 +109,7 @@ including FastAPI 0.115.12's metadata beside 0.120.4's, on a security release
 whose whole content was "a different Starlette now runs". Every upgrade from
 0.1.1 to 0.1.3 shipped this way.
 
-### 7. The checksum file, checked on Linux before it is attached — `checksum`
+### 9. The checksum file, checked on Linux before it is attached — `checksum`
 
 **Proves:** `sha256sum -c` on the published `.sha256` passes, and the file
 contains **no carriage return**. Only then are the installer and its checksum
@@ -91,13 +127,20 @@ explicit carriage-return check failed it. `sha256sum -c` stays because it is
 what users run. The carriage-return check is what stops the regression. The
 job prints its `sha256sum` version for that reason.
 
-### 8. PyPI — `pypi`, then `pypi-verify`
+### 10. PyPI — `pypi-gate`, `pypi`, then `pypi-verify`
 
-See [PyPI](#pypi). Skipped on every tag until the maintainer turns it on.
+See [PyPI](#pypi). If publishing is off for a tag, **`pypi-gate` fails the
+run and says why**, rather than the PyPI jobs showing a quiet grey "skipped".
+
+**Caught (before it shipped):** a skip reads as a finished release. Measured
+on 2026-10-14: `PYPI_PUBLISHING` set on the `pypi` *environment*, where it was
+first created, is invisible to a job-level `if`, so the publish would have
+skipped silently with everything else green (DECISIONS #74). It must be a
+repository variable. The gate's message names that trap.
 
 ## After the workflow, before publishing the GitHub release
 
-### 9. Anonymous download-and-hash
+### 11. Anonymous download-and-hash
 
 Logged out (or `curl` with no token), into an **empty** directory: download the
 installer and its `.sha256` from the release page, then check **both**:
@@ -107,29 +150,31 @@ installer and its `.sha256` from the release page, then check **both**:
   built", which proves these are the bytes CI built and tested, not a file
   from your machine or a stale asset.
 
-**Proves:** what a stranger downloads is what was tested. This is item 4's
+**Proves:** what a stranger downloads is what was tested. This is item 6's
 lesson applied to the published file: 0.1.0 worked for the person who built it
 and for nobody else, and only a check made from a stranger's position would
 have shown it.
 
-**Caught:** it is how the CRLF checksum (item 7) was found. The 0.1.4 hashes
+**Caught:** it is how the CRLF checksum (item 9) was found. The 0.1.4 hashes
 matched, and then `sha256sum -c` on the published file failed.
 
-### 10. Release notes
+### 12. Release notes
 
 What changed for a user. Every advisory fixed is named by its ID, and every
 advisory recorded as not reachable is listed as such, never quietly left out.
 A reader deciding whether to upgrade needs both.
 
-### 11. Publish the release.
+### 13. Publish the release.
 
 ## PyPI
 
 **Not yet on PyPI.** The first upload is planned for 0.1.5 (DECISIONS #74).
-Until the setup below is done and the switch is on, the `pypi` job is skipped
-on every tag. `tools/test_release_publishing.py` fails if the gate, the job
+The `pypi` job has exactly two ways in: a pushed `v*` tag with the switch on
+(real PyPI), or a manual dispatch with `rehearse_testpypi` (TestPyPI only).
+`tools/test_release_publishing.py` fails if either way in changes, if a third
+appears, if a rehearsal could target real PyPI, or if the loud gate, the job
 ordering, the tokenless publishing, the repository check or the propagation
-handling is edited away.
+handling is edited away. Each was watched to fail against a deliberate break.
 
 ### One-time setup, in this order
 
@@ -158,6 +203,69 @@ handling is edited away.
 4. **Turn it on**: repository *Settings* → *Secrets and variables* →
    *Actions* → *Variables* → *New repository variable*:
    `PYPI_PUBLISHING` = `enabled`. Only after 1–3. No token, no secret.
+   **A repository variable, not an environment variable**: a job-level `if`
+   cannot see an environment's variables, so the publish would skip (measured;
+   `pypi-gate` now fails loudly if that happens).
+
+### One-time setup for the TestPyPI rehearsal
+
+TestPyPI is a separate service with separate accounts.
+
+1. **Create a TestPyPI account** at test.pypi.org, verify the email, and turn
+   on two-factor authentication.
+2. **Add a pending publisher** there: test.pypi.org → *Your account* →
+   *Publishing* → *Add a new pending publisher* → GitHub:
+
+   | Field | Value |
+   |---|---|
+   | PyPI Project Name | `kurukuru` |
+   | Owner | `Paul-Nwokolo` |
+   | Repository name | `kurukuru` |
+   | Workflow name | `release.yml` |
+   | Environment name | **`testpypi`** |
+
+   The same values as real PyPI's except the environment, **deliberately**.
+   The `pypi` environment only deploys `v*` tags, so a dispatch from `main`
+   cannot use it without either weakening that rule or pushing a tag. And the
+   difference is a safety property: real PyPI accepts only `pypi`, so no
+   rehearsal can reach it, whatever the workflow's expressions say.
+3. **Create the GitHub environment `testpypi`**: *Settings → Environments → New
+   environment*. Add yourself as a **required reviewer**, so the rehearsal
+   exercises the approval step too, and limit deployments to the `main` branch.
+   Create it before the first rehearsal; GitHub would otherwise create it on
+   first use, with no protection rules.
+
+No variable is needed: the rehearsal is gated by the dispatch input, and only
+a person with write access can dispatch.
+
+### What the rehearsal proves, and what it cannot
+
+**Proves**, on the commit you will tag: the build, the version check, trusted
+publishing's OIDC exchange with a pending publisher for `release.yml`, the
+environment approval, the upload action, and every `pypi-verify` check
+(served bytes, name, version, exact repository URL, the installed command)
+working end to end, as well as the `needs` chain that holds PyPI behind
+`installer` and `checksum`.
+
+**Cannot prove:**
+
+- **That real PyPI will behave the same.** TestPyPI is a different index
+  with its own CDN, so propagation times differ and are no prediction for the
+  real run. A green rehearsal is evidence the mechanics work, not a guarantee
+  the real run will be clean.
+- **That real PyPI's publisher is right.** The rehearsal exchanges a token
+  with TestPyPI's publisher (environment `testpypi`). A typo in real PyPI's
+  publisher shows only on the real run, as a refused upload, which publishes
+  nothing.
+- **That the name is ours.** `kurukuru` on TestPyPI says nothing about
+  `kurukuru` on PyPI.
+- **Resolving the package by name and its dependencies from one index.** The
+  rehearsal installs the TestPyPI file it just verified, with dependencies
+  from real PyPI, because anyone can upload a `fastapi` to TestPyPI. The real
+  run installs `kurukuru==X.Y.Z` by name from PyPI.
+- **The exact real version.** The rehearsal publishes `X.Y.Z.dev<run id>`,
+  so it never spends a real version and two rehearsals never collide. The
+  wheel differs from the real one in its version string only.
 
 ### What the workflow expects
 
@@ -170,10 +278,13 @@ handling is edited away.
   in any field makes PyPI refuse the upload; nothing is half-published.
 - `tools/build_wheel.py` produces exactly one file,
   `kurukuru-X.Y.Z-py3-none-any.whl`, its version equal to the tag's, with the
-  dashboard inside and a Project-URL that is exactly this repository. It is
-  refused **before** upload otherwise.
+  dashboard inside, a Project-URL that is exactly this repository, and a
+  project page (`backend/PYPI_README.md`) that is Markdown with no relative
+  links. It is refused **before** upload otherwise. The page used to be
+  `backend/README.md`, dev notes whose `../` links would all have broken on
+  PyPI.
 
-### 12. `pypi-verify`: what `pipx install kurukuru` gives a stranger is ours
+### 14. `pypi-verify`: what `pipx install kurukuru` gives a stranger is ours
 
 **Proves:** on a fresh runner with an empty pipx home, `pipx install
 kurukuru==X.Y.Z` from PyPI installs:
@@ -186,7 +297,7 @@ kurukuru==X.Y.Z` from PyPI installs:
   whatever its name and version say;
 - a `kurukuru version` that reports `X.Y.Z`.
 
-The same standard as item 9, applied to PyPI: checked from a stranger's
+The same standard as item 11, applied to PyPI: checked from a stranger's
 position, against what was built.
 
 **Propagation, and how to tell it from a real failure.** PyPI's CDN is

@@ -29,6 +29,10 @@ on:
         description: "Attach the installer to the release for this tag"
         type: boolean
         default: false
+      rehearse_testpypi:
+        description: "Rehearse the PyPI publish on TestPyPI (a .dev version; never real PyPI)"
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -348,30 +352,57 @@ jobs:
         run: |
           gh release upload "${{ github.ref_name }}" ./*-Setup.exe ./*-Setup.exe.sha256 --clobber
 
+  pypi-gate:
+    # LOUD when a release will not reach PyPI. Without this, a v* tag pushed
+    # while publishing is off shows `installer` and `checksum` green and the
+    # PyPI jobs grey as "skipped": a release that reads as finished, with
+    # nothing uploaded. Measured before 0.1.5 (DECISIONS #74): a
+    # PYPI_PUBLISHING set on the `pypi` *environment* is invisible to a
+    # job-level `if`, so that mistake skips silently too. This job fails the
+    # run instead, and says why. It needs nothing, so it fails at once.
+    name: PyPI publishing is on for this release
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push' && vars.PYPI_PUBLISHING != 'enabled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail, and say why
+        run: |
+          echo "::error title=PyPI publishing is OFF for $GITHUB_REF_NAME::The repository variable PYPI_PUBLISHING is not 'enabled', so this release will NOT be uploaded to PyPI. An environment-level variable of that name does not count: a job-level if cannot see it (measured, DECISIONS #74). Set it under Settings > Secrets and variables > Actions > Variables (repository), then re-run this workflow. If skipping PyPI for this release is deliberate, this failure is the record of that decision."
+          exit 1
+
   pypi:
-    # The first PyPI publish is planned for 0.1.5, by trusted publishing: no
-    # token is stored anywhere, PyPI trusts this workflow's OIDC identity.
+    # PyPI, by trusted publishing: no token is stored anywhere, PyPI trusts
+    # this workflow's OIDC identity (DECISIONS #74).
     #
-    # GATED, and off until the maintainer turns it on. It runs only for a
-    # pushed v* tag *and* when the repository variable PYPI_PUBLISHING is
-    # "enabled" — which is set only after the PyPI account and the pending
-    # publisher exist (docs/RELEASING.md, "PyPI"). Until then it is skipped.
-    # tools/test_release_publishing.py fails if this gate is ever removed.
+    # Two ways in, and only two. tools/test_release_publishing.py pins both.
     #
-    # Needs the Windows build and the checksum check to have passed first, so
-    # a release that is broken elsewhere never reaches PyPI. Publishing there
-    # cannot be undone — a version number, once uploaded, is spent forever.
-    name: publish to PyPI (gated)
+    # REAL: a pushed v* tag *and* the repository variable PYPI_PUBLISHING ==
+    # "enabled". Environment `pypi` (required reviewer, v* tags only) and
+    # upload.pypi.org.
+    #
+    # REHEARSAL: a manual dispatch with rehearse_testpypi. Environment
+    # `testpypi` and test.pypi.org, with a .dev<run id> version so no rehearsal
+    # ever collides with another, or with a real version. The same steps as
+    # the real run otherwise. It cannot reach real PyPI even through a bug in
+    # the expressions below: PyPI's publisher for this project accepts only the
+    # `pypi` environment, and `pypi` only deploys v* tags.
+    #
+    # Needs the Windows build and the checksum check first, in both modes, so
+    # a release broken elsewhere never reaches either index. An upload cannot
+    # be undone: a version number, once used, is spent forever.
+    name: publish to PyPI (gated) or rehearse on TestPyPI
     needs: [installer, checksum]
-    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push' && vars.PYPI_PUBLISHING == 'enabled'
+    if: >-
+      (startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push' && vars.PYPI_PUBLISHING == 'enabled')
+      || (github.event_name == 'workflow_dispatch' && inputs.rehearse_testpypi)
     runs-on: ubuntu-latest
     environment:
-      name: pypi
-      url: https://pypi.org/project/kurukuru/
+      name: ${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}
+      url: ${{ github.event_name == 'push' && 'https://pypi.org/project/kurukuru/' || 'https://test.pypi.org/project/kurukuru/' }}
     permissions:
       contents: read
       id-token: write
     outputs:
+      version: ${{ steps.wheel.outputs.version }}
       sha256: ${{ steps.wheel.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
@@ -386,35 +417,51 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: "Rehearsal only: a version TestPyPI has never seen"
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -eu
+          base="$(sed -nE 's/^VERSION = "([^"]+)"$/\1/p' backend/kurukuru/product.py)"
+          rehearsal="${base}.dev${GITHUB_RUN_ID}"
+          sed -i "s/^VERSION = \"${base}\"$/VERSION = \"${rehearsal}\"/" backend/kurukuru/product.py
+          grep -qx "VERSION = \"${rehearsal}\"" backend/kurukuru/product.py
+          echo "::notice title=rehearsal::building kurukuru ${rehearsal} for TestPyPI (this runner's checkout only)"
+
       - name: Build the wheel, dashboard inside, contents checked
         run: |
           (cd frontend && npm ci)
           python -m pip install --upgrade pip setuptools
           python tools/build_wheel.py --out dist
 
-      - name: The wheel is exactly this tag's version, and nothing else is uploaded
+      - name: The wheel is exactly the version this run publishes, and nothing else is uploaded
         id: wheel
         run: |
           set -eu
-          version="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(sed -nE 's/^VERSION = "([^"]+)"$/\1/p' backend/kurukuru/product.py)"
+          fi
           wheel="dist/kurukuru-${version}-py3-none-any.whl"
-          test -f "$wheel" || { echo "::error title=pypi::no $wheel for tag $GITHUB_REF_NAME"; exit 1; }
+          test -f "$wheel" || { echo "::error title=pypi::no $wheel for $GITHUB_REF_NAME"; ls dist; exit 1; }
           test "$(ls dist | wc -l)" -eq 1 || { echo "::error title=pypi::dist/ holds more than the one wheel"; ls dist; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$wheel" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Publish (trusted publishing; no stored token)
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          repository-url: ${{ github.event_name == 'push' && 'https://upload.pypi.org/legacy/' || 'https://test.pypi.org/legacy/' }}
 
   pypi-verify:
-    # The release checklist's PyPI step, automated: what `pipx install
-    # kurukuru` gives a stranger must be *our* package — the name, this
-    # version, our repository — and its bytes must be the wheel just built.
-    # Same standard as the anonymous download-and-hash of the installer.
-    # INSTALL-LINUX may recommend `pipx install kurukuru` only after this has
-    # passed for a release (docs/RELEASING.md).
-    name: pipx install from PyPI is ours
+    # The release checklist's PyPI step, automated: what a stranger installs
+    # must be *our* package - the name, this version, our repository - and its
+    # bytes must be the wheel just built. Same standard as the anonymous
+    # download-and-hash of the installer. INSTALL-LINUX may recommend
+    # `pipx install kurukuru` only after this has passed against a real upload
+    # (docs/RELEASING.md). In a rehearsal it checks TestPyPI the same way.
+    name: what the index serves is ours
     needs: pypi
     runs-on: ubuntu-latest
     steps:
@@ -422,44 +469,58 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install from PyPI into a clean pipx home, and check it
+      - name: Install from the index into a clean pipx home, and check it
         env:
           BUILT_SHA256: ${{ needs.pypi.outputs.sha256 }}
+          VERSION: ${{ needs.pypi.outputs.version }}
           OUR_REPOSITORY: https://github.com/Paul-Nwokolo/kurukuru
         run: |
           set -eu
-          version="${GITHUB_REF_NAME#v}"
+          version="$VERSION"
           export PIPX_HOME="$RUNNER_TEMP/pipx-home" PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            index="https://pypi.org/simple/"; page="https://pypi.org/project/kurukuru/$version/"
+            # Belt and braces: the real run verifies the tag's version, whatever
+            # the publish job reported.
+            test "$version" = "${GITHUB_REF_NAME#v}" || { echo "::error title=pypi::published $version but the tag is $GITHUB_REF_NAME"; exit 1; }
+          else
+            index="https://test.pypi.org/simple/"; page="https://test.pypi.org/project/kurukuru/$version/"
+          fi
 
-          # PROPAGATION, retried and bounded. PyPI's CDN is eventually
+          # PROPAGATION, retried and bounded. An index's CDN is eventually
           # consistent: for a few minutes after the upload, some edges still
           # serve an index without the new version. That is "no matching
           # distribution", and only that is retried: 30 tries, 10 s apart.
           # Running out is reported as propagation, not as a bad upload.
           wheel="$RUNNER_TEMP/dl/kurukuru-${version}-py3-none-any.whl"
           for i in $(seq 1 30); do
-            pip download --no-deps --no-cache-dir -q -d "$RUNNER_TEMP/dl" "kurukuru==$version" 2>/dev/null && break
-            echo "kurukuru==$version not on the index yet (try $i/30)"
+            pip download --no-deps --no-cache-dir -q --index-url "$index" -d "$RUNNER_TEMP/dl" "kurukuru==$version" 2>/dev/null && break
+            echo "kurukuru==$version not on $index yet (try $i/30)"
             sleep 10
           done
           if [ ! -f "$wheel" ]; then
-            echo "::error title=pypi propagation::kurukuru==$version still not served after 5 minutes. PROPAGATION, not a verified failure: check https://pypi.org/project/kurukuru/$version/ and re-run this job. Nothing here says the upload is wrong."
+            echo "::error title=pypi propagation::kurukuru==$version still not served by $index after 5 minutes. PROPAGATION, not a verified failure: check $page and re-run failed jobs. Nothing here says the upload is wrong."
             exit 1
           fi
 
-          # Everything from here is REAL and never retried. PyPI never lets a
-          # filename be uploaded twice, so a stale edge cannot serve different
-          # bytes under this name: a mismatch means this is not our wheel.
+          # Everything from here is REAL and never retried. An index never
+          # lets a filename be uploaded twice, so a stale edge cannot serve
+          # different bytes under this name: a mismatch means this is not our
+          # wheel.
           served="$(sha256sum "$wheel" | cut -d' ' -f1)"
           echo "built:  $BUILT_SHA256"
           echo "served: $served"
-          test "$served" = "$BUILT_SHA256" || { echo "::error title=pypi::PyPI serves different bytes from the wheel this run built"; exit 1; }
+          test "$served" = "$BUILT_SHA256" || { echo "::error title=pypi::$index serves different bytes from the wheel this run built"; exit 1; }
 
-          # pip download has just found it, so pipx should too; a short retry
-          # only for a second edge that lags the first.
+          # The real run installs by name from PyPI, exactly as a stranger
+          # would. A rehearsal installs the TestPyPI file just verified, with
+          # its dependencies from real PyPI: anyone can upload a `fastapi` to
+          # TestPyPI, and resolving dependencies there would test someone
+          # else's packages. A short retry for a second edge that lags.
+          if [ "$GITHUB_EVENT_NAME" = push ]; then spec="kurukuru==$version"; else spec="$wheel"; fi
           for i in 1 2 3 4 5 6; do
-            pipx install --pip-args=--no-cache-dir "kurukuru==$version" && break
-            [ "$i" = 6 ] && { echo "::error title=pypi::pipx install kurukuru==$version failed although the wheel is served. REAL: read the pipx output above."; exit 1; }
+            pipx install --pip-args=--no-cache-dir "$spec" && break
+            [ "$i" = 6 ] && { echo "::error title=pypi::pipx install $spec failed although the wheel is served. REAL: read the pipx output above."; exit 1; }
             sleep 20
           done
 
@@ -485,4 +546,4 @@ jobs:
           sys.exit(1 if problems else 0)
           EOF
           "$PIPX_BIN_DIR/kurukuru" version | grep -F "kurukuru  $version"
-          echo "::notice title=pypi::pipx install kurukuru==$version is ours: name, version, repository and bytes all match"
+          echo "::notice title=pypi::kurukuru==$version from $index is ours: name, version, repository and bytes all match"

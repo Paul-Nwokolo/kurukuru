@@ -3253,7 +3253,7 @@ present, not just the top-level pins):
 | PYSEC-2026-249 | url-encoded forms ignore `max_fields`/`max_part_size` | 1.3.1 | No — nothing calls `request.form()` |
 | PYSEC-2026-2280 | `HTTPEndpoint` dispatches on an attacker-chosen method name | 1.1.0 | No — FastAPI does not use `HTTPEndpoint` |
 | PYSEC-2026-2281 | `StaticFiles` resolves a UNC path on Windows (NTLM leak) | 1.1.0 | No — `StaticFiles` is not used; `kurukuru.safe_paths` serves the dashboard and refuses UNC before resolving |
-| PYSEC-2026-1845 | pytest's `/tmp/pytest-of-{user}` on UNIX | pytest 9.0.3 | No — a dev dependency, never shipped, and the suite runs on Windows |
+| PYSEC-2026-1845 | pytest's `/tmp/pytest-of-{user}` on UNIX | pytest 9.0.3 | No — a dev dependency, never shipped. *Corrected 2026-10-14:* this said "the suite runs on Windows", true when written and not since Phase 18: it also runs on GitHub's Ubuntu runners, and ran in WSL2, with no `basetemp` set, so it does use `/tmp/pytest-of-<user>` there. The advisory needs a second local user sharing `/tmp`; a runner is a single-user VM discarded after each job, and the WSL2 distribution is single-user. Still not reachable, for that reason instead |
 
 Seven Starlette advisories, not the four recorded, and the newest fixes are in
 1.3.x. But exactly **one is reachable**, and it is fixed at **0.49.1**.
@@ -3903,6 +3903,62 @@ reported propagation. `build_wheel`'s check was watched to fail with the check
 disabled, and passes the real wheel. The jobs themselves have not run on GitHub
 and cannot until the switch is on; a dry `release` run on the branch showed
 both as skipped.
+
+**Before the first tag (2026-10-14), six more decisions:**
+
+- **The project page says where the package stands.** The wheel carried
+  `backend/README.md`, backend dev notes whose four links are relative
+  (`../README.md` and three more) and would all break on PyPI.
+  `backend/PYPI_README.md` replaces it: what Kurukuru is, that Windows users want
+  the installer, and that the Linux packaging is complete but unverified on real
+  KVM hardware, with no VM ever booted under KVM from it. That is said plainly:
+  the page is the first impression, and honest beats impressive.
+  `check_wheel` refuses an empty, non-Markdown or relatively-linked page before
+  upload. Measured against the real wheels: the dev-notes wheel is refused for
+  its four links, and the new one passes. The first version of that check saw
+  no body at all in a Windows-built wheel, because setuptools on Windows writes
+  METADATA with CRLF. CI builds on Linux, so CI would never have noticed.
+- **Windows stays the only OS classifier.** A classifier is a claim, and no VM
+  has been booted under KVM. Looking odd for a pipx-targeted package costs less
+  than a claim we cannot evidence, and the page explains it in a sentence.
+- **pip/pipx on Windows is tested, because PyPI will serve it there anyway.**
+  `verify.yml` gains `wheel-windows`: pipx install, serve, dashboard, state
+  under `%USERPROFILE%`, and `doctor`. That found what it was for. `doctor`
+  knew only the installer and a checkout, so it told a pipx user on Windows
+  that QEMU "ships with Kurukuru" and that reinstalling fixes it. The backend now
+  reports `host.install` (`installer`, `package`, `source`). A package install is
+  sent to the installer as the supported route, or told how to supply QEMU and
+  that reinstalling will not add it. A QEMU override there is reported as a
+  choice, not as a 0.1.0 leftover to delete. The job's first green run also
+  showed the Accelerator line telling a Windows host to check `/dev/kvm`; a
+  backend that says it is on Windows now gets Windows advice only. Each fix was
+  watched to fail with the old behaviour. One CI fact learned on the way: a
+  backend started in one Windows step is gone by the next.
+- **A release that skips PyPI fails loudly.** The probe, run 38647091801,
+  measured that an environment-level `PYPI_PUBLISHING`, where it was first
+  created, is invisible to a job-level `if`, so the publish would have skipped
+  with everything else green. GitHub's documentation does not say this. The
+  maintainer had already moved it to a repository variable. `pypi-gate` is the
+  exact complement of the real gate: it fails the run on a `v*` tag when the
+  switch is off, and names that trap.
+- **A TestPyPI rehearsal is a release requirement.** The same `pypi` and
+  `pypi-verify` jobs, opened by a manual dispatch with `rehearse_testpypi`,
+  upload `X.Y.Z.dev<run id>` to TestPyPI and verify it there. They run behind
+  the same `installer` and `checksum` jobs, with an approval on a separate
+  `testpypi` environment. Separate because `pypi` only deploys `v*` tags, which
+  a dispatch from `main` is not, and because it makes a rehearsal unable to
+  reach real PyPI: that publisher accepts only `pypi`. The rehearsal installs
+  the TestPyPI file with dependencies from real PyPI, since anyone can upload a
+  `fastapi` to TestPyPI. What a green rehearsal does and does not prove is in
+  RELEASING.md: the mechanics, not the real run's propagation or the real
+  publisher's configuration. The guard test now pins exactly two ways into the
+  job and that only a tag push selects `pypi` and upload.pypi.org. It was
+  watched to fail against ten breaks, among them a third way in, a rehearsal
+  pointed at the real index or environment, `skip-existing`, the loud gate
+  silenced, and a rehearsal without its `.dev` suffix.
+- **Nothing published is removed.** Every GitHub release stays as the record,
+  superseded ones marked in their notes, and on PyPI a bad version is yanked,
+  never deleted.
 
 ## Known limitations
 

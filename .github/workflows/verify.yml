@@ -380,7 +380,7 @@ jobs:
           for must in "does not include QEMU" "releases/latest" "qemu.org" "Reinstalling the package will not add QEMU"; do
             grep -qF "$must" <<< "$flat" || { echo "::error title=doctor::missing from a Windows pipx doctor: $must"; exit 1; }
           done
-          if grep -qiE "ships with|apt install|systemd" <<< "$flat"; then
+          if grep -qiE "ships with|apt install|systemd|/dev/kvm" <<< "$flat"; then
             echo "::error title=doctor::installer- or Linux-shaped advice on a Windows pipx install"; exit 1
           fi
 

@@ -645,6 +645,13 @@ def _backend_checks(client: ApiClient) -> list[Check]:
                 f"hardware acceleration unavailable (using {engine.get('accel') or 'tcg'})",
                 "VMs still run, roughly 30x slower. See the KVM line for why."
                 if on_linux
+                # A backend that says it is on Windows gets Windows advice only;
+                # one too old to say gets both, as it always did. Found by the
+                # Windows pipx CI job, whose doctor told a Windows host about
+                # /dev/kvm.
+                else "VMs still run, roughly 30x slower. Enable 'Windows "
+                "Hypervisor Platform' in Windows Features and reboot."
+                if str(host.get("platform") or "").startswith("win")
                 else "VMs still run, roughly 30x slower. On Windows, enable "
                 "'Windows Hypervisor Platform' in Windows Features and reboot; on "
                 "Linux, make sure /dev/kvm exists and you can read it.",
