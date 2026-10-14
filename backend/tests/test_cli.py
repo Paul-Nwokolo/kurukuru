@@ -714,6 +714,61 @@ def test_doctor_fails_and_prescribes_when_qemu_is_missing(cli, monkeypatch):
     assert "PATH" in result.stdout
 
 
+def _no_qemu_on(install: str) -> dict:
+    return {
+        **HEALTHY_DIAGNOSTICS,
+        "engine": {"available": False, "error": "QEMU binary not found"},
+        "host": {"platform": "win32", "install": install},
+    }
+
+
+def test_doctor_on_a_windows_pipx_install_does_not_promise_a_bundled_qemu(cli, monkeypatch):
+    """PyPI serves the wheel to Windows users whether or not we mean it to.
+
+    The advice used to assume only the installer or a checkout existed, and
+    told a pipx user that QEMU "ships with Kurukuru" and reinstalling fixes it.
+    """
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: _no_qemu_on("package"))
+    result = cli("doctor")
+    out = " ".join(result.stdout.split())  # rich wraps long remedies
+    assert result.exit_code == ExitCode.FAILURE
+    assert "does not include QEMU" in out
+    assert "releases/latest" in out  # the supported Windows route
+    assert "qemu.org" in out and "KURUKURU_QEMU_SYSTEM_BINARY" in out
+    assert "ships with" not in out
+    assert "Reinstalling the package will not add QEMU" in out
+
+
+def test_doctor_on_the_installer_build_says_it_bundles_qemu(cli, monkeypatch):
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: _no_qemu_on("installer"))
+    out = " ".join(cli("doctor").stdout.split())
+    assert "ships with this build" in out
+    assert "pip/pipx" not in out and "checkout" not in out
+
+
+def test_a_qemu_override_on_a_windows_pipx_install_is_a_choice_not_a_leftover(cli, monkeypatch):
+    """Nothing is bundled, so pointing at a QEMU is how this install finds one.
+
+    Telling that user to delete it as a 0.1.0 leftover would break the one
+    thing making their install work.
+    """
+    data = {
+        **HEALTHY_DIAGNOSTICS,
+        "host": {"platform": "win32", "install": "package"},
+        "qemu_overrides": {
+            "KURUKURU_QEMU_SYSTEM_BINARY": {
+                "in_use": r"C:\qemu\qemu-system-x86_64.exe",
+                "would_be": "qemu-system-x86_64",
+                "exists": True,
+            }
+        },
+    }
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: data)
+    out = " ".join(cli("doctor").stdout.split())
+    assert "PASS QEMU binary" in out
+    assert "QEMU override" not in out and "0.1.0 only" not in out
+
+
 def test_doctor_warns_but_passes_without_an_accelerator(cli, monkeypatch):
     slow = {
         **HEALTHY_DIAGNOSTICS,

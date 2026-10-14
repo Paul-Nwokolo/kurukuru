@@ -290,6 +290,105 @@ jobs:
           kurukuru service status
           test $code -eq 0 -o $code -eq 1
 
+  wheel-windows:
+    # PyPI will serve this wheel to Windows users whether or not they meant to
+    # get it, and Windows is where most users are. So the pip/pipx route is
+    # checked here even though the installer is the supported one: install
+    # the wheel with pipx, serve from it, and hold doctor to advice that fits
+    # a wheel. A wheel bundles no QEMU, and doctor once told exactly this user
+    # that QEMU "ships with Kurukuru" and that reinstalling fixes it.
+    name: wheel installs with pipx (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Wide enough that doctor's remedies are not wrapped mid-phrase.
+      COLUMNS: "200"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build the wheel
+        run: |
+          (cd frontend && npm ci)
+          python -m pip install --upgrade pip setuptools pipx
+          python tools/build_wheel.py --out dist
+
+      - name: No QEMU on this runner, so what doctor says about that is tested
+        run: |
+          if command -v qemu-system-x86_64 || command -v qemu-system-x86_64.exe; then
+            echo "::error title=wheel-windows::this runner has QEMU on PATH; the no-QEMU advice would go untested"
+            exit 1
+          fi
+
+      - name: Install it with pipx, and run the installed copy
+        run: |
+          set -eu
+          echo "PIPX_BIN_DIR=$RUNNER_TEMP\\pipx-bin" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP\\pipx-bin" >> "$GITHUB_PATH"
+          export PIPX_BIN_DIR="$RUNNER_TEMP\\pipx-bin"
+          python -m pipx install dist/kurukuru-*.whl
+          version="$(ls dist | sed -E 's/^kurukuru-(.*)-py3-none-any\.whl$/\1/')"
+          "$PIPX_BIN_DIR/kurukuru.exe" version | tee version.txt
+          grep -F "kurukuru  $version" version.txt
+
+      - name: Serve from the wheel and check what it serves
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Start-Process -FilePath kurukuru -ArgumentList 'serve' -WindowStyle Hidden `
+            -RedirectStandardOutput serve.log -RedirectStandardError serve.err
+          $up = $false
+          foreach ($i in 1..60) {
+            try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7842/api/health | Out-Null; $up = $true; break }
+            catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $up) { Get-Content serve.log, serve.err; throw 'the backend never answered /api/health' }
+          # The dashboard comes out of the wheel, not a checkout.
+          $page = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7842/instances).Content
+          if ($page -notmatch '(?i)<!doctype html>') { throw 'the dashboard was not served' }
+          if (-not (Select-String -Quiet -Path serve.log, serve.err -Pattern '_dashboard')) { throw 'not served from the packaged dashboard' }
+          # State in the Windows home tree.
+          if (-not (Test-Path "$env:USERPROFILE\.kurukuru")) { throw 'no state directory under %USERPROFILE%\.kurukuru' }
+
+      - name: doctor on a Windows pipx install gives advice for a wheel
+        run: |
+          set -u
+          py="$(python -m pipx environment --value PIPX_LOCAL_VENVS)/kurukuru/Scripts/python.exe"
+          "$py" - <<'EOF'
+          import secrets
+          from kurukuru.cli import auth_store, host_admin
+          created = host_admin.create_owner("ci", secrets.token_urlsafe(18), "ci")
+          auth_store.save(created.token, "")
+          EOF
+          # doctor is meant to exit 1 here (no QEMU is a FAIL); 3 would mean
+          # the backend was unreachable, a different failure.
+          set +e
+          kurukuru doctor > doctor.txt; code=$?
+          set -e
+          echo "doctor exit: $code"
+          cat doctor.txt
+          test "$code" -eq 1
+          flat="$(tr -s ' \r\n' ' ' < doctor.txt)"
+          for must in "does not include QEMU" "releases/latest" "qemu.org" "Reinstalling the package will not add QEMU"; do
+            grep -qF "$must" <<< "$flat" || { echo "::error title=doctor::missing from a Windows pipx doctor: $must"; exit 1; }
+          done
+          if grep -qiE "ships with|apt install|systemd" <<< "$flat"; then
+            echo "::error title=doctor::installer- or Linux-shaped advice on a Windows pipx install"; exit 1
+          fi
+
   frontend:
     name: frontend verify
     runs-on: ubuntu-latest

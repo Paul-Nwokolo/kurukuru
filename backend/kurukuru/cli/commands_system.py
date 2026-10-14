@@ -338,6 +338,53 @@ def _application_control_checks(data: dict, *, engine_ok: bool) -> list[Check]:
     ]
 
 
+#: Where a Windows user without the installer is sent: the installer bundles a
+#: tested QEMU and is the supported way to run Kurukuru on Windows.
+WINDOWS_INSTALLER_URL = "https://github.com/Paul-Nwokolo/kurukuru/releases/latest"
+
+
+def _qemu_missing_remedy(host: dict, *, on_linux: bool, qemu_install: object) -> str:
+    """What to do when QEMU cannot be run, for the host *and* the install kind.
+
+    A wheel bundles no QEMU on any platform, so on Windows a pip or pipx user
+    needs different advice from someone who ran the installer — and "reinstall"
+    would send them round in a circle. ``host["install"]`` is absent from a
+    backend older than 0.1.5; that keeps the advice it always gave.
+    """
+    if on_linux and qemu_install:
+        # Linux does not bundle QEMU (DECISIONS #70), so the answer is the
+        # distribution's package — named for this distribution.
+        return (f"Kurukuru uses your distribution's QEMU on Linux. Install it:\n"
+                f"       {qemu_install}")
+    install = host.get("install")
+    if install == "package":
+        return (
+            "This is a pip/pipx install, and the Python package does not include "
+            "QEMU. On Windows the supported route is the installer, which bundles a "
+            f"tested QEMU: {WINDOWS_INSTALLER_URL}\n"
+            "     To keep this install instead, install QEMU for Windows from "
+            "https://www.qemu.org/download/#windows and put qemu-system-x86_64 and "
+            "qemu-img on PATH, or point KURUKURU_QEMU_SYSTEM_BINARY and "
+            "KURUKURU_QEMU_IMG_BINARY at them. Reinstalling the package will not "
+            "add QEMU."
+        )
+    if install == "installer":
+        # The installed Windows build bundles QEMU and finds it for itself.
+        return ("QEMU ships with this build and is found automatically — if it "
+                "cannot run, the check above is the usual reason, and reinstalling "
+                "is the fix for a damaged bundle.")
+    if install == "source":
+        return ("Running from a checkout: install QEMU and put qemu-system-x86_64 "
+                "and qemu-img on the backend's PATH.")
+    # Unknown (an older backend): both cases, in the order that matches who
+    # most likely hits it.
+    return ("On an installed build QEMU ships with Kurukuru and is found "
+            "automatically — if this fails there, the check above is the "
+            "usual reason, and reinstalling is the fix for a damaged "
+            "bundle. Running from a checkout, install QEMU and put "
+            "qemu-system-x86_64 and qemu-img on the backend's PATH.")
+
+
 def _override_checks(data: dict) -> list[Check]:
     """Whether someone has pointed this install at a QEMU by hand.
 
@@ -562,24 +609,16 @@ def _backend_checks(client: ApiClient) -> list[Check]:
                 "QEMU",
                 FAIL,
                 str(engine.get("error") or "qemu-system-x86_64 could not be run"),
-                # Linux does not bundle QEMU (DECISIONS #70), so the answer is
-                # the distribution's package — named for this distribution.
-                f"Kurukuru uses your distribution's QEMU on Linux. Install it:\n"
-                f"       {qemu_install}"
-                if on_linux and qemu_install
-                # The installed Windows build bundles QEMU and finds it for
-                # itself, so "install QEMU" is advice for a checkout, not for
-                # the audience most likely to be reading this. Both are named,
-                # in the order that matches who hits it.
-                else "On an installed build QEMU ships with Kurukuru and is found "
-                "automatically — if this fails there, the check above is the "
-                "usual reason, and reinstalling is the fix for a damaged "
-                "bundle. Running from a checkout, install QEMU and put "
-                "qemu-system-x86_64 and qemu-img on the backend's PATH.",
+                _qemu_missing_remedy(host, on_linux=on_linux, qemu_install=qemu_install),
             )
         )
 
-    if on_linux:
+    # An override is a choice wherever nothing is bundled — Linux, and a pip or
+    # pipx install or a checkout on Windows — and is reported as the fact it is.
+    # Only the installer build treats one as a probable 0.1.0 leftover. A
+    # backend older than 0.1.5 does not say how it was installed; it gets the
+    # installer's treatment, which is what it always had.
+    if on_linux or host.get("install") in ("package", "source"):
         # Nothing is bundled on Linux, so pointing at a particular QEMU is a
         # choice, not a leftover from the 0.1.0 workaround — reported as the
         # fact it is, and failed only if the file is not there.

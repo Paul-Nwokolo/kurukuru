@@ -489,7 +489,9 @@ def diagnostics(
     # that is a policy with two answers (DECISIONS #69).
     import sys
 
-    host: dict[str, object] = {"platform": sys.platform}
+    from kurukuru.config import install_kind
+
+    host: dict[str, object] = {"platform": sys.platform, "install": install_kind()}
     if sys.platform.startswith("linux"):
         from kurukuru import linux_host
         from kurukuru.product import STATE_DIR, xdg_state_dir

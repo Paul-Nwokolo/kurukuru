@@ -98,6 +98,36 @@ def bundled_qemu_binary(name: str, base: Path | None = None) -> str | None:
     return str(candidate) if candidate.is_file() else None
 
 
+def install_kind() -> str:
+    """How this copy of Kurukuru was installed, for advice that depends on it.
+
+    ``"installer"``: the frozen Windows build, which bundles QEMU.
+    ``"package"``: a wheel installed by pip or pipx, which bundles nothing; PyPI
+    serves this to Windows users too, whether or not they meant to get it.
+    ``"source"``: a checkout, editable install or not.
+
+    Exists because ``doctor`` used to know only the first and last, and told a
+    pipx user on Windows that QEMU "ships with Kurukuru" and that reinstalling
+    fixes it — it does neither for a wheel.
+    """
+    if getattr(sys, "frozen", False):
+        return "installer"
+    import json
+    from importlib.metadata import PackageNotFoundError, distribution
+
+    try:
+        dist = distribution("kurukuru")
+    except PackageNotFoundError:
+        return "source"
+    try:
+        direct_url = json.loads(dist.read_text("direct_url.json") or "{}")
+    except ValueError:
+        direct_url = {}
+    if (direct_url.get("dir_info") or {}).get("editable"):
+        return "source"
+    return "package"
+
+
 def _default_qemu_system() -> str:
     return bundled_qemu_binary("qemu-system-x86_64") or "qemu-system-x86_64"
 
