@@ -28,7 +28,9 @@ frees nothing, because a version number is spent forever either way.
    hand with it: the placeholder in `.github/ISSUE_TEMPLATE/bug_report.yml` and
    `KURUKURU_APP_VERSION` in `backend/.env.example`.
 2. **CHANGELOG**: move `[Unreleased]` under the new version, and add its link
-   reference at the bottom. The date goes in when the tag is pushed.
+   reference at the bottom. The date is the planned tag date, and it goes in
+   *before* the rehearsal (item 5): the rehearsed commit must be the tagged
+   one, so nothing changes between them, not even the date.
 3. **Draft the GitHub release** for the tag. The workflow uploads to an existing
    release and never creates or publishes one: publishing stays a human act.
 
