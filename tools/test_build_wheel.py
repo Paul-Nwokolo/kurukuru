@@ -27,6 +27,10 @@ GOOD = [
 METADATA = (
     "Metadata-Version: 2.4\nName: kurukuru\nVersion: 0.1.4\n"
     "Project-URL: Homepage, https://github.com/Paul-Nwokolo/kurukuru\n"
+    "Description-Content-Type: text/markdown\n"
+    "\n"
+    "# Kurukuru\n\nSee <https://github.com/Paul-Nwokolo/kurukuru> and "
+    "[the releases](https://github.com/Paul-Nwokolo/kurukuru/releases/latest).\n"
 )
 
 
@@ -77,3 +81,40 @@ def test_a_wheel_that_does_not_name_this_repository_is_refused(tmp_path):
     ):
         problems = build_wheel.check_wheel(_wheel(tmp_path, GOOD, metadata=metadata), "0.1.4")
         assert any("no Project-URL naming" in p for p in problems), metadata
+
+
+def test_the_pypi_page_must_not_carry_repository_relative_links():
+    # backend/README.md's own first link, which is what the wheel used to ship.
+    problems = build_wheel.description_problems(
+        METADATA + "Setup lives in the [root README](../README.md).\n"
+    )
+    assert problems == ["relative or non-https link on the PyPI page: ../README.md"]
+    assert build_wheel.description_problems(METADATA + '<img src="docs/images/x.png">\n')
+
+
+def test_an_empty_or_undeclared_description_is_refused():
+    headers = METADATA.partition("\n\n")[0]
+    assert any("empty project page" in p for p in build_wheel.description_problems(headers + "\n\n"))
+    undeclared = METADATA.replace("Description-Content-Type: text/markdown\n", "")
+    assert any("text/markdown" in p for p in build_wheel.description_problems(undeclared))
+
+
+def test_the_real_pypi_page_passes_and_says_what_it_must():
+    """backend/PYPI_README.md as shipped: no relative links, and the three
+    things the project page exists to say (DECISIONS #74)."""
+    page = (build_wheel.REPO / "backend" / "PYPI_README.md").read_text(encoding="utf-8")
+    assert build_wheel.description_problems(
+        "Description-Content-Type: text/markdown\n\n" + page) == []
+    flat = " ".join(page.split())
+    assert "you want the installer, not this package" in flat
+    assert "releases/latest" in flat
+    assert "complete and unverified on real KVM hardware" in flat
+    assert "No virtual machine has ever been booted under KVM" in flat
+
+
+def test_a_windows_built_wheel_with_crlf_metadata_is_read_correctly():
+    # Measured: setuptools on Windows writes METADATA with CRLF, and the
+    # header/body split saw no body at all until line endings were normalised.
+    crlf = METADATA.replace("\n", "\r\n")
+    assert build_wheel.description_problems(crlf) == []
+    assert build_wheel.description_problems(crlf + "[x](../README.md)\r\n")

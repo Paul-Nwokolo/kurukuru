@@ -30,6 +30,7 @@ Stages:
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -92,6 +93,35 @@ def check_wheel(wheel: Path, version: str) -> list[str]:
     if REPOSITORY_URL not in urls:
         problems.append(f"no Project-URL naming {REPOSITORY_URL}: nothing ties an installed "
                         f"copy to this repository")
+    problems.extend(description_problems(metadata))
+    return problems
+
+
+#: A Markdown link or image target, ``](target)``, or an HTML href/src.
+_LINK_TARGET = re.compile(r"\]\(\s*<?([^)\s>]+)|(?:href|src)\s*=\s*[\"']([^\"']+)")
+
+
+def description_problems(metadata: str) -> list[str]:
+    """The PyPI project page: present, Markdown, and no link that only works
+    inside the repository.
+
+    The wheel used to carry backend/README.md, which is dev notes whose links
+    are relative (``../README.md``) and break on PyPI. Refused here, before an
+    upload that cannot be undone, rather than noticed on the live page.
+    """
+    # A wheel built on Windows writes METADATA with CRLF; one built on Linux,
+    # as CI builds it, with LF. Measured: without this, a Windows-built wheel
+    # had no body as far as this check could see.
+    headers, _, body = metadata.replace("\r\n", "\n").partition("\n\n")
+    problems = []
+    if "Description-Content-Type: text/markdown" not in headers:
+        problems.append("the description is not declared as text/markdown")
+    if not body.strip():
+        problems.append("the wheel has no description: PyPI would show an empty project page")
+    for match in _LINK_TARGET.finditer(body):
+        target = match.group(1) or match.group(2)
+        if not target.startswith(("https://", "mailto:", "#")):
+            problems.append(f"relative or non-https link on the PyPI page: {target}")
     return problems
 
 

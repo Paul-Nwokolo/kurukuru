@@ -344,27 +344,22 @@ jobs:
           "$PIPX_BIN_DIR/kurukuru.exe" version | tee version.txt
           grep -F "kurukuru  $version" version.txt
 
-      - name: Serve from the wheel and check what it serves
-        shell: pwsh
+      # One step, not two: on a Windows runner a backend started in one step is
+      # gone by the next (measured on this job's first run: the serve checks
+      # passed, then doctor found nothing listening and exited 3). The Linux
+      # job's backend survives between steps; this one cannot be relied on to.
+      - name: Serve from the wheel, check what it serves, and what doctor says
         run: |
-          $ErrorActionPreference = 'Stop'
-          Start-Process -FilePath kurukuru -ArgumentList 'serve' -WindowStyle Hidden `
-            -RedirectStandardOutput serve.log -RedirectStandardError serve.err
-          $up = $false
-          foreach ($i in 1..60) {
-            try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7842/api/health | Out-Null; $up = $true; break }
-            catch { Start-Sleep -Seconds 1 }
-          }
-          if (-not $up) { Get-Content serve.log, serve.err; throw 'the backend never answered /api/health' }
+          set -eu
+          kurukuru serve > serve.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:7842/api/health > /dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:7842/api/health || { cat serve.log; exit 1; }
           # The dashboard comes out of the wheel, not a checkout.
-          $page = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:7842/instances).Content
-          if ($page -notmatch '(?i)<!doctype html>') { throw 'the dashboard was not served' }
-          if (-not (Select-String -Quiet -Path serve.log, serve.err -Pattern '_dashboard')) { throw 'not served from the packaged dashboard' }
+          curl -sf http://127.0.0.1:7842/instances | grep -qi '<!doctype html>'
+          grep -q "_dashboard" serve.log
           # State in the Windows home tree.
-          if (-not (Test-Path "$env:USERPROFILE\.kurukuru")) { throw 'no state directory under %USERPROFILE%\.kurukuru' }
+          test -d "$USERPROFILE/.kurukuru"
 
-      - name: doctor on a Windows pipx install gives advice for a wheel
-        run: |
           set -u
           py="$(python -m pipx environment --value PIPX_LOCAL_VENVS)/kurukuru/Scripts/python.exe"
           "$py" - <<'EOF'

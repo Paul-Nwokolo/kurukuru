@@ -9,7 +9,9 @@ name = "kurukuru"
 # /health endpoint inside it.
 dynamic = ["version"]
 description = "Kurukuru — local cloud infrastructure: a single-host cloud platform over QEMU"
-readme = "README.md"
+# The PyPI project page. Not README.md, which is backend dev notes with links
+# relative to the repository that break on PyPI (DECISIONS #74).
+readme = "PYPI_README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
