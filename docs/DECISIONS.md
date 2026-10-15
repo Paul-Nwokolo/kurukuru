@@ -3932,7 +3932,14 @@ both as skipped.
   choice, not as a 0.1.0 leftover to delete. The job's first green run also
   showed the Accelerator line telling a Windows host to check `/dev/kvm`; a
   backend that says it is on Windows now gets Windows advice only. Each fix was
-  watched to fail with the old behaviour. One CI fact learned on the way: a
+  watched to fail with the old behaviour. The detection is now load-bearing
+  for what `doctor` says, so it was proven separately: six breaks (frozen
+  check dropped, editable check dropped, a wheel reported as source, missing
+  metadata reported as a package, unreadable `direct_url.json` crashing, and
+  the field left out of `/diagnostics`) each failed their own test. On real
+  installs it answered `source` for the editable dev venv, `package` for a
+  wheel installed by path, and `package` in CI's pipx install on Windows.
+  One CI fact learned on the way: a
   backend started in one Windows step is gone by the next.
 - **A release that skips PyPI fails loudly.** The probe, run 38647091801,
   measured that an environment-level `PYPI_PUBLISHING`, where it was first
@@ -3947,7 +3954,14 @@ both as skipped.
   the same `installer` and `checksum` jobs, with an approval on a separate
   `testpypi` environment. Separate because `pypi` only deploys `v*` tags, which
   a dispatch from `main` is not, and because it makes a rehearsal unable to
-  reach real PyPI: that publisher accepts only `pypi`. The rehearsal installs
+  reach real PyPI: that publisher accepts only `pypi`. **That is a guarantee,
+  not a rule someone has to remember.** Two layers enforce it outside this
+  workflow: real PyPI's publisher refuses any token whose environment is not
+  `pypi`, and GitHub refuses to deploy `pypi` to anything but a `v*` tag. So
+  neither a wrong expression in `release.yml` nor someone forgetting the
+  convention can turn a rehearsal into a real upload. The brief had asked for
+  the same environment for both publishers; this was a deliberate deviation,
+  and the maintainer kept it on these grounds. The rehearsal installs
   the TestPyPI file with dependencies from real PyPI, since anyone can upload a
   `fastapi` to TestPyPI. What a green rehearsal does and does not prove is in
   RELEASING.md: the mechanics, not the real run's propagation or the real

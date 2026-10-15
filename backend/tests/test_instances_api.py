@@ -1309,6 +1309,18 @@ def test_diagnostics_reports_the_host_facts_a_client_cannot_see(client):
     assert body["ssh_key"]["present"] is True
 
 
+@pytest.mark.parametrize("kind", ["installer", "package", "source"])
+def test_diagnostics_reports_how_this_copy_was_installed(client, monkeypatch, kind):
+    """`doctor`'s QEMU advice is chosen by this field: only the installer bundles
+    QEMU. Patched at the detector, so this proves the payload carries whatever
+    it decides — the detector's own cases are in test_install_kind.py."""
+    import kurukuru.config
+
+    monkeypatch.setattr(kurukuru.config, "install_kind", lambda: kind)
+    body = client.get("/diagnostics").json()
+    assert body["host"]["install"] == kind
+
+
 def test_diagnostics_exposes_no_key_material(client):
     """Nothing here is authenticated, so the payload stays to the minimum.
 

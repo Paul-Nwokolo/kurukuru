@@ -13,7 +13,7 @@ Design decisions behind these changes are recorded in
 
 ## [Unreleased]
 
-## [0.1.5] — date set when tagged
+## [0.1.5] — 2026-10-15
 
 ### Added
 
