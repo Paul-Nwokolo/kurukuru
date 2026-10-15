@@ -539,7 +539,12 @@ jobs:
           # The point of the whole job: `kurukuru` is a name someone else could
           # own. A package that does not name our repository is not ours,
           # whatever its name and version say.
-          if not any(u.split(",", 1)[-1].strip() == ours for u in urls):
+          # Said with what matched, so the log can be audited: a check that
+          # only passes or fails cannot show it compared the right thing.
+          matched = [u for u in urls if u.split(",", 1)[-1].strip() == ours]
+          if matched:
+              print(f"Repository check: expected {ours}; matched by {matched}")
+          else:
               problems.append(f"NOT OUR PACKAGE: no Project-URL is {ours} (it names {urls or 'no URLs at all'})")
           for p in problems:
               print(f"::error title=pypi::{p}")

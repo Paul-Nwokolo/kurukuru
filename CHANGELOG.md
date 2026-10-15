@@ -13,7 +13,7 @@ Design decisions behind these changes are recorded in
 
 ## [Unreleased]
 
-## [0.1.5] — 2026-10-15
+## [0.1.5] — 2026-10-16
 
 ### Added
 
@@ -44,6 +44,18 @@ Design decisions behind these changes are recorded in
   that command only once that check has passed. Before the tag, the same jobs
   are rehearsed against TestPyPI. See [RELEASING.md](docs/RELEASING.md) and
   DECISIONS #74.
+- **The PyPI wheel carries a verifiable attestation of where it came from.**
+  The publish step signs one with Sigstore and records it in the public
+  transparency log. It binds the wheel's SHA-256 to this repository, the
+  `release.yml` workflow, the exact commit and the workflow run that built and
+  uploaded it. Anyone can check it:
+  `pipx run pypi-attestations verify pypi --repository https://github.com/Paul-Nwokolo/kurukuru pypi:kurukuru-0.1.5-py3-none-any.whl`.
+  It shows which workflow built the file and from which commit. It does not
+  say the code is safe, and it is not a reproducible build. **The Windows
+  installer carries no such attestation and is still not code-signed**: the
+  free signing application was declined for lack of visibility (DECISIONS #64),
+  so SmartScreen still warns and Smart App Control still blocks it. A PyPI
+  attestation is not a substitute for that, because Windows does not read it.
 - **An honest PyPI project page.** It says what Kurukuru is, that Windows users
   want the installer, and that the Linux packaging is complete but unverified
   on real KVM hardware. Windows remains the only OS classifier.

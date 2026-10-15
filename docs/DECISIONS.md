@@ -3970,6 +3970,16 @@ both as skipped.
   watched to fail against ten breaks, among them a third way in, a rehearsal
   pointed at the real index or environment, `skip-existing`, the loud gate
   silenced, and a rehearsal without its `.dev` suffix.
+- **Attestations are the provenance story for the Python package, and only
+  for it.** trusted publishing makes the publish step sign a PEP 740
+  attestation with Sigstore at no cost. It binds the wheel's digest to this
+  repository, `release.yml`, the commit and the run, and it is verifiable by
+  anyone with `pypi-attestations` (measured on the rehearsal: accepted for this
+  repository, refused for another and for a one-byte change). It does **not**
+  substitute for Authenticode on the `.exe`. Windows SmartScreen and Smart App
+  Control read Authenticode signatures and reputation, not Sigstore
+  attestations, so the installer's position is unchanged (decisions 62 and
+  64). Nor does it say the code is safe, or make the build reproducible.
 - **Nothing published is removed.** Every GitHub release stays as the record,
   superseded ones marked in their notes, and on PyPI a bad version is yanked,
   never deleted.

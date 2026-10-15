@@ -319,6 +319,33 @@ for a bounded time:
 Only "not on the index" is retried. Everything after the wheel is found runs
 once, because waiting longer cannot fix it.
 
+### 15. The attestation verifies, with the command the release notes give
+
+After `pypi-verify`, from your own machine, with no credentials:
+
+```
+pipx run pypi-attestations verify pypi --repository https://github.com/Paul-Nwokolo/kurukuru pypi:kurukuru-X.Y.Z-py3-none-any.whl
+```
+
+It must print `OK:`. The notes tell users to run this command, so it is
+checked as written before anyone is told to rely on it. The certificate's
+*Source Repository Ref* must be `refs/tags/vX.Y.Z` and its *Source Repository
+Digest* the tagged commit (both are in the provenance at
+`https://pypi.org/integrity/kurukuru/X.Y.Z/<file>/provenance`).
+
+**Proves:** the file on PyPI was built and uploaded by this repository's
+`release.yml`, from the tagged commit, in a run whose identity Sigstore
+certified and logged publicly.
+
+**Measured on the TestPyPI rehearsal (2026-10-15)**, using local files
+because the `pypi:` form reads pypi.org: `OK` for our repository; refused for
+another repository ("signed by repository "Paul-Nwokolo/kurukuru", expected
+"someone-else/kurukuru""); refused for the same wheel with one byte appended
+("subject does not match distribution digest"). The certificate named commit
+`f244fbd`, `refs/heads/main`, trigger `workflow_dispatch`, and run 38801675885.
+`pypi-attestations` calls its CLI experimental, which is one more reason to
+run the command as written each release.
+
 ### If the upload succeeded and `pypi-verify` failed
 
 Decide this before tagging, not after. **The state:** `kurukuru X.Y.Z` is on

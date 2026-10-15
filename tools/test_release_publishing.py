@@ -100,6 +100,12 @@ def test_the_installed_package_is_checked_after_every_publish():
     for must in ("pipx install", "NOT OUR PACKAGE", "BUILT_SHA256", 'meta["Version"]',
                  "https://pypi.org/simple/", "https://test.pypi.org/simple/"):
         assert must in script, f"pypi-verify no longer checks {must}"
+    # Each check prints its actual value, so the log is the audit trail: the
+    # hashes, name and version, and which Project-URL matched ours.
+    for printed in ('echo "built:  $BUILT_SHA256"', 'echo "served: $served"',
+                    'print("Name:", meta["Name"], "| Version:", meta["Version"])',
+                    'print(f"Repository check: expected {ours}; matched by {matched}")'):
+        assert printed in script, f"pypi-verify no longer prints {printed}"
 
 
 def test_propagation_is_retried_bounded_and_named():
