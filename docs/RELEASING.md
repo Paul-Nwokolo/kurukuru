@@ -170,7 +170,7 @@ A reader deciding whether to upgrade needs both.
 
 ## PyPI
 
-**Not yet on PyPI.** The first upload is planned for 0.1.5 (DECISIONS #74).
+**On PyPI since 0.1.5** (2026-10-16, release run 38882242582; DECISIONS #74).
 The `pypi` job has exactly two ways in: a pushed `v*` tag with the switch on
 (real PyPI), or a manual dispatch with `rehearse_testpypi` (TestPyPI only).
 `tools/test_release_publishing.py` fails if either way in changes, if a third
@@ -382,3 +382,8 @@ is ours. The change to INSTALL-LINUX goes in its own commit, citing the
 passing run. Until then it keeps telling users not to run `pipx install
 kurukuru`. If the first upload fails because someone else took the name, that
 warning is already correct: their package is not this one.
+
+**Met on 2026-10-16:** `pypi-verify` passed against the real 0.1.5 upload
+in release run 38882242582, and INSTALL-LINUX was changed in its own commit
+citing it. Every later release still has to pass item 14 before its notes
+point anyone at the new version.

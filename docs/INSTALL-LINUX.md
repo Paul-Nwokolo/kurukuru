@@ -40,14 +40,39 @@ runs on.
 
 ## Install
 
-**No wheel is published yet, and Kurukuru is not on PyPI.** Do not run
-`pipx install kurukuru`: the name is unregistered there, so today that command
-fails — and if anyone ever registers it, it would install their package, not
-this one. The first upload is planned with 0.1.5, and this warning stays
-until the release check that `pipx install kurukuru` installs *this* package
-has passed against a real upload ([RELEASING.md](RELEASING.md#pypi)). A name
-claimed on PyPI is not that check. Until then, build a wheel
-from a checkout (needs Node.js for the dashboard) and install it by path:
+```bash
+pipx install kurukuru
+```
+
+pipx gives Kurukuru its own virtualenv and puts the `kurukuru` command in
+`~/.local/bin`. The wheel carries the built dashboard; it does not carry QEMU
+(see above).
+
+**Why this command can be trusted, and since when.** `kurukuru` has been on
+PyPI since 0.1.5, uploaded by this repository's release workflow through
+trusted publishing. This page recommends `pipx install kurukuru` only because
+the release check that it installs *this* package passed against that real
+upload: release run
+[38882242582](https://github.com/Paul-Nwokolo/kurukuru/actions/runs/38882242582)
+installed `kurukuru==0.1.5` from PyPI by name on a clean runner and found the
+bytes PyPI serves identical to the wheel the run built, the name and version
+`kurukuru` 0.1.5, a Project-URL that is exactly this repository, and
+`kurukuru version` reporting 0.1.5 ([RELEASING.md](RELEASING.md#pypi),
+item 14). A name claimed on PyPI would not have been enough.
+
+To check a wheel's origin yourself — which repository, workflow and commit
+built it — verify its attestation:
+
+```bash
+pipx run pypi-attestations verify pypi --repository https://github.com/Paul-Nwokolo/kurukuru pypi:kurukuru-0.1.5-py3-none-any.whl
+```
+
+It prints `OK:` for a wheel this repository's release workflow uploaded.
+
+### From a checkout instead
+
+To run unreleased code, build a wheel (needs Node.js for the dashboard) and
+install it by path:
 
 ```bash
 git clone https://github.com/Paul-Nwokolo/kurukuru.git && cd kurukuru
@@ -57,8 +82,7 @@ pipx install dist/kurukuru-*.whl
 ```
 
 `build_wheel.py` puts the built dashboard inside the package and then checks the
-wheel it produced, refusing one without it. pipx gives Kurukuru its own
-virtualenv and puts the `kurukuru` command in `~/.local/bin`.
+wheel it produced, refusing one without it.
 
 ## First run
 
@@ -153,12 +177,13 @@ systemctl --user start kurukuru.service
 
 ## Upgrade
 
-Build the new wheel as above, then:
-
 ```bash
-pipx install --force dist/kurukuru-*.whl
+pipx upgrade kurukuru
 kurukuru service install      # rewrites the unit if needed, and restarts
 ```
+
+From a checkout, build the new wheel as above and use
+`pipx install --force dist/kurukuru-*.whl` in place of `pipx upgrade`.
 
 pipx replaces the whole virtualenv, so nothing from the previous version is
 left behind to be imported by mistake — the problem the Windows installer had
@@ -192,6 +217,7 @@ Database backups live inside that directory, so removing it removes them too.
 |---|---|---|
 | The wheel builds, with the dashboard inside, and is inspected | Windows dev machine; GitHub Ubuntu runner | Yes |
 | `pipx install` of the wheel; `kurukuru` on PATH | GitHub Ubuntu runner | See CI: `wheel installs with pipx (Linux)` |
+| `pipx install kurukuru==0.1.5` from PyPI by name: served bytes identical to the built wheel, name, version, exact repository URL, `kurukuru version` | GitHub Ubuntu runner, empty pipx home | Yes — release run [38882242582](https://github.com/Paul-Nwokolo/kurukuru/actions/runs/38882242582), 2026-10-16 |
 | The installed backend serves the API and the packaged dashboard | GitHub Ubuntu runner | See CI |
 | State under `~/.local/share/kurukuru`, not `~/.kurukuru`; key directory 0700, private key 0600 | GitHub Ubuntu runner | See CI |
 | `doctor` names the distribution's QEMU package and no Windows-only advice | GitHub Ubuntu runner; tests on every platform | See CI |
