@@ -194,7 +194,11 @@ Nothing on the command line said so. Published like that, the release would
 have been bound to a new tag named `untagged-...` on the target commit
 instead of `v0.1.5`, with the release workflow's run, the attestation and the
 PyPI upload all naming a tag the release did not. It was caught only because
-the release was read back after the edit:
+the release was read back after the edit. Publishing the same draft
+afterwards through the website did **not** reset `tag_name` (read back
+after publication, 2026-10-16), so the reset has been observed only on
+the command-line edit path, `gh release edit` or its fallback `PATCH`,
+and not on the website's publish. The read-back:
 
 ```
 gh api repos/Paul-Nwokolo/kurukuru/releases/<id> --jq '{tag_name, target_commitish, draft, assets: [.assets[].name]}'
