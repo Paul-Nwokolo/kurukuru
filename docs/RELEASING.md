@@ -185,7 +185,34 @@ What changed for a user. Every advisory fixed is named by its ID, and every
 advisory recorded as not reachable is listed as such, never quietly left out.
 A reader deciding whether to upgrade needs both.
 
+**Editing a draft can unbind it from its tag. Read the release back after
+every edit, and again just before publishing.** On 0.1.5, putting the notes
+on the draft (`gh release edit` with the release id, and a `PATCH` of the body
+as a fallback; which of the two did it was not established) reset the
+draft's `tag_name` from `v0.1.5` to its placeholder `untagged-43d4494b9727c75ff04d`.
+Nothing on the command line said so. Published like that, the release would
+have been bound to a new tag named `untagged-...` on the target commit
+instead of `v0.1.5`, with the release workflow's run, the attestation and the
+PyPI upload all naming a tag the release did not. It was caught only because
+the release was read back after the edit:
+
+```
+gh api repos/Paul-Nwokolo/kurukuru/releases/<id> --jq '{tag_name, target_commitish, draft, assets: [.assets[].name]}'
+```
+
+`tag_name` must be exactly `vX.Y.Z`, `target_commitish` the tagged commit,
+`draft` true, and both assets present. If `tag_name` is wrong, set it back
+before anything else:
+`gh api -X PATCH repos/Paul-Nwokolo/kurukuru/releases/<id> -f tag_name=vX.Y.Z`,
+then read it back again. The draft's *page URL* saying `untagged-...` is
+normal until publication and is not this fault; the `tag_name` field is what
+matters. Sending `tag_name` in the same `PATCH` as the body is the obvious
+guard, but it has not been measured to prevent this, so the read-back stays
+the check.
+
 ### 13. Publish the release, then run item 11b at once.
+
+Read the release back (above) immediately before clicking *Publish*.
 
 ## PyPI
 
