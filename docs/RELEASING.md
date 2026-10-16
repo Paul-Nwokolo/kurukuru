@@ -140,17 +140,36 @@ first created, is invisible to a job-level `if`, so the publish would have
 skipped silently with everything else green (DECISIONS #74). It must be a
 repository variable. The gate's message names that trap.
 
-## After the workflow, before publishing the GitHub release
+## After the workflow: check, publish, check again
 
-### 11. Anonymous download-and-hash
+### 11. Download-and-hash: the bytes now, the stranger's view after publishing
 
-Logged out (or `curl` with no token), into an **empty** directory: download the
-installer and its `.sha256` from the release page, then check **both**:
+Into an **empty** directory, download the installer and its `.sha256`, then
+check **both**:
 
 - `sha256sum -c` prints `OK`, which proves the file and its checksum agree; and
 - the hash equals the one the `installer` job printed under "Record what was
   built", which proves these are the bytes CI built and tested, not a file
   from your machine or a stale asset.
+
+**This check runs twice, and the anonymous half cannot run before publishing.**
+A draft release is invisible to anyone logged out: the release page, the
+assets and the API all answer 404 to a request with no token, and until
+publication a draft's assets are served under `.../releases/download/untagged-.../`,
+not `.../releases/download/vX.Y.Z/`. Measured on 0.1.5's draft (2026-10-16):
+both assets and `GET /releases/{id}` returned 404 logged out. The 0.1.5
+checklist put the anonymous check before publishing, and it could not be done.
+
+- **11a. Before publishing, authenticated.** Download the draft's assets through
+  the API (`gh api -H "Accept: application/octet-stream"
+  repos/Paul-Nwokolo/kurukuru/releases/assets/<id>`) and run both checks. This
+  proves the bytes attached to the draft are the bytes CI built, while the
+  release can still be fixed quietly.
+- **11b. Immediately after publishing (item 13), logged out.** `curl` with no
+  token from `.../releases/download/vX.Y.Z/`, both checks again, before the
+  release is announced or linked anywhere. Only this proves what a stranger
+  gets; if it fails, the release is already public, so it is fixed by
+  replacing the asset at once, and the notes say so.
 
 **Proves:** what a stranger downloads is what was tested. This is item 6's
 lesson applied to the published file: 0.1.0 worked for the person who built it
@@ -166,7 +185,7 @@ What changed for a user. Every advisory fixed is named by its ID, and every
 advisory recorded as not reachable is listed as such, never quietly left out.
 A reader deciding whether to upgrade needs both.
 
-### 13. Publish the release.
+### 13. Publish the release, then run item 11b at once.
 
 ## PyPI
 
