@@ -3984,6 +3984,73 @@ both as skipped.
   superseded ones marked in their notes, and on PyPI a bad version is yanked,
   never deleted.
 
+### The 0.1.5 release record (2026-10-16)
+
+- **The name is claimed, by this repository.** `kurukuru` 0.1.5 was the first
+  upload to PyPI. Release run 38882242582 ran on tag `v0.1.5`; the tag object
+  is `dd350707ff71ee98a60aa790b1d585eef6062396`, and the commit it points at is
+  `e23d4eb62f7a8d98fe12d5ba04057b62356af452`. The maintainer approved the
+  `pypi` deployment at 09:57:52Z (from the deployment's status history,
+  because the approvals API records who approved but not when). The upload
+  went to `upload.pypi.org` through trusted publishing, with no stored token.
+  The wheel is `kurukuru-0.1.5-py3-none-any.whl`, SHA-256
+  `3dd1b6cd69124955bb4ab3d5229c50393861e2cbd4709a9e1416c4182c05b039`.
+  `pypi-verify` installed `kurukuru==0.1.5` from PyPI by name into a clean pipx
+  home. PyPI was serving it on the first try, and it found:
+  - the same bytes as the wheel the run built;
+  - `Name: kurukuru | Version: 0.1.5`;
+  - the repository matched by the Homepage and Repository Project-URLs;
+  - `kurukuru version` printing `kurukuru  0.1.5`.
+
+  The rehearsal before it, run 38806124688 on the same commit, produced the
+  same output for `0.1.5.dev38806124688`. The installer's SHA-256 is
+  `4261cb447d1685af034034b3b7a89e6494c5e26aac04cdf7e748d4bc72fb079f`, still
+  unsigned.
+- **The two configurations no rehearsal could reach behaved as predicted.**
+  The repository variable `PYPI_PUBLISHING` opened the publish job on a tag
+  push, which had never been exercised: `pypi-gate` skipped and `pypi` ran.
+  Real PyPI's pending publisher accepted the run's identity and became the
+  project. Every one of the 14 items RELEASING listed as unexercised before
+  the tag fired as predicted, with two partial exceptions:
+  - the page on pypi.org was checked only through the JSON API (correct
+    content type, the required sentences present), because pypi.org serves
+    `curl` a browser-challenge page;
+  - `pipx run` itself was not tried, because the checking machine had no
+    pipx. A fresh venv with the latest `pypi-attestations` (0.0.30) ran the
+    published command instead. Installing it into a deep directory failed on
+    Windows' 260-character path limit, because sigstore's cache filenames
+    are long.
+- **The attestation is the Python package's provenance.** Transparency-log
+  entry 3277410808. From an empty directory with no credentials, the command
+  the notes give (`pypi-attestations verify pypi --repository
+  https://github.com/Paul-Nwokolo/kurukuru pypi:kurukuru-0.1.5-py3-none-any.whl`)
+  printed `OK`. It was refused for another repository and for the wheel with
+  one byte appended. The certificate names:
+  - Source Repository Ref `refs/tags/v0.1.5`;
+  - Source Repository Digest `e23d4eb6…`, compared against the **commit**,
+    not the annotated tag object, which is a different object;
+  - Build Signer `…/release.yml@refs/tags/v0.1.5`;
+  - trigger `push`;
+  - run 38882242582.
+
+  As recorded above, this establishes where the wheel came from. It is not
+  Authenticode, and the `.exe` is unaffected by it.
+- **The INSTALL-LINUX gate was met**, and INSTALL-LINUX now recommends
+  `pipx install kurukuru`, in its own commit citing run 38882242582.
+- **Two corrections to the release process, both found on release day.**
+  - The checklist put the anonymous download-and-hash before publishing. It
+    cannot run there: logged out, a draft release, its assets and its API
+    entry are all 404. RELEASING item 11 now runs authenticated before
+    publishing and anonymously immediately after.
+  - Putting the notes on the draft silently reset its `tag_name` from
+    `v0.1.5` to `untagged-43d4494b9727c75ff04d`. It came from `gh release
+    edit` by id, or the body `PATCH` used as a fallback; which one was not
+    established. Published like that, the release would have been bound to
+    the wrong tag. It was caught only by reading the release back, and set
+    back with a `PATCH` of `tag_name`. RELEASING now requires reading the
+    release back after every edit to a draft and immediately before
+    publishing.
+
 ## Known limitations
 
 - **Nothing is code-signed, and there is no date for it.** SmartScreen warns on
