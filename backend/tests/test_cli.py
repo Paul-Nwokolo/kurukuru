@@ -912,6 +912,15 @@ def test_doctor_credits_the_group_when_the_group_grants_it(cli, monkeypatch):
     assert "PASS KVM: /dev/kvm usable (group kvm)" in flat
 
 
+def test_doctor_does_not_fall_back_to_the_group_when_the_reason_is_unknown(cli, monkeypatch):
+    """An unknown reason used to print "(group kvm)", the claim #75 removed."""
+    kvm = {**_ACL_KVM, "via": "unknown", "in_group": None}
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: _linux_with_kvm(kvm))
+    flat = " ".join(cli("doctor").stdout.split())
+    assert "PASS KVM: /dev/kvm usable (what grants access could not be determined)" in flat
+    assert "(group kvm)" not in flat
+
+
 def test_doctor_under_wsl_does_not_promise_that_lingering_helps(cli, monkeypatch):
     """Measured in Phase 18: Linger=yes, last WSL window closed, distribution
     Stopped a minute later. "Survives logout" would be false there."""

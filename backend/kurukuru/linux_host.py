@@ -134,10 +134,13 @@ class KvmAccess:
 
     * ``via`` — what grants an ``ok``: ``root``, ``owner``, ``group``,
       ``other``, ``acl`` (none of the mode bits do, and the device carries an
-      access ACL), or ``unknown``. ``acl`` is what systemd-logind's
+      access ACL), or ``unknown``: nothing above explains it, *or* this host
+      cannot say who the process is (no ``os.getuid``/``os.getgroups``, as on
+      Windows), in which case no reason is claimed at all. ``acl`` is what systemd-logind's
       ``uaccess`` gives the user at the active local seat, and it is removed
       when that session ends.
-    * ``in_group`` — whether this process carries the device's group.
+    * ``in_group`` — whether this process carries the device's group;
+      ``None`` when the process's groups cannot be read.
     * ``listed_in_group`` — whether the group file lists the user. The two
       differ exactly in the re-login trap.
     """
@@ -200,8 +203,12 @@ def kvm_access(
     except KeyError:
         group_name, members = str(info.st_gid), set()
     mode = stat.filemode(info.st_mode)
-    gids = set(process_gids if process_gids is not None else os.getgroups())
-    in_group = info.st_gid in gids
+    if process_gids is None:
+        # Absent on Windows. Unknown stays unknown: a guessed empty set would
+        # turn "cannot tell" into a confident "not in the group".
+        getgroups = getattr(os, "getgroups", None)
+        process_gids = getgroups() if getgroups else None
+    in_group = None if process_gids is None else info.st_gid in set(process_gids)
     listed = user in members
     group_grants = bool(info.st_mode & stat.S_IRGRP and info.st_mode & stat.S_IWGRP)
 
@@ -209,19 +216,28 @@ def kvm_access(
         return KvmAccess(state, device, group_name, mode, user, via, in_group, listed)
 
     if can_open(device):
-        uid = os.getuid() if uid is None else uid
+        if uid is None:
+            getuid = getattr(os, "getuid", None)  # absent on Windows
+            uid = getuid() if getuid else None
+        if uid is None:
+            # Root or owner cannot be ruled out, so naming any other mechanism
+            # would be a guess. The open working is the only fact here.
+            return access("ok", "unknown")
         has_acl = has_acl or _has_access_acl
         if uid == 0:
             return access("ok", "root")
-        if uid == getattr(info, "st_uid", None) and info.st_mode & stat.S_IRUSR and info.st_mode & stat.S_IWUSR:
+        owner = getattr(info, "st_uid", None)
+        if owner is not None and uid == owner and info.st_mode & stat.S_IRUSR and info.st_mode & stat.S_IWUSR:
             return access("ok", "owner")
+        if group_grants and in_group is None:
+            return access("ok", "unknown")
         if in_group and group_grants:
             return access("ok", "group")
         if info.st_mode & stat.S_IROTH and info.st_mode & stat.S_IWOTH:
             return access("ok", "other")
         return access("ok", "acl" if has_acl(device) else "unknown")
 
-    if group_grants and not in_group:
+    if group_grants and in_group is False:
         return access("relogin-needed" if listed else "not-in-group")
     return access("denied")
 

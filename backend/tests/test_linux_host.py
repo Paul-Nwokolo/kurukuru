@@ -116,6 +116,38 @@ def test_the_answer_is_the_open_not_the_group():
     assert (out_but_open.state, out_but_open.via) == ("ok", "unknown")
 
 
+def test_without_os_getuid_the_reason_is_unknown_not_guessed(monkeypatch):
+    """Windows has no ``os.getuid``; the CI Windows job caught the call. With
+    no uid, root and owner cannot be ruled out, so no mechanism is named, not
+    even the ACL that is present. Here on Linux too, so the Windows matrix is
+    not the only thing that catches this."""
+    monkeypatch.delattr(os, "getuid", raising=False)
+    access = kvm_access(stat_fn=_stat(), can_open=lambda p: True, user="ada",
+                        group_lookup=_groups([]), process_gids=[],
+                        has_acl=lambda p: True)
+    assert (access.state, access.via) == ("ok", "unknown")
+
+
+def test_a_missing_owner_uid_is_not_a_match(monkeypatch):
+    """``st_uid`` absent and the uid unknown are two Nones, not one owner."""
+    monkeypatch.delattr(os, "getuid", raising=False)
+    access = kvm_access(stat_fn=_stat(mode=stat.S_IFCHR | 0o600), can_open=lambda p: True,
+                        user="ada", group_lookup=_groups([]), process_gids=[])
+    assert access.via != "owner"
+
+
+def test_without_os_getgroups_membership_is_unknown_not_absent(monkeypatch):
+    """Unreadable groups must not become "not in the group", which would send
+    the user to run usermod for a reason nobody established."""
+    monkeypatch.delattr(os, "getgroups", raising=False)
+    refused = kvm_access(stat_fn=_stat(), can_open=lambda p: False, user="ada",
+                         group_lookup=_groups([]))
+    opened = kvm_access(stat_fn=_stat(), can_open=lambda p: True, user="ada",
+                        group_lookup=_groups([]), uid=1000, has_acl=lambda p: True)
+    assert (refused.state, refused.in_group) == ("denied", None)
+    assert (opened.state, opened.via, opened.in_group) == ("ok", "unknown", None)
+
+
 # --------------------------------------------------------------------------- #
 # Distribution and the QEMU package
 # --------------------------------------------------------------------------- #

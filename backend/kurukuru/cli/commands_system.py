@@ -522,8 +522,11 @@ def _linux_checks(host: dict, engine_ok: bool) -> list[Check]:
                else f": sudo usermod -aG {group} $USER\n     {_RELOGIN}"),
         ))
     elif state == "ok":
+        # An unrecognised or unknown reason is reported as unknown, never as the
+        # group: crediting the group by default is the defect decision 75 fixed.
         how = {"group": f"group {group}", "owner": "as its owner", "root": "as root",
-               "other": "open to every user"}.get(kvm.get("via"), f"group {group}")
+               "other": "open to every user"}.get(
+            kvm.get("via"), "what grants access could not be determined")
         checks.append(Check("KVM", PASS, f"/dev/kvm usable ({how})"))
 
     store = host.get("state") or {}

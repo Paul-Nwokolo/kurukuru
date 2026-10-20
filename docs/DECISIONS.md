@@ -4075,6 +4075,13 @@ predictions and the probe that decides them are PORTABILITY's Phase 19 Q5.
 *Since observed: decision 77. A running VM keeps its access, new launches lose
 it, and the group is what lasts.*
 
+*After it shipped to main:* the Windows CI job caught `os.getuid()`, which
+Windows does not have, called by default. The fix reports an unknown uid or
+group set as unknown rather than guessing, and stops doctor printing `(group
+kvm)` for an unknown reason. The docstring's "runs on any OS" contract is now
+enforced by tests that remove `os.getuid` and `os.getgroups`, so Linux runs
+catch it too.
+
 **How it was found.** The Phase 19 brief reported a bug: on the bare-metal host
 (Ubuntu 26.04.1, systemd 259), `groups` does not list `kvm`, `/dev/kvm` is
 `crw-rw----+ root kvm` with `user:paul:rw-` from systemd-logind's `uaccess`
