@@ -863,6 +863,55 @@ def test_doctor_on_linux_tells_a_relogin_from_a_missing_group(cli, monkeypatch):
     assert "usermod" not in flat
 
 
+def _linux_with_kvm(kvm: dict, linger: bool = False) -> dict:
+    return {**SICK_LINUX_DIAGNOSTICS, "host": {
+        **SICK_LINUX_DIAGNOSTICS["host"],
+        "linux": {**SICK_LINUX_DIAGNOSTICS["host"]["linux"], "kvm": kvm, "linger": linger},
+    }}
+
+
+_ACL_KVM = {"state": "ok", "device": "/dev/kvm", "group": "kvm", "mode": "crw-rw----",
+            "user": "paul", "via": "acl", "in_group": False, "listed_in_group": False}
+
+
+def test_doctor_does_not_credit_the_group_for_acl_access(cli, monkeypatch):
+    """Phase 19: /dev/kvm opened through logind's seat ACL by a user in no kvm
+    group. It works, so PASS — but "usable (group kvm)" named the group as the
+    reason, which was false, and hid that the grant ends with the session."""
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: _linux_with_kvm(_ACL_KVM))
+    flat = " ".join(cli("doctor").stdout.split())
+
+    assert "PASS KVM: /dev/kvm usable, through an ACL rather than the group" in flat
+    assert "paul is not in the 'kvm' group" in flat
+    assert "(group kvm)" not in flat
+    assert "lasts only while you are logged in" in flat
+    assert "sudo usermod -aG kvm $USER" in flat
+
+
+def test_doctor_warns_about_acl_access_when_the_service_outlives_the_session(cli, monkeypatch):
+    monkeypatch.setattr(ApiClient, "diagnostics",
+                        lambda self: _linux_with_kvm(_ACL_KVM, linger=True))
+    flat = " ".join(cli("doctor").stdout.split())
+    assert "WARN KVM: /dev/kvm usable, through an ACL" in flat
+
+
+def test_doctor_on_acl_access_after_usermod_says_relogin_not_usermod(cli, monkeypatch):
+    """This host as found: usermod had already run, the session predated it."""
+    kvm = {**_ACL_KVM, "listed_in_group": True}
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: _linux_with_kvm(kvm))
+    flat = " ".join(cli("doctor").stdout.split())
+    assert "paul is listed in 'kvm', but this backend was started before that" in flat
+    assert "usermod" not in flat
+    assert "log out completely and back in" in flat
+
+
+def test_doctor_credits_the_group_when_the_group_grants_it(cli, monkeypatch):
+    kvm = {**_ACL_KVM, "via": "group", "in_group": True, "listed_in_group": True}
+    monkeypatch.setattr(ApiClient, "diagnostics", lambda self: _linux_with_kvm(kvm))
+    flat = " ".join(cli("doctor").stdout.split())
+    assert "PASS KVM: /dev/kvm usable (group kvm)" in flat
+
+
 def test_doctor_under_wsl_does_not_promise_that_lingering_helps(cli, monkeypatch):
     """Measured in Phase 18: Linger=yes, last WSL window closed, distribution
     Stopped a minute later. "Survives logout" would be false there."""

@@ -498,8 +498,33 @@ def _linux_checks(host: dict, engine_ok: bool) -> list[Check]:
             "policy, or a security module. Check `getfacl /dev/kvm` and the "
             "system log.",
         ))
+    elif state == "ok" and kvm.get("via") == "acl":
+        # Opened through an ACL, not the group: on a desktop that is logind's
+        # uaccess grant to whoever holds the active seat, and it is removed when
+        # that session ends. Working now is the fact; how long it lasts is the
+        # caveat, and it bites only if something outlives the session.
+        user = kvm.get("user") or "this user"
+        membership = (
+            f"{user} is listed in '{group}', but this backend was started before "
+            f"that and does not carry it"
+            if kvm.get("listed_in_group")
+            else f"{user} is not in the '{group}' group"
+        )
+        checks.append(Check(
+            "KVM",
+            WARN if linux.get("linger") else PASS,
+            f"/dev/kvm usable, through an ACL rather than the group ({membership})",
+            "A seat ACL from systemd-logind lasts only while you are logged in "
+            "at this machine. A backend that keeps running after logout "
+            "(lingering) or is started over SSH alone cannot rely on it; group "
+            "membership is what lasts"
+            + (f". {_RELOGIN}" if kvm.get("listed_in_group")
+               else f": sudo usermod -aG {group} $USER\n     {_RELOGIN}"),
+        ))
     elif state == "ok":
-        checks.append(Check("KVM", PASS, f"/dev/kvm usable (group {group})"))
+        how = {"group": f"group {group}", "owner": "as its owner", "root": "as root",
+               "other": "open to every user"}.get(kvm.get("via"), f"group {group}")
+        checks.append(Check("KVM", PASS, f"/dev/kvm usable ({how})"))
 
     store = host.get("state") or {}
     if store.get("path"):

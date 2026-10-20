@@ -128,6 +128,18 @@ class KvmAccess:
     * ``relogin-needed`` — the group file lists the user, but this process was
       started before that and does not carry the group.
     * ``denied`` — none of the above explains it (an ACL, a container).
+
+    ``state`` answers "can it be opened", by opening it. The rest says *why*,
+    because a working answer can still rest on something temporary:
+
+    * ``via`` — what grants an ``ok``: ``root``, ``owner``, ``group``,
+      ``other``, ``acl`` (none of the mode bits do, and the device carries an
+      access ACL), or ``unknown``. ``acl`` is what systemd-logind's
+      ``uaccess`` gives the user at the active local seat, and it is removed
+      when that session ends.
+    * ``in_group`` — whether this process carries the device's group.
+    * ``listed_in_group`` — whether the group file lists the user. The two
+      differ exactly in the re-login trap.
     """
 
     state: str
@@ -135,6 +147,9 @@ class KvmAccess:
     group: str | None = None
     mode: str | None = None
     user: str | None = None
+    via: str | None = None
+    in_group: bool | None = None
+    listed_in_group: bool | None = None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -148,8 +163,15 @@ def kvm_access(
     process_gids=None,
     group_lookup=None,
     stat_fn=None,
+    uid: int | None = None,
+    has_acl=None,
 ) -> KvmAccess:
     """Diagnose /dev/kvm access.
+
+    Access is decided by trying it, never inferred from group membership:
+    on a desktop the device is commonly opened through a logind ACL by a user
+    who is in no ``kvm`` group at all (Phase 19, Ubuntu 26.04). Membership is
+    reported beside the answer, not instead of it.
 
     Every host-touching input is a parameter, so the decision runs on any OS
     under test; ``pwd`` and ``grp`` are imported only when a real lookup is
@@ -178,16 +200,41 @@ def kvm_access(
     except KeyError:
         group_name, members = str(info.st_gid), set()
     mode = stat.filemode(info.st_mode)
+    gids = set(process_gids if process_gids is not None else os.getgroups())
+    in_group = info.st_gid in gids
+    listed = user in members
+    group_grants = bool(info.st_mode & stat.S_IRGRP and info.st_mode & stat.S_IWGRP)
+
+    def access(state: str, via: str | None = None) -> KvmAccess:
+        return KvmAccess(state, device, group_name, mode, user, via, in_group, listed)
 
     if can_open(device):
-        return KvmAccess("ok", device, group_name, mode, user)
+        uid = os.getuid() if uid is None else uid
+        has_acl = has_acl or _has_access_acl
+        if uid == 0:
+            return access("ok", "root")
+        if uid == getattr(info, "st_uid", None) and info.st_mode & stat.S_IRUSR and info.st_mode & stat.S_IWUSR:
+            return access("ok", "owner")
+        if in_group and group_grants:
+            return access("ok", "group")
+        if info.st_mode & stat.S_IROTH and info.st_mode & stat.S_IWOTH:
+            return access("ok", "other")
+        return access("ok", "acl" if has_acl(device) else "unknown")
 
-    gids = set(process_gids if process_gids is not None else os.getgroups())
-    group_grants = bool(info.st_mode & stat.S_IRGRP and info.st_mode & stat.S_IWGRP)
-    if group_grants and info.st_gid not in gids:
-        state = "relogin-needed" if user in members else "not-in-group"
-        return KvmAccess(state, device, group_name, mode, user)
-    return KvmAccess("denied", device, group_name, mode, user)
+    if group_grants and not in_group:
+        return access("relogin-needed" if listed else "not-in-group")
+    return access("denied")
+
+
+def _has_access_acl(path: str) -> bool:
+    """Whether ``path`` carries a POSIX access ACL (the ``+`` in ``ls -l``)."""
+    listxattr = getattr(os, "listxattr", None)
+    if listxattr is None:
+        return False
+    try:
+        return "system.posix_acl_access" in listxattr(path)
+    except OSError:
+        return False
 
 
 def linger_enabled(user: str | None = None, linger_dir: str = LINGER_DIR) -> bool | None:

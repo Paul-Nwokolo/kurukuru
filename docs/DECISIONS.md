@@ -4051,6 +4051,67 @@ both as skipped.
     release back after every edit to a draft and immediately before
     publishing.
 
+## 75. On a desktop, `/dev/kvm` is a session-scoped grant, and `doctor` now says how it is reached
+
+**The finding.** On the bare-metal host (Ubuntu 26.04.1, systemd 259) the
+backend opens `/dev/kvm` through neither its owner nor its group. udev tags the
+device `uaccess` (`70-uaccess.rules`), and systemd-logind writes
+`user:paul:rw-` onto it for whoever holds the active local seat, taking it away
+when that seat session ends. Measured: the device is `crw-rw----+ root kvm`;
+the backend's groups are `4 24 27 30 46 100 111 114 1000`, without `kvm`
+(991); and it opens the device anyway. So KVM access belongs to the *login*,
+not to the *account*. Anything that outlives the login has to get access some
+other way: a lingering user service, or a backend reached only over SSH. Until
+a fresh login, that way is not the group either, because a running user
+manager keeps the groups it started with.
+
+**Observed vs. documented.** That logind grants the ACL is observed. That it is
+*withdrawn* at session end, and what that does to a running QEMU and to the next
+launch, is logind's documented behaviour, **not yet observed here**. The
+predictions and the probe that decides them are PORTABILITY's Phase 19 Q5.
+
+**How it was found.** The Phase 19 brief reported a bug: on the bare-metal host
+(Ubuntu 26.04.1, systemd 259), `groups` does not list `kvm`, `/dev/kvm` is
+`crw-rw----+ root kvm` with `user:paul:rw-` from systemd-logind's `uaccess`
+rule, and `doctor` was said to call that working user unable to launch VMs.
+
+**That did not reproduce, and the record should say so.** `kvm_access` had
+always tried the open first (`os.access(R_OK|W_OK)`, which honours ACLs), and
+it consulted groups only after a refusal. On this host it answered `ok`, and
+`doctor` printed `PASS KVM: /dev/kvm usable (group kvm)`. The shell history
+shows the `sudo usermod -aG kvm $USER` that preceded the phase was part of the
+host's setup commands, run before Kurukuru was installed, not advice
+`doctor` gave.
+
+**What was wrong is the same class as the Windows-advice-on-Linux bug
+(decision 74): the message stated a stand-in as the fact.** That PASS line
+gave the group as the reason access worked, when the process was in no `kvm`
+group and the grant was the seat ACL. And the ACL is the part that matters:
+logind gives it to whoever holds the active local seat and takes it away when
+that session ends. A lingering service, or a backend started over SSH alone,
+has neither the ACL nor, until a fresh login, the group. The old line hid
+both.
+
+**Decision.** Access is still decided by trying the open, and never inferred
+from membership. `KvmAccess` now reports beside that answer `via` (`root`,
+`owner`, `group`, `other`, `acl`, `unknown`), `in_group` (this process carries
+the device's gid) and `listed_in_group` (`/etc/group` lists the user). The two
+differ exactly in the re-login trap, and this host was in it. `doctor` credits
+the group only when the group grants access. For ACL access it passes, names
+the ACL, states the membership, and says the grant lasts only while you are
+logged in at the seat, with usermod as the remedy, or a re-login if usermod
+already ran. With lingering on it warns instead, because then the service
+outlives the grant.
+
+**Consequences.** Seven tests, each seen failing against the old code. The
+behavioural proof is `test_doctor_does_not_credit_the_group_for_acl_access`:
+the old output contained `(group kvm)` and no ACL line. Live on the host:
+`PASS KVM: /dev/kvm usable, through an ACL rather than the group (paul is
+listed in 'kvm', but this backend was started before that and does not carry
+it)`. Whether the ACL is in fact withdrawn under a lingering service at logout
+is PORTABILITY's Phase 19 Q5. It is logind's documented behaviour and has not
+yet been observed here.
+
 ## Known limitations
 
 - **Nothing is code-signed, and there is no date for it.** SmartScreen warns on

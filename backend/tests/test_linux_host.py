@@ -76,6 +76,46 @@ def test_denied_for_a_reason_the_group_does_not_explain():
     assert owner_only.state == "denied"
 
 
+def test_access_through_a_seat_acl_is_ok_and_says_it_is_not_the_group():
+    """Phase 19's host, as measured: Ubuntu 26.04, ``crw-rw----+ root kvm``,
+    ``user:paul:rw-`` from logind's uaccess, and the session's processes not in
+    ``kvm``. Opening works, so the answer is ok — but via the ACL, which ends
+    with the session, and the report must say so rather than credit the group."""
+    access = kvm_access(stat_fn=_stat(), can_open=lambda p: True, user="paul",
+                        group_lookup=_groups([]), process_gids=[1000], uid=1000,
+                        has_acl=lambda p: True)
+    assert access.state == "ok"
+    assert (access.via, access.in_group, access.listed_in_group) == ("acl", False, False)
+
+
+def test_acl_access_after_usermod_but_before_relogin_reports_both_facts():
+    """What this host actually was: usermod had run, the session predates it."""
+    access = kvm_access(stat_fn=_stat(), can_open=lambda p: True, user="paul",
+                        group_lookup=_groups(["paul"]), process_gids=[1000], uid=1000,
+                        has_acl=lambda p: True)
+    assert (access.state, access.via) == ("ok", "acl")
+    assert (access.in_group, access.listed_in_group) == (False, True)
+
+
+def test_access_through_the_group_is_credited_to_the_group():
+    access = kvm_access(stat_fn=_stat(), can_open=lambda p: True, user="ada",
+                        group_lookup=_groups(["ada"]), process_gids=[1000, KVM_GID],
+                        uid=1000, has_acl=lambda p: True)
+    assert (access.state, access.via, access.in_group) == ("ok", "group", True)
+
+
+def test_the_answer_is_the_open_not_the_group():
+    """A process in the group that still cannot open the device is denied, and
+    one outside it that can is ok. Group membership never decides ``state``."""
+    in_but_refused = kvm_access(stat_fn=_stat(), can_open=lambda p: False, user="ada",
+                                group_lookup=_groups(["ada"]), process_gids=[KVM_GID])
+    out_but_open = kvm_access(stat_fn=_stat(), can_open=lambda p: True, user="ada",
+                              group_lookup=_groups([]), process_gids=[], uid=1000,
+                              has_acl=lambda p: False)
+    assert in_but_refused.state == "denied"
+    assert (out_but_open.state, out_but_open.via) == ("ok", "unknown")
+
+
 # --------------------------------------------------------------------------- #
 # Distribution and the QEMU package
 # --------------------------------------------------------------------------- #
