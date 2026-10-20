@@ -1,5 +1,10 @@
 # PHASE 19 BRIEF — Narrowing the Linux/KVM questions on nested KVM
 
+> **Superseded before it ran.** A bare-metal Linux host became available, so
+> Phase 19 answered these questions there instead of narrowing them on nested
+> KVM. Kept for the record; the results are in docs/PORTABILITY.md, "Phase 19 —
+> the KVM scorecard, on bare metal".
+
 Draft. Not started. Read docs/PORTABILITY.md (Phase 18 section, the eight open
 questions) and DECISIONS #40, #55, #65–#73 first.
 

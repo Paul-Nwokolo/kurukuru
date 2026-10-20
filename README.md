@@ -583,7 +583,9 @@ rather than inferred:
 
 **Expect two automatic restarts during the install, and know why.** QEMU's
 `system_reset` under WHPX does not bring a Windows guest back — deterministically,
-36/36 trials across two QEMU builds — which is an unreported upstream defect,
+36/36 trials across two QEMU builds (20 across four configurations and 6 at
+`-smp 1` on a dev snapshot, 10 on 11.1.1; [breakdown](docs/WINDOWS.md#the-3636-what-it-is-made-of))
+— which is an unreported upstream defect,
 now filed as
 [qemu#4410](https://gitlab.com/qemu-project/qemu/-/issues/4410). A Windows
 install triggers it twice: once at Setup's own internal reboot, and again at

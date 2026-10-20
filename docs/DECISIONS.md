@@ -2470,7 +2470,10 @@ QEMU process against the identical disk state always works. See docs/WINDOWS.md
 for the full measurement history — 36/36 across every chipset, RTC/HPET,
 Hyper-V-enlightenment, and CD-ejection combination tried, reproduced
 identically on the officially tagged QEMU 11.1.1 release and not just this
-project's dev snapshot.
+project's dev snapshot. (*Phase 19:* that 36 is 20 across four configurations
+plus 6 at `-smp 1`, both on a template disk on the dev snapshot, plus 10 on
+11.1.1 whose disk state was never recorded. docs/WINDOWS.md, "The 36/36: what
+it is made of".)
 
 **Confirmed upstream before anything was built.** A related, unresolved bug
 class exists in QEMU's own tracker (GitLab #2042, #2402) but neither is a
@@ -4069,6 +4072,8 @@ manager keeps the groups it started with.
 *withdrawn* at session end, and what that does to a running QEMU and to the next
 launch, is logind's documented behaviour, **not yet observed here**. The
 predictions and the probe that decides them are PORTABILITY's Phase 19 Q5.
+*Since observed: decision 77. A running VM keeps its access, new launches lose
+it, and the group is what lasts.*
 
 **How it was found.** The Phase 19 brief reported a bug: on the bare-metal host
 (Ubuntu 26.04.1, systemd 259), `groups` does not list `kvm`, `/dev/kvm` is
@@ -4111,6 +4116,178 @@ listed in 'kvm', but this backend was started before that and does not carry
 it)`. Whether the ACL is in fact withdrawn under a lingering service at logout
 is PORTABILITY's Phase 19 Q5. It is logind's documented behaviour and has not
 yet been observed here.
+
+## 76. The port check refuses a port QEMU could bind: a shipped defect in 0.1.5, first for 0.1.6
+
+**This is a defect in a released version, not a Phase 19 finding.** It was
+found during the Phase 19 KVM scorecard, but nothing about it involves KVM.
+`engines/ports.py` and `QemuEngine.start_instance` are byte-identical between
+`v0.1.5` and `HEAD`, with no platform branch, so every 0.1.5 install runs it.
+That includes the PyPI package INSTALL-LINUX tells Linux users to install
+with pipx.
+
+**What happens.** `is_port_free` binds the candidate port without
+`SO_REUSEADDR`. When a VM stops with a TCP connection open on one of its
+forwarded ports, its side closes first, which leaves a `TIME_WAIT` socket whose
+local port is the forward. On Linux that lasts 60 s and refuses a plain bind
+(`EADDRINUSE`). `start_instance` waits `qemu_port_release_timeout_seconds`
+(5 s), reports "its pinned SSH port … is in use by another process", and the
+instance enters `Error` until the reconciler corrects it to `Stopped`.
+Meanwhile QEMU itself binds the same port without trouble, measured live
+during the window. Reproduced every time with an SSH session held across a
+stop. In ordinary use, a finished `kurukuru ssh … whoami` followed by `stop`
+blocked the port for 42–58 s in 6 of 10 stops. The same `restart_instance`
+path carries the reboot watchdog's recovery, so a watchdog restart can fail
+the same way.
+
+**The Windows-side precedent is decision 57.** `restart_instance()` failed
+twice there with "port in use" right after a force-kill. The fix,
+`wait_for_port_free`, was a 5 s bounded retry, measured with a child holding a
+bare listener and *no connections*, whose window was shorter than 5 s. A
+connection's TIME_WAIT is a different and longer window. **The 5 s budget is
+shorter than Linux's 60 s TIME_WAIT**, so it absorbs the case it was measured
+against and not this one. Whether a Windows TIME_WAIT blocks a plain bind at
+all is unmeasured; `/srv/kurukuru/phase19/timewait_bind.py` (Phase 19) is the
+test.
+
+**Decision.** Not fixed in Phase 19: a fix needs its own verification, and
+making it would mix a networking change into a scorecard about KVM. **It is
+the first item for 0.1.6.** Until then INSTALL-LINUX lists it as a known
+issue, with the recovery (wait a minute, start again). The constraint on the
+fix, which corrects the first proposal, is recorded in PORTABILITY's finding
+27.
+
+## 77. Logout settled by a controlled pair: the seat ACL does not outlast the login, the group does, and the user manager's stop kills VMs by SIGKILL
+
+**What was measured.** PORTABILITY's Phase 19 Q5 predicted two mechanisms
+before any probe ran. The maintainer then logged out three times with
+`probe.sh` armed:
+- **A0:** lingering on, backend without the `kvm` group (seat ACL only).
+- **A:** lingering on, backend with gid 991.
+- **B:** lingering off.
+
+A0 and A differ in exactly one thing, group membership.
+- **The running VM survived logout in both.** A also shows the same
+  `boot_id`, 4 kvm fds held, and the guest still executing.
+- **The two new launches failed in A0, each "exited during boot" 3.0 s after
+  spawn and still `-accel kvm`.** In A both succeeded, in 14.0 s and 14.1 s.
+- **In B,** logind stopped the user manager 10 s after the last session. The
+  backend shut down cleanly, systemd logged that QEMU "remains running after
+  unit stopped", and in the same second the manager's teardown SIGKILLed it.
+  `qemu-img check` afterwards was clean, on one idle guest.
+
+Evidence: `q5-A0-acl-only-journal.txt`, `q5-A-*.txt`, `q5-B-*.txt`,
+`f30-f31-journal.txt` under `/srv/kurukuru/logs/`.
+
+**What it settles.**
+- **The ACL is not enough for a backend that outlives the login; the group
+  is.** An open fd keeps working, a new `open()` does not. That is the claim
+  `doctor`'s ACL warning (decision 75) made without measurement, and the
+  wording stands as validated.
+- **Finding 29 is re-graded from cosmetic to degrades.** The line that hid
+  the mechanism hid the thing that decides whether new launches work after
+  logout under lingering.
+- **`KillMode=process` does what decision 71 designed it to do.** A
+  `kurukuru.service` restart leaves VMs running and the new backend re-adopts
+  them, measured with a real VM (console bridged, clean ACPI stop
+  afterwards).
+- **The cost is on the other side of the same choice.** Nothing stops a VM
+  when the unit stops, so the next thing to end one is the user manager's
+  stop, by SIGKILL, never ACPI. That includes the
+  `sudo systemctl restart user@$(id -u).service` that INSTALL-LINUX and
+  `doctor` advise for a lingering user after `usermod` (PORTABILITY findings
+  30 and 32).
+
+**What it changes.**
+- No code in Phase 19.
+- The open question "do VMs survive restart and logout" is closed: restart
+  yes, logout with lingering yes, logout without lingering no, by SIGKILL.
+- INSTALL-LINUX's "not yet verified" notes on restart are replaced by the
+  measurement, and its known issues gain the user-manager restart.
+- Findings 30 and 32 are first in line for 0.1.6 after decision 76, because
+  the damaging path is one the project tells users to take.
+
+**Limits.**
+- A0's probe file was overwritten by A's re-run, so its record is the
+  journal. QEMU's own EACCES line went with the terminated probe instances,
+  so EACCES is inferred, not preserved.
+- One `qemu-img check`, on an idle guest, says nothing about a guest killed
+  mid-write.
+
+## 78. The reset hang does not reproduce on KVM, and the configuration it was seen in cannot be entered there
+
+**What was measured** (PORTABILITY, Phase 19, "Q4 results"):
+- **60 raw-QEMU trials:** QEMU 10.2.1 and a source-built 11.1.1, each with a
+  Windows template disk frozen at Setup's restart, the Windows installer ISO,
+  and an Ubuntu control.
+- **30 trials through Kurukuru:** QMP reset with the watchdog off and on, and
+  the product's own restart.
+- **The two real restarts of a Windows install:** Setup's own, and Windows'
+  second after "Getting ready", the same two that hung in the install behind
+  decision 57.
+- **A SIGSTOP proof** that the detector calls a real hang.
+
+**Result.** All 90 trials recovered and both real restarts recovered unaided,
+in the same process. The watchdog never fired. QEMU refuses `-accel kvm` with
+`kernel-irqchip=off` ("KVM does not support userspace APIC",
+`target/i386/cpu-apic.c:26-31`). That path was removed upstream in 8.0
+(`docs/about/removed-features.rst:1052-1057`).
+
+**The conclusion is in two parts, kept apart on purpose.**
+- **Proven:** the configuration WHPX required (`kernel-irqchip=off`, a
+  userspace APIC, decision 55's 36/36) cannot be entered under KVM. A Linux
+  user cannot reach the state the hang was observed in.
+- **Likely, not proven:** that the defect is WHPX's rather than the userspace
+  APIC path's. The cell that would separate them cannot run on KVM, and the
+  TCG trial that could was not run.
+
+**What it changes.**
+- **The watchdog has no work to do on Linux.** That follows from the proven
+  part alone, and it runs there today (finding 38).
+- **Recommended:** scope it to WHPX hosts, as 0.1.6 work with its own test.
+  It is not scoped in Phase 19, and on Windows it stays exactly as it is.
+- **The 36/36 is now broken down wherever it is quoted.** It is 20 across
+  four configurations and 6 at `-smp 1` on a template disk, plus 10 on 11.1.1
+  whose disk state was never recorded, and WINDOWS.md says so.
+- **WINDOWS.md's claim that the reset harnesses were never committed is
+  corrected.** `tools/reset_measure.py` and `tools/qmp_driver.py` came in with
+  e86cb77.
+- **The new harness is `tools/reset_matrix.py`.**
+
+**Limits.**
+- One host, one CPU model, kernel 7.0.
+- Only the base `q35 -cpu Westmere` configuration ran raw.
+- Both 11.1.1 template-era cells used an event watcher later found to lose
+  events, so their verdicts rest on frames and serial output.
+
+## 79. The browser console works from a real browser under KVM
+
+**What was measured.** `tools/console_probe.py` drove headless Chromium
+156 through the real dashboard, into svc's text console (PORTABILITY, Phase
+19, "Q6 results"; `/srv/kurukuru/logs/q6/`).
+- **Two runs,** one closing the page, one killing the browser.
+- **Connect:** 208–209 ms from page load to "Connected".
+- **Idle floor, measured:** 8.70e-5 of the frame, 64 px, a 16×4 box, the
+  cursor.
+- **Enter:** 2.44e-3 and 1.35e-3.
+- **Typing:** 2.31e-3 and 5.19e-3.
+- **Every input step changed at least 15× the floor,** and the screenshots
+  show all 17 typed characters arriving in order.
+
+**What it changes.**
+- Q6's last pending half is closed for headless Chromium on a US layout.
+- A headed browser, Firefox, other layouts, Ctrl+Alt+Del, fullscreen and
+  reconnect remain untested and are listed as such.
+- The run also found that a deep link to an unknown instance is dropped
+  without a message (finding 36).
+
+**Two cosmetic notes,** not numbered:
+- the clean close reaches the page as code 1005, not the backend's 1000;
+- `App.tsx:67` still says `iaas console`.
+
+**The harness kept its secret out of the record.** The sign-in password comes
+from `KURUKURU_CONSOLE_TEST_PASSWORD` and is never echoed or logged, and the
+WebSocket ticket is redacted in `events.tsv`.
 
 ## Known limitations
 

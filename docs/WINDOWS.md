@@ -8,8 +8,10 @@ i440fx-family machine, now wired into `QemuEngine.build_launch_command` for
 Windows guests — DECISIONS #56) took a real Windows 10 install through the
 entire copy phase in the same ~9 minutes measured beforehand, with no
 stalling; and the guest-reboot hang (QEMU/WHPX's `system_reset`
-deterministically, 36/36 trials across every configuration and two separate
-QEMU builds, fails to bring the guest back up, while a fresh process against
+deterministically, 36/36 trials across two separate QEMU builds (20 across
+four configurations and 6 at `-smp 1` on a template disk, 10 on 11.1.1 with
+the disk state unrecorded; see [the breakdown](#the-3636-what-it-is-made-of)),
+fails to bring the guest back up, while a fresh process against
 the same disk state always works — confirmed as an unreported upstream
 defect, filed at https://gitlab.com/qemu-project/qemu/-/issues/4410) was hit
 twice on this one install and recovered both times by
@@ -608,6 +610,24 @@ dev snapshot) — **10/10, identical hang** — bringing the total to **36/36**
 across two separate QEMU builds. This is not a snapshot-specific regression:
 there is no released version to pin to instead of carrying a workaround.
 
+#### The 36/36: what it is made of
+
+*Added in Phase 19, so the number can be reproduced. Nothing above is changed.*
+
+| Trials | QEMU build | Configuration | Disk | Reset | Where |
+|---|---|---|---|---|---|
+| 20 | 11.1.0 dev snapshot `v11.1.0-12130-ge470268ff4` | four: i440fx + `hpet=off` + `rtc=localtime` + Hyper-V enlightenments, and plain `q35 -cpu Westmere`, each with and without CD eject; 5 each | template frozen at "Windows needs to restart to continue", a fresh overlay per trial | QMP `system_reset`, same process | the table above |
+| 6 | same snapshot | `-smp 1`, "alternating, both eject arms". The rest of the configuration is not restated | not restated; read as the same template | same | this section |
+| 10 | 11.1.1 (MSYS2 `mingw-w64-x86_64-qemu`) | **not recorded** | **not recorded** | not restated | this section |
+
+**The 11.1.1 disk state is recorded nowhere** in this document, DECISIONS, or
+the commit history. Phase 19 compares KVM against that 10/10 (PORTABILITY,
+"Q4 results"), so the gap is stated here rather than left silent. It cannot be
+reconstructed after the fact. The committed tool's own protocol
+(`tools/reset_measure.py`: a blank disk and the installer ISO, reset at the
+language screen) is **none of the 36**. It was run once by hand and twice
+through the tool, all three hung, on the dev snapshot (commit e86cb77).
+
 This looked related-but-distinct enough, and cleaner to reproduce than either
 linked report (deterministic, no special flags, plain `q35`, either vCPU
 count), to be worth its own report rather than a comment on either — **filed
@@ -628,10 +648,14 @@ No engine code was changed until the workaround above — every measurement
 before it was a manual QEMU command line built to exactly match
 `QemuEngine.build_launch_command`'s Windows output with the tested
 substitutions (plus two small purpose-built harnesses, `restart_measure.py`
-and `reset_measure.py`, kept beside `qmp_driver.py` in the host-local scratch
-directory rather than committed — they're diagnostic one-offs, not general
-project tooling like `ab_measure.py`), run outside the product so each result
-could be trusted before committing to a code change.
+and `reset_measure.py`, beside `qmp_driver.py`), run outside the product so each
+result could be trusted before committing to a code change. *Corrected in
+Phase 19:* this paragraph used to say those harnesses stayed in host-local
+scratch rather than committed. `reset_measure.py` and `qmp_driver.py` **were
+committed**, in e86cb77 when #4410 was filed, and are
+[`tools/reset_measure.py`](../tools/reset_measure.py) and
+[`tools/qmp_driver.py`](../tools/qmp_driver.py). `restart_measure.py` was not
+committed and is not in the repository.
 
 ---
 
@@ -653,9 +677,10 @@ isolated, not a mysterious host property:
    on `q35`, behave identically on i440fx (DECISIONS #56).
 2. **The guest-reboot hang — root-caused, confirmed upstream and unfixed at
    any tested version, workaround built.** QEMU/WHPX's `system_reset`
-   deterministically (36/36 across every chipset/RTC/HPET/enlightenment/eject
-   combination tried, and across two separate QEMU builds — this project's dev
-   snapshot and the officially tagged 11.1.1 release) leaves the guest stuck at
+   deterministically (36/36: 20 across four chipset/RTC/HPET/enlightenment/eject
+   combinations and 6 at `-smp 1` on this project's dev snapshot, and 10 on the
+   officially tagged 11.1.1 release with the disk state unrecorded — [the
+   breakdown](#the-3636-what-it-is-made-of)) leaves the guest stuck at
    SeaBIOS's boot prompt; a fresh process against the same disk state always
    works. A related, unresolved bug class exists upstream (#2042, #2402) but
    nothing matched closely enough to be the same report, so this was filed

@@ -189,9 +189,11 @@ pipx replaces the whole virtualenv, so nothing from the previous version is
 left behind to be imported by mistake — the problem the Windows installer had
 until 0.1.4 ([DECISIONS.md](DECISIONS.md) #66). Your data is not touched.
 
-The service unit uses `KillMode=process`, so restarting the backend is
-*designed* to leave running VMs alone, as it does on Windows. That is not yet
-verified with real VMs on Linux.
+The service unit uses `KillMode=process`, so restarting the backend leaves
+running VMs alone, as it does on Windows. Verified with a real VM in Phase 19:
+the QEMU process survived `systemctl --user restart kurukuru`, the new backend
+re-adopted it, and its console and a clean ACPI stop worked afterwards
+([DECISIONS.md](DECISIONS.md) #77).
 
 ## Uninstall
 
@@ -211,6 +213,27 @@ say yes it moves the directory to your desktop's trash (`gio trash`, or
 and prints the `rm -rf` for you to run when you are sure. Nothing is deleted.
 Database backups live inside that directory, so removing it removes them too.
 
+## Known issues
+
+- **Starting a VM again within about a minute of stopping it can fail, and
+  put it in `Error`.** This affects every instance, because each has an SSH
+  port forward. If a connection was open on one of its ports when it stopped
+  (an SSH session, or a `kurukuru ssh` that had just finished), Linux keeps
+  that port reserved for up to 60 seconds. Kurukuru's port check reads that as
+  "in use by another process" and refuses the start, though QEMU itself could
+  bind the port. Nothing is lost: the VM's disk is untouched, and within 30
+  seconds the backend corrects `Error` back to `Stopped`. **Wait a minute and
+  `kurukuru start` it again.** It is a defect in 0.1.5, to be fixed in 0.1.6
+  (DECISIONS #76).
+- **Restarting or stopping your user manager kills running VMs outright.** That
+  includes the `sudo systemctl restart user@$(id -u).service` advised above
+  for lingering users after `usermod`, and logging out with lingering off. The
+  backend stops without stopping its VMs, so systemd then kills each QEMU
+  with SIGKILL, with no ACPI shutdown for the guest. Measured in Phase 19, both
+  ways. **Stop your VMs first** (`kurukuru stop <name>`). A plain `kurukuru
+  restart` is not affected. It is recorded as PORTABILITY findings 30 and 32,
+  for 0.1.6 (DECISIONS #77).
+
 ## What has and has not been verified
 
 | | Where | Result |
@@ -227,7 +250,8 @@ Database backups live inside that directory, so removing it removes them too.
 | `service install`: unit written with an absolute `ExecStart` and `KillMode=process`, enabled, started; dashboard served from the wheel | WSL2, systemd 255 | Yes |
 | `service status`, `journalctl --user -u kurukuru.service`, `kurukuru restart` (new MainPID, waits for the backend) | WSL2 | Yes |
 | An enabled service starts by itself when the user manager starts | WSL2: distribution stopped, then booted | Yes — up 4 s after boot, health 200, untouched |
-| `KillMode=process` leaves a child of the service running across a restart; the default kills it | WSL2, with a plain `sleep` standing in for QEMU | Yes for the stand-in; systemd logged the "left-over process". **Not verified with real VMs** |
+| `KillMode=process` leaves a child of the service running across a restart; the default kills it | WSL2, with a plain `sleep` standing in for QEMU | Yes for the stand-in; systemd logged the "left-over process" |
+| A running VM survives `systemctl --user restart kurukuru` and is re-adopted; survives logout with lingering on; is SIGKILLed at logout with lingering off | Bare metal, Ubuntu 26.04.1, KVM, editable install | Yes — PORTABILITY Phase 19 Q5, DECISIONS #77 |
 | `doctor` live: distro QEMU command, not-in-`kvm`-group diagnosis with `usermod` and the re-login trap, XDG state, lingering; no Windows-only wording | WSL2 | Yes |
 | `data remove` refuses while the backend runs; `gio trash`, `trash-put`, and the rename aside each keep the tree byte-identical | WSL2, real trees on ext4 | Yes |
 | `service uninstall` and `pipx uninstall` leave the data untouched | WSL2 | Yes — fingerprint identical |
@@ -236,6 +260,10 @@ Database backups live inside that directory, so removing it removes them too.
 | **Any VM launched under KVM from this install** | needs bare metal | **Never** |
 
 ### Open questions — need a host with `/dev/kvm`
+
+*Answered on bare metal in Phase 19: see the [scorecard](PORTABILITY.md#phase-19--the-kvm-scorecard-on-bare-metal).
+Linux is still not claimed as working, and no VM has yet been launched from a
+pipx install. The list is kept as it was asked.*
 
 WSL2 cannot answer these honestly (nested virtualization under Hyper-V is
 unreliable, its networking is NAT'd, and it has no display path), so they are

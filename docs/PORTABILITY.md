@@ -4,7 +4,7 @@ Everything in this project was written and validated on Windows 11. This is the
 record of where that shows: every place the code assumed its host, what the
 assumption would have done on Linux, and what was changed.
 
-**Status: Parts A and B complete; Phase 18 packaging built, its WSL2 checks pending, and Linux still not claimed as working.** Part A was a static audit on the Windows
+**Status: Parts A and B complete; Phase 18 packaging built; the [Phase 19 KVM scorecard](#phase-19--the-kvm-scorecard-on-bare-metal) ran on bare metal, all eight questions answered, with findings 30–39 open for 0.1.6; Linux still not claimed as working.** Part A was a static audit on the Windows
 dev machine; Part B ran the whole thing on Ubuntu 24.04. Both are recorded
 here — Part A's findings first, then [what the live run
 found](#part-b--live-validation-on-linux), which includes three defects the
@@ -51,6 +51,17 @@ code had never been *exercised* — and those turned out to be the more serious.
 | 19 | Suite depends on the host's free disk and prior downloads | `tests/` | degrades (suite) | fixed |
 | 20 | Accelerator probe tests hardcode WHPX | `tests/test_qemu_engine.py` | degrades (suite) | fixed |
 | 21 | Shutdown grace is marginal under software emulation | `config.py` | degrades | documented |
+
+**Two numberings for 1–7, kept as they are.** This table and the section
+headings below number Part A's first seven findings differently. The table's 1
+is the accelerator probe, and the heading numbered 1 is `UserKnownHostsFile`.
+The mapping is table 1, 2, 3, 4, 5, 6, 7 = heading 5, 6, 1, 2, 7, 3, 4. Numbers
+8 onward agree. Neither is renumbered, because both are cited. A bare "finding
+5" in this file's body (as in finding 6's section) means the heading. Findings
+22–29 are in the Phase 18 and Phase 19 sections, and 30–39 in [Phase 19's
+findings](#found-by-running). Finding numbers exist only in this file.
+DECISIONS numbers decisions, and cites a finding only by name ("PORTABILITY's
+finding 27", #76).
 
 ---
 
@@ -860,6 +871,626 @@ and a WSL2 result must not stand in for any of them.
 | 6 | Console and port forwards on a real network stack | Open the console in a browser and type; add a forward live and connect through it |
 | 7 | (carried from Part B) Whether Linux guests need the forced resolvers `qemu_guest_nameservers` works around on Windows SLIRP | Launch with the list empty and check cloud-init's package install |
 | 8 | (carried from Part B) psutil's numbers under cgroups, for containerised deployment | Run inside a container with a memory limit and compare `/api/capacity` with the limit |
+
+---
+
+## Phase 19 — the KVM scorecard, on bare metal
+
+**Linux is still not claimed as working.** This is the scorecard for the eight
+open questions above, measured on real hardware. All eight are answered. Q4
+(the reset hang), Q5's logout half and Q6's browser check ran after the first
+five, with the maintainer logging out and supplying the media. Every number
+for them below was assembled from the files under `/srv/kurukuru/logs/` it
+cites, not from the session's memory.
+
+**The nested-KVM approach was overtaken, not abandoned.** Phase 19 was briefed
+to narrow these questions on nested KVM (WSL2, GitHub runners), with every
+result labelled as not bare metal
+([brief](history/PHASE19_NESTED_KVM_BRIEF.md), kept for the record). Before
+any of it ran, a bare-metal Linux host became available, so the questions are
+answered here instead. Nothing in this section comes from a nested venue.
+
+### The host, measured
+
+| | |
+|---|---|
+| OS | Ubuntu 26.04.1 LTS (resolute), kernel 7.0.0-38-generic, systemd 259. **The kernel is newer than most published QEMU testing**, so a KVM behaviour seen here is not automatically what an older LTS kernel does |
+| CPU | Intel Core i5-9300H, 8 threads, VT-x. **The same CPU model the WHPX reset-hang reproduction ran on** (`reset_measure.py` docstring) |
+| Memory / disk | 14 GiB, no swap. State on `/srv/kurukuru` (98 G ext4); `/` has 10 G free |
+| QEMU | **10.2.1** (Debian 1:10.2.1+ds-1ubuntu3.2). The Windows host runs 11.1.0, so every result below carries the version. For Q4 only, also **11.1.1** built from the release tarball into `/srv/kurukuru/qemu-11.1.1` (not system-wide, never used by the product) |
+| Python | **3.14.4**, new to this project. CI runs 3.13, not 3.12 as the brief had it |
+| KVM access | `crw-rw----+ root kvm`, `user:paul:rw-` from logind `uaccess`. The user is listed in `kvm` (usermod ran during host setup) but no process in the session carries it |
+| Install | kurukuru 0.1.5, editable from source in `backend/.venv` — **not** a pipx install |
+
+### Python 3.14 first, so it cannot contaminate a KVM result
+
+Run before any VM, at `4da8350`:
+
+- backend: **1129 passed, 15 skipped** (every skip Windows-only: ACLs, UNC
+  paths, ntdll, execvp passthrough, the dotfile-default layout). The CI
+  must-run list (POSIX hardening, sessions, qemu-img probes) all ran.
+- tools: **120 passed, 15 skipped** (PowerShell parser, PE resources, the
+  260-character rule).
+- `prove_defences.py`: **12 of 12 breaks proven.**
+- Warnings: exactly two distinct ones, neither from 3.14. sqlite3's default
+  datetime adapter has been deprecated since 3.12 (via SQLAlchemy), and anyio
+  4.15 deprecates the `anyio.abc.BlockingPortal` alias that Starlette 0.49.3's
+  test client still uses.
+
+Nothing below is an interpreter effect.
+
+### The scorecard
+
+| # | Question | Ran | Result | Verdict |
+|---|---|---|---|---|
+| 1 | Launch, boot, run under KVM | The one-liner, then 5 fresh launches and 10 stop/start cycles through the engine's own timers | `launch web --wait && ssh web whoami` → `kurukuru`, exit 0. Up in **14.0, 20.1, 14.7, 14.1, 14.0, 14.1 s** (median 14.1; spawn → SSH banner). Restart **11.0–11.2 s** (n=10). Graceful stop 4.4–12.4 s. All `-accel kvm -cpu host -vga std`, 1 vCPU / 1 GiB, QEMU 10.2.1 | **Works.** At or below WHPX's recorded ~13–23 s. That figure is a range with no per-run samples in the repo, so this is "within, at the bottom", not a ratio. **Not from a pipx install** (editable dev venv). **Found finding 27**, which breaks stop → start within ~60 s |
+| 2 | `-cpu host` | 3 fresh launches each of `host`, `max`, `qemu64` (`KURUKURU_QEMU_CPU_MODEL`), guest `/proc/cpuinfo`, `openssl speed -evp aes-256-gcm` | `host`: guest sees *Intel Core i5-9300H*, 94 flags, aes/avx/avx2/sse4_2/rdrand present; AES-GCM 16 KB blocks **4.24 GB/s**; up 14.0/14.1/14.0 s. `max`: identical model, flags and features, 4.33 GB/s, 14.0/14.0/14.2 s. `qemu64`: *QEMU Virtual CPU version 2.5+*, 38 flags, no AES-NI/AVX, **0.10 GB/s**, 14.5/14.9/14.5 s. Host itself: 4.06 GB/s | **Works, and the default is right.** The Phase 9 reasoning holds: about 40× faster AES than `qemu64`, at guest parity with the host. `host` and `max` are indistinguishable under KVM on this CPU, so there is no reason to change. No change proposed |
+| 3 | Display default under KVM | Decision 5's method: cloud image on `std`, QMP `screendump`, type `abc⏎`, diff. 3 fresh `std` launches, `virtio` as control | `std`: 720×400 VGA **text mode**, live `login:` prompt; typing changed **245 pixels, 3 of 3** and moved it to `Password:` (frames viewed, not just counted). `virtio`: 1280×800, 235 px changed. Under WHPX the same guest on `std` was blank | **The WHPX limitation does not apply under KVM.** `std` renders text-mode guests, so the default is already right on Linux, and `ACCELS_WITHOUT_DIRTY_TRACKING = {"whpx"}` already gives no caveat. No change proposed |
+| 4 | qemu#4410 `system_reset` hang under KVM | 60 raw-QEMU trials (10.2.1 and 11.1.1 × Windows template disk, Windows installer ISO, Ubuntu control), 30 through Kurukuru, Setup's two real restarts, and a SIGSTOP proof that the detector sees a hang. [Q4 results](#q4-results-the-hang-does-not-reproduce-on-kvm) | **90 of 90 recovered**, and both real restarts recovered unaided. The watchdog never fired. `-accel kvm` with `kernel-irqchip=off` is **refused** by both builds | **Proven: the configuration the hang was seen in cannot be entered under KVM. Likely, not proven: the defect is WHPX's.** The watchdog has no work to do on Linux. Recommend scoping it (finding 38) |
+| 5 | Survive a service restart; a logout without lingering | Restart: `service install` (drop-in for the state dir), VM running, `systemctl --user restart kurukuru`. Logout: three arms, the maintainer logging out with `probe.sh` armed. [Q5 results](#q5-results-a-controlled-pair-and-the-teardown) | **Restart: survives.** QEMU pid 108279 and the guest `boot_id` unchanged; backend 108190 → 108326; still `Running`. QEMU reparents to the user manager (pid 3339, subreaper) and **stays in `kurukuru.service`'s cgroup**. The re-adopted VM's console works (274 px on typing), it stops cleanly in 11.4 s with no zombie, and it starts again. **Logout, lingering on:** the running VM survives either way. New launches fail in 3.0 s with only the seat ACL, and succeed (14.0, 14.1 s) with the `kvm` group. **Logout, lingering off:** the VM is SIGKILLed by the user manager's teardown | **Settled.** H-fd and H-kill both confirmed. The only variable between the two lingering arms was group membership, which **validates `doctor`'s ACL warning (DECISIONS #75)**. Found findings 30 and 32 |
+| 6 | Console and port forwards | Ticketed WebSocket with an RFB client (handshake, full frame, keys, incremental update); live `net forward`. Then a real browser: headless Chromium driving the dashboard. [Q6 results](#q6-results-the-browser-console-works) | Console: RFB 3.8, security None, typing changed 256 px (virtio) and 274 px (std); ticket replay refused, **close 4401**. Forward: live `hostfwd_add` bound **127.0.0.1:8080** (QEMU's pid), served the guest's page, gone after `unforward`. Every QEMU listener on loopback, none on 0.0.0.0. **Browser:** connected in 208–209 ms; Enter and typing changed 15–60× the idle floor, 2 of 2 runs | **Works**, in headless Chromium, on a US layout. Headed browsers, Firefox, other layouts, Ctrl+Alt+Del, fullscreen and reconnect untested. Found finding 36 |
+| 7 | Do Linux guests need the forced resolvers? | `KURUKURU_QEMU_GUEST_NAMESERVERS='[]'` (3 launches) vs default (2) | SLIRP: guest DNS `10.0.2.3`; cloud-init apt **45 Hit/Get, 0 resolution errors**; `cowsay`, confirmed absent from the image, fetched from archive.ubuntu.com and installed. Forced: `1.1.1.1 8.8.8.8`, all lookups resolved | **Not needed on this Linux host.** SLIRP's DNS proxy works here. The workaround is a Windows SLIRP defect. See proposals |
+| 8 | psutil under cgroups | A second backend under `systemd-run --user --scope -p MemoryMax=2G -p CPUQuota=200%` and `taskset -c 0,1`; confirmed in `/proc` | Process: `memory.max 2147483648`, `cpu.max 200000 100000`, `Cpus_allowed_list 0-1`. `/api/capacity`: **8 CPUs, 15,315 MB total, 13,267 MB allocatable, 8 vCPUs max per instance** | **Confirmed wrong: the limits are ignored.** It would admit a VM that the cgroup's OOM killer then kills. A cgroup is the mechanism; a real container (docker/podman/lxd, none installed) may add lxcfs, which would change the answer, so that remains untested |
+
+### Q5: the logout predictions, written before the probes ran
+
+Two mechanisms, and they act in *different* arms. Each arm has its own
+discriminating observation.
+
+- **H-kill (the manager stops).** Without lingering, logind stops
+  `user@1000.service` about 10 s after the last session ends
+  (`UserStopDelaySec`). The user manager stops `kurukuru.service`, which with
+  `KillMode=process` signals the backend only. QEMU stays in that unit's
+  cgroup, and so inside `user@1000.service`. When the manager's own process
+  exits, `user@1000.service`'s `KillMode=mixed` sends **SIGKILL** to everything
+  left (systemd.kill(5): "if processes still remain after the main process of
+  a unit has exited"). Nothing sends QEMU a SIGTERM.
+- **H-fd (the ACL goes, the fd stays).** With lingering, the manager and
+  backend survive, and logind withdraws `user:paul:rw-` when the seat session
+  ends. Linux checks permission at `open()`, so a running QEMU keeps its
+  `/dev/kvm`, VM and vCPU fds and keeps running. A *new* QEMU's `open()` gets
+  EACCES. The backend memoises its accelerator answer in `self._accel` for
+  its whole lifetime, and a launch failure clears only the on-disk cache. So
+  every new launch is still started with `-accel kvm` and fails at once ("exited
+  during boot"), and none falls back to TCG until the backend restarts.
+
+| Observation | Arm A (Linger=yes) under H-fd | Arm A if H-fd is wrong | Arm B (Linger=no) under H-kill | Arm B if H-kill is wrong |
+|---|---|---|---|---|
+| `user:paul` ACL entry after logout | **absent** | present (not withdrawn) | (unobservable: no probe) | — |
+| existing VM | **alive**, same `boot_id`, guest still executing | dead (something else kills it) | **dead** | alive (orphaned, re-adopted at login) |
+| QEMU's `terminating on signal 15` line | none | — | **none** (SIGKILL is silent) | present, if SIGTERM instead |
+| journal | — | — | `user@1000.service` stopping, then QEMU killed | — |
+| `os.open("/dev/kvm")` / raw `qemu -accel kvm` | **EACCES** / "Permission denied" | ok | — | — |
+| new launch 1, new launch 2 | **both fail**, both still `-accel kvm` | succeed | — (the probe never runs: it dies with the manager) | probe output appears |
+| `qemu-img check` of the killed VM's disk | — | — | run; leaked clusters possible | — |
+
+**What decides it.** In arm A, the existing VM *alive and executing* together
+with a fresh launch *failing* is H-fd. Either one alone is not. In arm B, the
+VM gone with no signal-15 line is H-kill by SIGKILL. The line present would
+mean SIGTERM. The VM alive would mean neither.
+
+The order matters. The user manager running now (pid 3339) predates the
+usermod, so it has no `kvm` gid. Arm A must run first, while lingering keeps
+*that* manager alive across logout. After the first full logout without
+lingering, the next manager starts with the group, and the ACL-only state
+cannot be recreated.
+
+### Q5 results: a controlled pair, and the teardown
+
+The logout half became three arms. The first two are a controlled pair: both
+with lingering on, differing only in whether the backend carried the `kvm`
+group. The predictions above were written before any of them ran.
+
+| Arm | Lingering | Backend's `/dev/kvm` grant | Existing VM after logout | Two new launches after logout | Evidence |
+|---|---|---|---|---|---|
+| **A0** | on | **seat ACL only**: backend 108326, groups `4 24 27 30 46 100 111 114 1000`, no 991 | **survived**: QEMU 108452 still running at 23:06:10, the same pid as at 21:18 | **both failed**, each "exited during boot" **3.0 s** after spawn, both still `-accel kvm` | `/srv/kurukuru/logs/q5-A0-acl-only-journal.txt`; groups from `logout-probe-211859.txt` |
+| **A** | on | **group**: backend 173988, groups include **991** | **survived**: pid 179014 alive, **same `boot_id`**, **4 kvm fds held**, guest executing (loop 677 ms, uptime 219.73 s) | **both succeeded**, up in **14.0 s** and **14.1 s**, `accel=kvm` | `q5-A-baseline.txt`, `q5-A-probe.txt`, `q5-A-after.txt` |
+| **B** | **off** | group | **killed**: see below | not run: the probe died with the manager, as predicted | `q5-B-baseline.txt`, `q5-B-probe.txt`, `q5-B-after.txt` |
+
+**What A0 and A settle.** The logout and the lingering were the same in both
+arms. Group membership was the only difference. With only the seat ACL, the
+running VM kept its open fds and lived, and every new `open()` lost access.
+With the group, both kinds of access lasted. That is H-fd exactly, and it is
+the claim `doctor`'s ACL warning already made (DECISIONS #75): "A seat ACL from
+systemd-logind lasts only while you are logged in at this machine. A backend
+that keeps running after logout (lingering) … cannot rely on it; group
+membership is what lasts." **That wording had never been measured. These arms
+validate it.**
+
+**What B settles.** At logout with lingering off, logind stopped
+`user@1000.service` 10 s after the last session ended (23:40:25 → 23:40:35).
+The manager stopped `kurukuru.service`, the backend shut down cleanly ("Application shutdown complete"), and systemd logged
+`kurukuru.service: Unit process 179014 (qemu-system-x86) remains running after
+unit stopped`. In the same second, `user@1000.service: Killing process 179014
+(qemu-system-x86) with signal SIGKILL`. QEMU's log gained no
+`terminating on signal 15` line. That is H-kill by SIGKILL, as predicted.
+`qemu-img check` of the killed VM's disk afterwards: "No errors were found on
+the image". **That is one sample, of an idle guest.** It says nothing about a
+guest killed mid-write.
+
+**Limits.**
+- **A0's record is the journal alone.** `probe.sh` truncates
+  `q5-A-probe.txt` when it is armed, so the later arm-A run overwrote A0's
+  probe output. The journal shows "exited during boot". QEMU's own message
+  (the expected `Could not access KVM kernel module: Permission denied`) was in
+  the probe instances' `qemu-process.log`, which went with them when they were
+  terminated. **EACCES is the inference, not a preserved line.** A0's
+  `boot_id` check was likewise not preserved, so A0's "survived" rests on the
+  pid alone.
+- **An earlier A0 attempt is excluded.** Its seat session ended at 22:34:16
+  and a new one began at 22:34:21. Its launches at 22:35:21 therefore ran with
+  the seat held again, and both succeeded. The export records it as
+  confounded.
+- **Lingering on in A0 is inferred from the journal**, not read from
+  `loginctl`. Manager 3339 outlived the 22:40:04 logout by more than five
+  minutes. Without lingering, B shows the manager stopping in 10 s.
+
+Two findings came out of this: [30 and 32](#found-by-running).
+
+### Q4: what the reset-hang comparison can and cannot conclude
+
+*Written before any Q4 trial ran. It is kept as written, apart from this
+paragraph's correction and the table's two filled-in rows. The results follow
+in the next section.*
+
+The protocol is the 36 recorded in docs/WINDOWS.md, and **36 is a sum of
+three different protocols**, not one:
+- **20**: four configurations × 5 (i440fx + `hpet=off` + `rtc=localtime` +
+  Hyper-V enlightenments, and plain `q35 -cpu Westmere`, each with and without
+  CD eject), on a template disk frozen at "Windows needs to restart", with an
+  in-process QMP `system_reset` (WINDOWS.md:560-572).
+- **6**: at `-smp 1`, "alternating, both eject arms" (WINDOWS.md:601-603).
+  The configuration and disk are not restated, so they are read as the same
+  template protocol.
+- **10**: on QEMU 11.1.1 (WINDOWS.md:604-607). **Its disk state and
+  configuration are recorded nowhere.**
+
+The 20 and the 6 ran on the 11.1.0 dev snapshot. The committed tool's own
+protocol (`tools/reset_measure.py`: blank disk, installer ISO) is none of the
+36. It was run once by hand and twice through the tool, all three hung, on
+that snapshot, and one further attempt was excluded for boot-phase bimodality
+(commit e86cb77's message). Under KVM, add one arm the
+WHPX side could not have: `kernel-irqchip=off` (userspace irqchip, which WHPX
+requires) against KVM's default in-kernel irqchip.
+
+- **The CPU is not a variable.** The WHPX reproduction ran on an i5-9300H; so
+  does this host.
+- **QEMU 10.2.1 here vs 11.1.0/11.1.1 there is a variable, asymmetrically.**
+  If the hang *reproduces* under KVM on 10.2.1, the defect is neither
+  WHPX-specific nor new in 11.x. The watchdog is then needed on Linux, and the
+  version difference cannot explain it away. If it *does not reproduce*, two
+  explanations compete: "the defect is in the WHPX path" and "it arrived after
+  10.2.1". The second can be excluded only by repeating the KVM runs on an
+  11.1.x build here (a source build, or a newer distro package). Until then a
+  clean KVM result supports gating the watchdog to Windows hosts and does not
+  prove it.
+- The WHPX control should be re-run in the same period, as the brief required
+  (decision 40: that host is bimodal).
+
+**Is this host enough?** On the distribution's QEMU alone, only half of it:
+a reproduction on 10.2.1 settles Q4, and a clean run does not. Ubuntu 26.04
+has nothing newer than 10.2.1. **With a QEMU 11.1.1 built from source here, it
+is enough either way.** 11.1.1 is the tagged release the WHPX side reproduced
+on 10/10, so KVM against WHPX is then compared at the same version, on the
+same CPU model, with the same media. The 10.2.1 runs become a third cell, and
+they tell us whether the defect is older than 11.1. The build needs
+`ninja-build meson libglib2.0-dev libpixman-1-dev libslirp-dev flex bison
+libfdt-dev` (one `sudo apt install`). It installs under `/srv/kurukuru`, never
+system-wide, and `reset_measure.py --qemu` points at it.
+
+| | 10.2.1 (Ubuntu) | 11.1.1 (tag) |
+|---|---|---|
+| WHPX, Windows host | not measured | **36/36 hang**: 10 on 11.1.1 (disk state unrecorded), 26 on the 11.1.0 dev snapshot (20 + 6, template disk) |
+| KVM, this host | **0 hangs in 30** (results below) | **0 hangs in 30** (results below) |
+
+What stays out of reach even then: the WHPX × 10.2.1 cell. It is not needed
+to decide the watchdog's gate, which is a question about the accelerator at
+the version we ship against.
+
+### Q4 results: the hang does not reproduce on KVM
+
+**Harness.** `tools/reset_matrix.py`, its header has the re-run commands.
+
+**Raw-QEMU setup.** Each raw trial uses a fresh qcow2 overlay and one QEMU
+process. The guest boots, then gets a QMP `system_reset`.
+- **Command line:** mirrors `reset_measure.py`'s: `q35`, `-cpu Westmere`,
+  AHCI, e1000e, std VGA, xHCI, 2 vCPU / 4 GiB. It differs in two places,
+  `-accel kvm` and `-audio none`.
+- **Windows recovery:** after the reset, a frame of 8 colours or fewer
+  (SeaBIOS), or a `RESET` event and a changed frame, then a graphical frame
+  held for 10 s.
+- **Linux recovery:** a new `login:` on the serial console.
+- **The detector is proven** to call a hang (section after the table).
+
+**The Windows template** was built on KVM with the 20's recipe: Setup driven
+through its copy phase with QMP `send-key`, then frozen by `-no-reboot` at
+Setup's own restart. No product key was used. The build's working files
+were removed with the rest of Q4's scratch, so the build itself is not cited
+here. The cells' frames are its evidence: every template trial booted to the
+"restart" state and saw SeaBIOS on reset. The ISO is
+`Win10_22H2_EnglishInternational_x64v1.iso`, 6,135,633,920 bytes, sha256
+`edc53c5c…42b59d2`, which matches Microsoft's published hash. The only copy is
+at `/srv/kurukuru/isos/`, and all ten recorded Windows command lines under
+`logs/q4/` use that path.
+
+| Cell | QEMU | n | Result | Recovery (s) | Evidence, `/srv/kurukuru/logs/q4/` |
+|---|---|---|---|---|---|
+| Windows, template disk | 10.2.1 | 10 | **10 PASS** | 7.9 ×9, 12.8 | `20261019T222404-kvm-10.2.1-win-template` |
+| Windows, template disk | 11.1.1 | 10 | **10 PASS** | 7.9–17.1 | `20261019T221604-kvm-11.1.1-win-template` ‡ |
+| Windows, installer ISO (the committed tool's protocol) | 10.2.1 | 10 | **10 PASS** | 13.0 ×10 | `20261020T045524-kvm-10.2.1-win-iso` |
+| Windows, installer ISO | 11.1.1 | 10 | **10 PASS** | 12.9–13.1 | `20261019T232843-kvm-11.1.1-win-iso` |
+| Ubuntu cloud image (control) | 10.2.1 | 10 | **10 PASS** | 130.2–131.2 | `20261019T224815-kvm-10.2.1-linux` |
+| Ubuntu cloud image (control) | 11.1.1 | 10 | **10 PASS** | 130.2–131.2 | `20261019T220459-kvm-11.1.1-linux` ‡ |
+| `kernel-irqchip=off` | both | — | **cannot be run** | — | `kernel-irqchip-off-refusal.txt` |
+
+- **Every Windows trial** showed the 2-colour SeaBIOS frame and then graphics
+  again, and `query-status` said `running` after each reset.
+- **The cells on the fixed event watcher** (the 10.2.1 cells and both ISO
+  cells) show exactly one host and one guest `RESET` per trial.
+- **‡ These two cells ran on the first event watcher, which lost events.** Their
+  `RESET` counts are short in some trials (Windows
+  `[0,2,2,2,0,2,1,2,2,0]`), so **their verdicts rest on frames and serial
+  output, not event counts**. Windows: all 10 trials saw a frame of ≤ 8
+  colours and then held graphics. Ubuntu: a new `login:` each time.
+
+**Through Kurukuru** (QEMU 10.2.1, a second backend on port 7843 with its own
+state directory; the instance is `q4win`, the engine's Windows command line
+`-machine pc,hpet=off -accel kvm -cpu host -rtc base=localtime`):
+
+| Arm | Watchdog | n | Result | Evidence |
+|---|---|---|---|---|
+| **Setup's own restart**, mid-install, guest-initiated | off | 1 | **recovered unaided**: 2-colour SeaBIOS frame at 321.8 s, graphical at 330.5 s, same pid 203627 | `20261019T225021-kurukuru-setup-own-reboot/trace.tsv` |
+| **Windows' second automatic restart**, after "Getting ready" | off | 1 | **recovered unaided**: SeaBIOS at 108.0 s, graphical at 116.7 s, same pid, then OOBE | `20261019T225856-kurukuru-setup-second-reboot/trace.tsv` |
+| QMP `system_reset` | off | 10 | **10 PASS**, 7.8–22.0 s | `20261019T230312-…-watchdog-off` |
+| Product restart (`/restart`) | off | 10 | **10 PASS**, graphical 17.0–29.6 s after the API returned | `20261019T230936-…-product-restart` |
+| QMP `system_reset` | **on** | 10 | **10 PASS**, 7.9–19.9 s | `20261019T232246-…-watchdog-on` |
+
+**The two real restarts are the strongest evidence in the set.** They are the
+same two restarts that hung in the real install behind DECISIONS #57:
+Setup's internal reboot, then Windows' own OOBE reboot. On WHPX each needed a
+fresh process. On KVM both came back inside the same process with no help.
+
+**Every watchdog firing: none.** The watchdog could fire only in the
+watchdog-on arm. The backend's journal has no `Watchdog:` line, and the
+instance has no `AUTO_RESTARTED` event (`kk-q4-journal.txt`). In the other
+arms it was off. That is confirmed by the absence of its startup line
+("Windows reboot watchdog every 30s"), which appears only after the
+backend's restart at 23:22:09.
+
+**The detector sees a real hang.** SIGSTOP on QEMU after `system_reset`, the
+same harness otherwise:
+- Ubuntu: **HANG** at 300.1 s, 0% CPU, 0 resets
+  (`20261019T215642-proof-sigstop-linux`).
+- Windows: **HANG** after 302.8 s, 0% CPU, 0 resets
+  (`20261019T221036-proof-sigstop-windows`).
+
+The PASS results are not the detector failing to see a hang.
+
+**The conclusion, in two parts that must not be merged.**
+
+**PROVEN: the configuration WHPX required is unreachable under KVM.** Under
+WHPX the engine passes `-accel whpx,kernel-irqchip=off`, because WHPX has no
+in-kernel irqchip (`engines/qemu.py:744-751`), and every one of the 36 hung
+with it. QEMU rejects `-accel kvm` with `kernel-irqchip=off`: "KVM does not support userspace APIC"
+(`target/i386/cpu-apic.c:26-31`). That path was removed upstream in QEMU 8.0
+(`docs/about/removed-features.rst:1052-1057`: "`-M kernel-irqchip=off` cannot
+be used on KVM if the CPU model includes a local APIC"). Measured on both
+builds here, in three spellings and on `q35` and `pc`. Only `split` is
+accepted (`kernel-irqchip-off-refusal.txt`). **A Linux user cannot enter the
+state in which the hang was observed.**
+
+**LIKELY, NOT PROVEN: that the defect is WHPX's, not the userspace APIC
+path's.** The two were not separated by experiment, because the cell that
+would separate them (KVM with a userspace APIC) cannot be run. TCG uses the
+same userspace `apic` device as WHPX with `kernel-irqchip=off`, so a TCG trial
+would discriminate. **It was not run.**
+
+**What follows from the proven part alone:** the Windows reboot watchdog has
+no work to do on Linux. It runs there today (finding 38). **Recommended:
+scope it to WHPX hosts. Not done in this pass.**
+
+**Limits.**
+- One host, one CPU model, one kernel (7.0, newer than most QEMU testing).
+- Only the 20's base `q35 -cpu Westmere` configuration ran raw, not the
+  four-configuration matrix or the `-smp 1` arm. The Kurukuru arm covers the
+  engine's i440fx + `hpet=off` + `rtc=localtime` line.
+- The 11.1.1 comparison is against a WHPX 10/10 whose disk state is
+  unrecorded, so the template and ISO cells are compared with it as the best
+  available reading, not as a matched protocol.
+- The WHPX control was not re-run in the same period.
+
+### Q6 results: the browser console works
+
+**Setup.**
+- **Harness:** `tools/console_probe.py`, whose header has the re-run command.
+  It drives headless Chromium 156.0.8078.4 through Playwright, from a venv
+  kept apart from the backend's.
+- **The run:** sign in to the real dashboard on 127.0.0.1:7842, open svc's
+  console (Ubuntu, std VGA text mode), and wait for "Connected".
+- **Screenshots:** S1 after 5 s, S2 10 s later with no input, then click the
+  display and press Enter twice (S3), then type `kurukuru-q6-probe` (S4).
+- **Comparison:** pixels changed between consecutive screenshots, as a
+  fraction of the 736,000 in each.
+- **Two runs:** one ending with a clean page close, one by killing the
+  browser.
+
+| | clean close | browser killed |
+|---|---|---|
+| Page load → "Connected" | **209 ms** | **208 ms** |
+| S1→S2, nothing typed (**the floor**) | **8.70e-5**: 64 px, a 16×4 box, the blinking cursor | **8.70e-5**: 64 px, 16×4 |
+| S2→S3, Enter twice | **2.44e-3** (28× the floor) | **1.35e-3** (15×) |
+| S3→S4, typed | **2.31e-3** (27×) | **5.19e-3** (60×) |
+| WebSocket frames at S4 (sent / received) | 120 / 75 | 117 / 72 |
+| New lines in svc's `qemu-process.log` | 0 | 0 |
+| Evidence, `/srv/kurukuru/logs/q6/` | `20261019T211607-svc-clean` | `20261019T211830-svc-kill` |
+
+**Reading it.** The floor is the cursor and nothing else, measured rather than
+assumed: the same 16×4 box in both runs. Every input step changed at least 15
+times that, and the bounding boxes sit where the prompt and the typed text
+are. The S4 screenshots were looked at as well as counted.
+- **Clean run:** `svc login: kurukuru-q6-probe`.
+- **Killed run:** the clean run's text was still at the login prompt, so
+  this run's Enter submitted it. The first five typed characters landed at the
+  resulting `Password:` prompt (`kuruk`, then `Login incorrect`), and the rest
+  at the next prompt (`uru-q6-probe`).
+
+All 17 characters arrived, in order, in both runs. The console works end to
+end from a real browser, through the ticketed WebSocket, on KVM.
+
+**Before those two runs, two that did not measure:**
+- `…-no-such-vm-clean`: the harness's own lookup of a name that does not
+  exist, refused as designed.
+- `…-svc-clean` (21:15:29): opened a deep link with an id that matched
+  nothing. The dashboard showed the instance list and no error, and the
+  console never connected (`no-connect-page.png`). That is finding 36.
+
+**Not tested:**
+- a headed browser;
+- Firefox (or anything but Chromium);
+- keyboard layouts other than US;
+- Ctrl+Alt+Del;
+- fullscreen;
+- reconnect after a dropped connection.
+
+**Two cosmetic notes, not numbered:**
+- The clean close is reported to the page as WebSocket **1005** (no status
+  code) rather than the backend's 1000 (`events.tsv` of the clean run).
+- The deep-link comment at `frontend/src/App.tsx:67` still says `iaas
+  console`.
+
+### Found by running
+
+27. **Start refuses a free port after a stop: a TIME_WAIT false positive** —
+    **breaks** — *shipped in 0.1.5; DECISIONS #76; first item for 0.1.6, not fixed in Phase 19*. `is_port_free` binds *without*
+    `SO_REUSEADDR`. On Linux, a TCP connection that was open on a VM's forwarded
+    port when QEMU exited leaves a `TIME_WAIT` socket whose local port is that
+    forward, for 60 s. A plain bind then fails with `EADDRINUSE`, so `start`
+    reports "pinned SSH port 2201 is in use by another process" and the
+    instance enters **Error**, until the reconciler corrects it to Stopped. QEMU
+    itself binds the port fine during that window, because its POSIX listen
+    sockets set `SO_REUSEADDR`. Measured: an SSH session held across `stop`
+    reproduces it every time. In ordinary use, a completed `kurukuru ssh …
+    whoami` then `stop` left the port un-bindable for **42–58 s in 6 of 10
+    stops**. The earlier claim in this document, that the probe "binds exactly
+    what QEMU will bind — same options", is false on Linux. Part B never had an
+    SSH session open across a stop. Not KVM-related.
+
+    **It is in the released 0.1.5, and it is not a Linux code path.**
+    `engines/ports.py` and `QemuEngine.start_instance` are byte-identical
+    between `v0.1.5` and `HEAD`, with no platform branch. 0.1.5 is on PyPI, and
+    INSTALL-LINUX recommends `pipx install kurukuru`, so a Linux user of the
+    released version meets it today. The same restart path also carries the
+    reboot watchdog's recovery. Windows has already hit a version of it:
+    DECISIONS #57 records `restart_instance()` failing twice with "port in use"
+    after a force-kill, fixed by `wait_for_port_free`'s 5 s retry. That window
+    was measured with a bare listener and no connections, and it is shorter
+    than 5 s. A TIME_WAIT lasts 60 s on Linux, so the retry does not cover it.
+    **Unmeasured: whether a Windows TIME_WAIT blocks a plain bind at all.**
+    `/srv/kurukuru/phase19/timewait_bind.py` (stdlib only) answers that on any
+    host. On Linux it gives: refused for 60 s whatever the listener's options;
+    an `SO_REUSEADDR` probe gets through only when the listener also set
+    `SO_REUSEADDR`, which QEMU's does on POSIX. So the proposed fix holds for
+    QEMU on Linux, and it relies on that listener option.
+28. **`launch --accel` help lists "auto, whpx or tcg"** — cosmetic — *open*.
+    The API has accepted `kvm` (and `hvf`) since finding 9; the CLI help never
+    learnt it.
+29. **`doctor` named the group as the reason KVM worked** — ~~cosmetic~~
+    **degrades**, re-graded on Q5's evidence — *fixed in the working tree*
+    (DECISIONS #75), **not in any release**. 0.1.5 prints `PASS KVM: /dev/kvm
+    usable (group kvm)` whatever granted access (`v0.1.5:
+    backend/kurukuru/cli/commands_system.py:502`). It was first graded
+    cosmetic. Q5 then showed that the mechanism it hid (ACL or group) decides
+    whether new launches work after logout under lingering: they fail in 3.0 s
+    with the ACL and succeed with the group. So a wrong line here is a wrong
+    answer to the question the user asked.
+
+**Findings 30–39, from Q4–Q6.** Numbered in the order the write-up brief
+listed them. Its third item (doctor's group line) is finding 29 above, so it
+was re-graded rather than given a second number. Evidence files are under
+`/srv/kurukuru/logs/` unless a repository path is given. None is fixed in
+Phase 19.
+
+30. **Stopping `kurukuru.service` does not stop its VMs, so the next thing to
+    end them is the user manager, by SIGKILL** — **degrades** — *open,
+    blocks 0.1.6*.
+    - **Each stop of the unit** logged `Unit process N (qemu-system-x86)
+      remains running after unit stopped` (`f30-f31-journal.txt`). That is
+      `KillMode=process` (`backend/kurukuru/linux_service.py:77`, DECISIONS
+      #71), as designed. **A plain restart is safe**, measured: at 21:16:47
+      the new backend re-adopted QEMU 108279. Its console bridged, and it
+      powered down cleanly over ACPI at 21:17:12 (F30a). So `kurukuru restart`
+      and `service install`'s restart do *not* orphan guests, and the upgrade
+      path in INSTALL-LINUX is not this finding.
+    - **What does kill them** is anything that stops `user@1000.service`.
+      Every time, QEMU was SIGKILLed a second later: at logout without
+      lingering (23:40:35, F30c), and at **the user-manager restart the
+      project itself advises**. INSTALL-LINUX:118-122 and doctor's
+      `_RELOGIN` (`backend/kurukuru/cli/commands_system.py:439-445`) tell a
+      lingering user to run `sudo systemctl restart user@$(id -u).service`
+      after `usermod`. Measured at 23:06:10-11 (F30b), it SIGKILLed the
+      running svc.
+    - **No step of either path warns that running VMs will be killed.**
+31. **Account commands act on whichever store `$KURUKURU_STATE_DIR` names, and
+    report success without naming it** — **degrades** — *open, blocks 0.1.6*.
+    - `auth init` and `auth reset-password` open the database the CLI's own
+      settings resolve (`backend/kurukuru/cli/host_admin.py:39-58`), and print
+      "Created the owner account …" or "Password reset for …" with no path
+      (`backend/kurukuru/cli/commands_auth.py:93,124`).
+    - The service's store comes from a unit drop-in
+      (`KURUKURU_STATE_DIR=/srv/kurukuru/state`), which an interactive shell
+      does not see. So a CLI run without it creates and edits a second store,
+      `~/.local/share/kurukuru`, whose `kurukuru.db` was created at 23:13:49.
+    - **Meanwhile** the service refused five sign-ins for `owner` (23:13:35 to
+      23:16:23, `f30-f31-journal.txt`).
+    - **The maintainer saw the contradiction in their terminal:** `auth
+      login` rejected the password while `auth reset-password` said "This
+      install has no account yet". The journal and the second store's
+      timestamps are the preserved half. The CLI output was not captured.
+    - **`~/.local/share/kurukuru` on the Phase 19 host is kept on purpose.**
+      It is not a stray. It is the second store this finding describes,
+      created by the CLI at 23:13:49 on 18 Oct and left as the proof. Do not
+      delete it while 31 is open.
+32. **On user-manager teardown a guest dies by SIGKILL, never by ACPI** —
+    **degrades** — *open, blocks 0.1.6 together with 30*.
+    - The project has a stop that does ACPI then force: `system_powerdown`,
+      90 s, then SIGTERM (`kk-q4-journal.txt`, and DECISIONS #57).
+    - The teardown path never reaches it. The backend's own shutdown leaves
+      VMs running by design, and systemd's SIGKILL follows (F30b, F30c).
+    - Q5's one `qemu-img check` after a SIGKILL was clean, but that was an
+      idle guest.
+33. **Restart reports completion from process liveness, not readiness** —
+    **degrades** — *open*.
+    - With no SSH to wait for, `start_instance` times the restart to QMP
+      answering (`backend/kurukuru/engines/qemu.py:1209-1214`). So a Windows
+      guest logs `restarted in 1.0s` on every restart (`kk-q4-journal.txt`,
+      11 times).
+    - The same restarts reached a graphical frame 17.0–29.6 s after the API
+      returned (`q4/20261019T230936-…-product-restart/summary.json`).
+    - The same class as 29: a stand-in reported as the fact.
+34. **Every VM attaches to the logged-in desktop's PipeWire and session
+    D-Bus** — **degrades** — *open*.
+    - QEMU is launched with no audio setting. Measured on svc's running QEMU
+      (`f6-svc-audio-attachment.txt`): no `-audio` argument,
+      `audio-pipewire.so` mapped, and established connections to
+      `/run/user/1000/pipewire-0` (pipewire, pid 185990) and
+      `/run/user/1000/bus` (dbus-daemon). That ties headless VMs to
+      desktop-session services.
+    - **The broken-pipe line is a correlation, not an experiment.** svc's log
+      line `error id:0 seq:11 res:-32 (Broken pipe): connection error`
+      (`q5-A-after.txt`) and the log's mtime, 23:28:25.075, fall in the same
+      second as `Stopping pipewire.service` at logout. The message traces to
+      QEMU's PipeWire audio backend (`audio/pwaudio.c`).
+    - **The clean confirmation, and the test of any fix,** is a throwaway
+      instance with audio pinned off, checked for that connection. **Use
+      `ss -xp` (or `/proc/<pid>/fd` with `/proc/net/unix`). A socket
+      connection does not appear in `/proc/<pid>/maps`.** Maps shows only
+      the loaded `audio-pipewire.so` module, which is itself a usable second
+      signal.
+    - QEMU 10.2.1's own help accepts `-audio [driver=]driver` and lists `none`
+      among its drivers (same file). The six raw Q4 cells' recorded command
+      lines (60 trials, 10.2.1 and 11.1.1) all carry `-audio none`, and QEMU
+      started every time. That records what the binary
+      accepts. Whether it detaches a product VM is the confirmation above.
+35. **`qemu-process.log` is appended across QEMU processes with no
+    timestamps or process markers** — **degrades** (diagnosis) — *open*.
+    - It is opened `ab` per spawn (`backend/kurukuru/engines/process.py:86`).
+    - svc's log holds two broken-pipe lines. One was already there at arm
+      A's baseline (23:27:44, `q5-A-baseline.txt`: "lines: 1"), and one was
+      written at arm A's logout. Nothing in the file says which QEMU process
+      wrote the first, or when. That is why finding 34's line went
+      unattributed for a day.
+36. **A console deep link to an unknown instance fails silently** —
+    **cosmetic** — *open*.
+    - `?console=<id>` is cleared whether or not it matched
+      (`frontend/src/App.tsx:76-87`; the comment at 80-82 explains why). The
+      user sees the instance list and no message.
+    - Observed in Q6 (`q6/20261019T211529-svc-clean/no-connect-page.png`).
+37. **The watchdog setting is read only at backend startup** — **cosmetic** —
+    *open*.
+    - `windows_reboot_watchdog_enabled` decides once, in the lifespan hook,
+      whether the loop is started (`backend/kurukuru/main.py:205-214`). So
+      changing it needs a backend restart.
+    - Measured: the kk-q4 backend started at 21:57:41 without the startup
+      line, and only its restart at 23:22:09 logged "Windows reboot watchdog
+      every 30s" (`kk-q4-journal.txt`).
+    - **The brief proposed that this composes with 30, so that the
+      workaround could not be turned off without damaging running VMs. The
+      evidence does not support that.** A restart of `kurukuru.service`
+      re-adopts running VMs (30, F30a). q4win did die when kk-q4 was
+      restarted, but kk-q4 was a `systemd-run` transient unit without
+      `KillMode=process`, not the product's unit. Its stop logged no
+      "remains running" line. The composition holds only if the restart
+      chosen is the user manager's, which is 30's path.
+38. **The Windows reboot watchdog runs on Linux/KVM, where it has nothing to
+    catch** — **cosmetic** today (it did not fire once in Q4) — *open*.
+    - `windows_reboot_watchdog_enabled` defaults to true
+      (`backend/kurukuru/config.py:519`), and its start has no host or
+      accelerator gate (`main.py:206`). The startup line appears on this host
+      (`q5-B-after.txt`).
+    - Q4: 90 KVM trials and two real restarts, no hang, and the
+      configuration it guards against cannot be entered (Q4's PROVEN part).
+      Its named misfire condition, a guest slow rather than stuck, can still
+      happen there.
+    - **Recommended: scope it to WHPX hosts. Not done.**
+39. **A restart issued while Windows is still booting costs about 91 s** —
+    *known edge, documented, not a defect*.
+    - A guest that is still booting ignores `system_powerdown`. The stop
+      waits the full 90 s ACPI grace, then sends SIGTERM (five times in
+      `kk-q4-journal.txt`, 23:12:11 to 23:20:57). The API restarts took
+      91.3–92.0 s against 9.1–15.2 s for restarts at an idle screen
+      (`…-product-restart/summary.json`).
+    - In Q4 this was the harness's doing: it began restarts 6–10 before
+      Windows had settled.
+    - It is the designed backstop DECISIONS #57 already records ("a full
+      90s-timeout-then-forced-kill … the designed behaviour"). It is
+      recorded here so the next person who sees a 91 s restart knows why.
+
+### Proposals, not made — each awaits the maintainer
+
+- **Finding 27: a constraint on the 0.1.6 fix, correcting what was first
+  proposed here.** The first version of this proposal said that setting
+  `SO_REUSEADDR` in `is_port_free` would "predict QEMU's own bind". **That was
+  wrong as stated.** On Linux an `SO_REUSEADDR` bind gets past a TIME_WAIT
+  only if the socket that *left* the TIME_WAIT also had `SO_REUSEADDR`.
+  Measured with `timewait_bind.py`: with a plain listener, the probe is
+  refused for the full 60 s whatever options the probe sets; with an
+  `SO_REUSEADDR` listener, an `SO_REUSEADDR` probe passes immediately. The
+  TIME_WAIT sockets here come from QEMU's user-mode forward listener, which
+  sets `SO_REUSEADDR` on POSIX (it bound during the window, measured live), so
+  the fix works for *this* listener. Whoever makes it must therefore:
+  - treat it as mirroring QEMU's listener options, not as a general "is this
+    port free" answer. If QEMU, libslirp, or a future forward backend stops
+    setting `SO_REUSEADDR`, the probe would say free and QEMU's bind would
+    fail;
+  - cover QMP and VNC too: they are QEMU chardev/VNC listeners, not slirp,
+    and their options must be checked, not assumed;
+  - leave Windows alone, where `SO_REUSEADDR` means "steal the port", unless
+    the Windows `timewait_bind.py` result shows the same block;
+  - test it with a real TIME_WAIT from an `SO_REUSEADDR` listener (probe says
+    free), one from a plain listener (probe says taken), and a live listener
+    (probe says taken). A test with only the first case would pass against a
+    probe that ignores listeners entirely.
+- **Forced resolvers (Q7).** Two options: leave the default, which is
+  harmless here (5 of 5 launches resolved either way), or make the default
+  empty on non-Windows hosts. Evidence for the second is this one host and one
+  network, so I recommend leaving it until a second Linux network agrees.
+- **Capacity under cgroups (Q8).** Read `memory.max`/`cpu.max` and the
+  affinity mask, and cap psutil's figures by them. One measurement, so it is a
+  0.2.0 candidate, not a change now.
+- **`-cpu host` and the display default.** No change: both are already right
+  under KVM on the evidence above.
+- **Scope the reboot watchdog to WHPX hosts (finding 38).**
+  - This follows from Q4's proven part alone: the configuration it guards
+    against cannot be entered under KVM.
+  - The watchdog would still start on Windows hosts, where #4410 is
+    unfixed.
+  - The removal checklist in `reboot_watchdog.py`'s docstring is the list of
+    what it touches.
+  - A gate needs its own test, and the change is 0.1.6 work. **Not made in
+    Phase 19.**
+- **A TCG cell, if the LIKELY part of Q4 matters.** TCG with the userspace
+  APIC would say whether the hang belongs to WHPX or to that APIC path. It
+  is not needed to scope the watchdog.
 
 ---
 ## Guiding rule, and where it was applied
