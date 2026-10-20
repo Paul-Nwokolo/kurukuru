@@ -10,7 +10,11 @@ stays fully responsive. A *fresh* QEMU process against the identical disk
 state always boots cleanly instead. Measured at 36/36 across every chipset,
 RTC/HPET, Hyper-V-enlightenment and CD-ejection combination tried, on two
 separate QEMU builds (this project's dev snapshot and the officially tagged
-QEMU 11.1.1 release). Filed upstream as
+QEMU 11.1.1 release). That is 20 across four configurations and 6 at `-smp 1`,
+on a template disk, plus 10 on 11.1.1 with the disk state unrecorded. None of
+the 36 used this tool's own ISO protocol (docs/WINDOWS.md, "The 36/36: what it
+is made of"). Under KVM the hang does not reproduce, and the userspace-APIC
+configuration WHPX needs cannot be entered (docs/PORTABILITY.md, "Q4 results"). Filed upstream as
 https://gitlab.com/qemu-project/qemu/-/issues/4410; kurukuru's `reboot_watchdog.py` is the workaround for it. This is the
 tool that produced that reproduction — kept here, not in host-local scratch,
 because a filed upstream report should not depend on one machine still having

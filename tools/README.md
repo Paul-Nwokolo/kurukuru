@@ -208,8 +208,9 @@ Reproduces the QEMU/WHPX defect filed at
 https://gitlab.com/qemu-project/qemu/-/issues/4410: an in-process QMP `system_reset` leaves a Windows guest stuck at
 SeaBIOS's boot prompt forever, while a fresh QEMU process against the same
 disk always boots. See DECISIONS #55 and docs/WINDOWS.md for the full
-measurement history (36/36 across every configuration tried, on two separate
-QEMU builds) and `kurukuru/reboot_watchdog.py` for the workaround this defect
+measurement history (36/36 on two separate QEMU builds: 20 across four
+configurations and 6 at `-smp 1` on a template disk, 10 on 11.1.1 with the disk
+state unrecorded; none of them this tool's ISO protocol, which hung 3 of 3) and `kurukuru/reboot_watchdog.py` for the workaround this defect
 forced.
 
 These two files exist here, not in host-local scratch like this project's
@@ -236,3 +237,41 @@ investigation.
 `reset_measure.py` needs; it duplicates rather than imports `ab_measure.py`'s
 private `Qmp` class, in keeping with the rest of this directory being
 independent, standalone scripts.
+
+## `reset_matrix.py` — does the reset hang happen under KVM?
+
+Phase 19's Q4 harness (docs/PORTABILITY.md, "Q4 results"; DECISIONS #78). It
+runs `reset_measure.py`'s question as a matrix: QEMU version × guest (a
+Windows template disk, the Windows ISO, an Ubuntu control), 10 trials a cell,
+each in one long-lived process. It also has an `attach` mode for a VM running
+under Kurukuru, a `restart` mode for the product's restart path, and
+`--sigstop` to prove the detector calls a hang. The answer was no: 90 of 90
+recovered, and KVM refuses the `kernel-irqchip=off` configuration the hang was
+seen in. The module docstring has the re-run commands. It also has one
+caveat: its `template` subcommand did not build the template that was used.
+
+## `console_probe.py` — does the console work from a real browser?
+
+Phase 19's Q6 harness (docs/PORTABILITY.md, "Q6 results"; DECISIONS #79). It
+drives the dashboard in headless Chromium through Playwright, from its own
+venv, not the backend's. It types into a real instance's console and measures
+the pixel change against a no-input floor. The answer was yes, for headless
+Chromium on a US layout. The password comes from
+`KURUKURU_CONSOLE_TEST_PASSWORD` and is never written down. The module
+docstring has the setup and re-run commands.
+
+## Harness habits learnt the hard way
+
+- **Find QEMU with `ps -o pid=,args= -C qemu-system-x86_64`, never `pgrep -f` /
+  `pkill -f`.** In Phase 19 a `-f` pattern matched the agent's own shell
+  three times, because the shell's command line contained the pattern, and
+  killed it. `-C` matches the executable name. A command line that merely
+  mentions QEMU does not match. Then check each pid against the ones you
+  started: a long-running VM may share the host.
+- **Never let a probe truncate its own output file on re-arm.** Phase 19's
+  `probe.sh` opened its output with `>`, so re-running an arm overwrote the
+  previous run's only record (PORTABILITY, Q5 results, "Limits").
+- **Unset your session's `KURUKURU_*` variables before running the test
+  suites.** With `KURUKURU_STATE_DIR` exported, two tests of the default
+  layout fail (`tests/test_config_layout.py`). The suite's sandbox does not
+  clear that variable. Nothing was written to the store it named.
